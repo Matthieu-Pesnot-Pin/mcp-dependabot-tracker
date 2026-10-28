@@ -101,7 +101,7 @@ function newOperation(repo: Repo, kind: OperationKind, origin: Origin): Operatio
     updatedAt: createdAt,
     pid: process.pid,
     workDir: null,
-    baseBranch: repo.defaultBranch,
+    baseBranch: repo.branch,
     cancelRequested: false,
     steps: { clone: "pending", audit: "pending", fix: "pending", force: "pending", push: "pending" },
     projects: [],

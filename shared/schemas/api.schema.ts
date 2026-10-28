@@ -10,6 +10,15 @@ export const SetRightsBodySchema = z.object({ rights: RightsSchema });
 
 export type SetRightsBody = z.infer<typeof SetRightsBodySchema>;
 
+export const SetBranchBodySchema = z.object({ branch: z.string().trim().min(1) });
+
+export type SetBranchBody = z.infer<typeof SetBranchBodySchema>;
+
+/** Branches du dépôt, la branche par défaut en tête. */
+export interface BranchesResponse {
+  branches: string[];
+}
+
 /** `apply` : lancer `npm audit fix --force` ; sinon l'étape est passée. */
 export const ForceBodySchema = z.object({ apply: z.boolean() });
 

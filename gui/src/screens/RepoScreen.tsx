@@ -1,6 +1,7 @@
 import type { RepoView } from '@shared/schemas/api.schema'
 import { RIGHTS, type Right, type Rights } from '@shared/schemas/model.schema'
 import { useEffect, useState } from 'react'
+import { BranchSelector } from '../components/BranchSelector'
 import { Icon } from '../components/Icon'
 import { SeverityPill } from '../components/Pill'
 import { Toggle } from '../components/Toggle'
@@ -140,8 +141,8 @@ export function RepoScreen({ repoId }: { repoId: string }) {
         </a>
         <div className="page-head-text">
           <h1 className="page-title">{repo.name}</h1>
-          <p className="subtitle">
-            {repo.owner} · {repo.defaultBranch} ·{' '}
+          <div className="subtitle">
+            {repo.owner} · <BranchSelector repo={repo} onChanged={polled.reload} /> ·{' '}
             {repo.syncError ? (
               <span className="error-text" title={repo.syncError}>
                 synchronisation impossible
@@ -159,7 +160,7 @@ export function RepoScreen({ repoId }: { repoId: string }) {
                 </a>
               </>
             )}
-          </p>
+          </div>
         </div>
         <div className="page-actions">
           <button type="button" className="button button-secondary" onClick={() => setDrawer(true)}>

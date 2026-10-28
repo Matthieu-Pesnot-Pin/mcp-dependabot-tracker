@@ -94,6 +94,11 @@ export class LocalRemotes {
     }
   }
 
+  /** Crée `branch` sur le dernier commit de `from`. */
+  addBranch(owner: string, name: string, from: string, branch: string): void {
+    git(this.barePath(owner, name), ["branch", branch, from]);
+  }
+
   branches(owner: string, name: string): string[] {
     return git(this.barePath(owner, name), ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
       .split("\n")
@@ -121,6 +126,7 @@ interface FakeRepo {
   owner: string;
   name: string;
   defaultBranch: string;
+  branches: string[];
   alerts: FakeAlert[];
   alertsStatus?: number;
 }
@@ -139,8 +145,8 @@ export class FakeGitHub {
   private server: http.Server | null = null;
   url = "";
 
-  addRepo(owner: string, name: string, defaultBranch: string, alerts: FakeAlert[]): void {
-    this.repos.set(`${owner}/${name}`.toLowerCase(), { owner, name, defaultBranch, alerts });
+  addRepo(owner: string, name: string, defaultBranch: string, alerts: FakeAlert[], branches: string[] = [defaultBranch]): void {
+    this.repos.set(`${owner}/${name}`.toLowerCase(), { owner, name, defaultBranch, branches, alerts });
   }
 
   async start(): Promise<void> {
@@ -179,6 +185,9 @@ export class FakeGitHub {
 
     if (req.method === "GET" && parts.length === 3) {
       return this.send(res, 200, { name: repo.name, full_name: `${repo.owner}/${repo.name}`, owner: { login: repo.owner }, default_branch: repo.defaultBranch });
+    }
+    if (req.method === "GET" && parts[3] === "branches") {
+      return this.send(res, 200, repo.branches.map((branch) => ({ name: branch })));
     }
     if (req.method === "GET" && parts[3] === "dependabot" && parts[4] === "alerts") {
       if (repo.alertsStatus) return this.send(res, repo.alertsStatus, { message: "Dependabot alerts are disabled for this repository." });

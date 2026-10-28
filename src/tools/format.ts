@@ -21,7 +21,7 @@ function alertsLabel(repo: Repo): string {
 export function describeRepo(view: RepoView): string {
   const { repo, activeOperation } = view;
   const lines = [
-    `- ${repo.id} (default branch ${repo.defaultBranch})`,
+    `- ${repo.id} (analysed branch ${repo.branch}${repo.branch === repo.defaultBranch ? ", the default one" : `; default branch ${repo.defaultBranch}`})`,
     `  Open Dependabot alerts: ${alertsLabel(repo)}${repo.syncedAt ? ` · synced ${repo.syncedAt}` : " · not synced yet"}`,
   ];
   if (repo.syncError) lines.push(`  Last sync failed: ${repo.syncError}`);

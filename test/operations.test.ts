@@ -4,7 +4,7 @@ import path from "node:path";
 import test, { after, before } from "node:test";
 
 import { cancelOperation, decideForce, pushOperation, runAgentOperation, startUserFix, type OperationContext } from "../src/core/operations.js";
-import { addRepository } from "../src/core/repos.js";
+import { addRepository, listRepoBranches, setBranch } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import type { GitHubConfig } from "../src/core/config.js";
 import type { Operation } from "../shared/schemas/model.schema.js";
@@ -172,6 +172,26 @@ test("an agent fix with force and push opens the pull request", { skip }, async 
   assert.equal(operation.counts.afterForce, 0);
   assert.ok(operation.pullRequest);
   assert.equal(operation.origin, "agent");
+});
+
+test("an operation clones the chosen branch and opens the pull request towards it", { skip }, async () => {
+  counter += 1;
+  const name = `demo-${counter}`;
+  remotes.create("octo", name, "main", { ".": VULNERABLE_FIXTURE });
+  remotes.addBranch("octo", name, "main", "develop");
+  github.addRepo("octo", name, "main", [], ["main", "develop"]);
+  const repoId = (await addRepository(ctx.store, ctx.githubConfig(), `octo/${name}`)).id;
+  assert.equal(ctx.store.getRepo(repoId).branch, "main");
+  assert.deepEqual(await listRepoBranches(ctx.store, ctx.githubConfig(), repoId), ["main", "develop"]);
+  await assert.rejects(setBranch(ctx.store, ctx.githubConfig(), repoId, "nope"), /Branch "nope" does not exist/);
+  await setBranch(ctx.store, ctx.githubConfig(), repoId, "develop");
+
+  const operation = await runAgentOperation(ctx, repoId, "fix", { force: false, push: true, commitMessage: "fix: develop" });
+  assert.equal(operation.status, "done", operation.error ?? "");
+  assert.equal(operation.baseBranch, "develop");
+  const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
+  assert.equal(pull.base, "develop");
+  assert.ok(remotes.branches("octo", name).includes(operation.branch!));
 });
 
 test("a repository without package-lock.json fails with an explicit error", async () => {

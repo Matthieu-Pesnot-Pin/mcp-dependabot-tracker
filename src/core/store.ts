@@ -46,6 +46,12 @@ export function processAlive(pid: number): boolean {
   }
 }
 
+/** Un dépôt enregistré sans branche choisie analyse sa branche par défaut. */
+function withBranches(file: any): unknown {
+  if (!Array.isArray(file?.repos)) return file;
+  return { ...file, repos: file.repos.map((repo: any) => (typeof repo?.branch === "string" ? repo : { ...repo, branch: repo?.defaultBranch })) };
+}
+
 export function isActive(operation: Operation): boolean {
   return ACTIVE_STATUSES.includes(operation.status);
 }
@@ -115,7 +121,7 @@ export class Store {
       if (err.code === "ENOENT") return [];
       throw err;
     }
-    const parsed = ReposFileSchema.safeParse(JSON.parse(raw));
+    const parsed = ReposFileSchema.safeParse(withBranches(JSON.parse(raw)));
     if (!parsed.success) throw new TrackerError(`${this.reposPath} is invalid: ${parsed.error.message}`);
     return parsed.data.repos;
   }

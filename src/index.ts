@@ -16,7 +16,7 @@ import { githubConfigured, readGitHubConfig } from "./core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
 import { cancelOperation, decideForce, pushOperation, startUserFix, type OperationContext } from "./core/operations.js";
-import { SYNC_INTERVAL_MS, addRepository, listAddableRepositories, listRepoViews, repoView, setRights, staleRepos, syncRepository } from "./core/repos.js";
+import { SYNC_INTERVAL_MS, addRepository, listAddableRepositories, listRepoBranches, listRepoViews, setBranch, repoView, setRights, staleRepos, syncRepository } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
   AddRepoBodySchema,
@@ -24,8 +24,10 @@ import {
   OperationRequestSchema,
   PushBodySchema,
   RepoRequestSchema,
+  SetBranchBodySchema,
   SetRightsBodySchema,
   type AddableReposResponse,
+  type BranchesResponse,
   type AppConfig,
 } from "../shared/schemas/api.schema.js";
 import { errorResult, textResult, type ToolResult } from "./tools/types.js";
@@ -96,7 +98,8 @@ const INSTRUCTIONS = `mcp-dependabot-tracker follows the Dependabot alerts of Gi
 Concepts:
 - A **tracked repository** is a GitHub repository the user added in the GUI. Its open Dependabot alerts are read from GitHub and refreshed every 10 minutes.
 - **Rights**: for each repository, the user allows you to run npm audit (audit), npm audit fix (fix), npm audit fix --force (force) and to push the fixes (push). A tool refuses an action you are not allowed to do; only the user can change the rights.
-- An **operation** runs in a temporary clone of the default branch, deleted at the end: npm audit in every directory that holds a package-lock.json, then npm audit fix with --package-lock-only and --ignore-scripts (lockfiles only, no install, no scripts), optionally --force, then a commit on a new branch fix/npm-audit-<date>-<time> and a pull request to the default branch.
+- The **analysed branch** of a repository is chosen by the user in the GUI (the default branch unless changed). Dependabot alerts always describe the default branch; npm audit describes the analysed branch.
+- An **operation** runs in a temporary clone of the analysed branch, deleted at the end: npm audit in every directory that holds a package-lock.json, then npm audit fix with --package-lock-only and --ignore-scripts (lockfiles only, no install, no scripts), optionally --force, then a commit on a new branch fix/npm-audit-<date>-<time> and a pull request to the analysed branch.
 
 Workflow:
 1. list_repositories to see the tracked repositories, their open alerts and your rights.
@@ -177,6 +180,17 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
       const { repoId } = parseRequest(RepoRequestSchema, msg.data);
       const body = parseRequest(SetRightsBodySchema, msg.data?.body);
       return repoView(store, setRights(store, repoId, body.rights));
+    }
+
+    case "LIST_BRANCHES": {
+      const { repoId } = parseRequest(RepoRequestSchema, msg.data);
+      return { branches: await listRepoBranches(store, readGitHubConfig(), repoId) } satisfies BranchesResponse;
+    }
+
+    case "SET_BRANCH": {
+      const { repoId } = parseRequest(RepoRequestSchema, msg.data);
+      const body = parseRequest(SetBranchBodySchema, msg.data?.body);
+      return repoView(store, await setBranch(store, readGitHubConfig(), repoId, body.branch));
     }
 
     case "START_FIX":
@@ -317,7 +331,7 @@ const TOOLS = [
   {
     name: "list_repositories",
     description:
-      "List the tracked repositories with their open Dependabot alerts by severity, the time of the last sync, the rights the user gave you (audit, fix, force, push) and the operation in progress. Start here.",
+      "List the tracked repositories with their analysed branch, their open Dependabot alerts by severity, the time of the last sync, the rights the user gave you (audit, fix, force, push) and the operation in progress. Start here.",
     inputSchema: { type: "object" as const, properties: {} },
   },
   {
@@ -333,7 +347,7 @@ const TOOLS = [
   {
     name: "run_audit",
     description:
-      "Run npm audit on a temporary clone of the default branch, in every directory that holds a package-lock.json, and report the vulnerabilities with the fix npm proposes (none, within the declared ranges, or a major upgrade that needs --force). Needs the audit right. Nothing is changed; the clone is deleted.",
+      "Run npm audit on a temporary clone of the analysed branch, in every directory that holds a package-lock.json, and report the vulnerabilities with the fix npm proposes (none, within the declared ranges, or a major upgrade that needs --force). Needs the audit right. Nothing is changed; the clone is deleted.",
     inputSchema: {
       type: "object" as const,
       properties: { repository: { type: "string", description: REPOSITORY_DOC } },
@@ -343,7 +357,7 @@ const TOOLS = [
   {
     name: "fix_vulnerabilities",
     description:
-      "Fix the npm vulnerabilities of a tracked repository in a temporary clone of its default branch: npm audit, then npm audit fix --package-lock-only --ignore-scripts, then optionally npm audit fix --force, then optionally a commit on a new branch fix/npm-audit-<date>-<time>, its push and a pull request to the default branch. " +
+      "Fix the npm vulnerabilities of a tracked repository in a temporary clone of its analysed branch: npm audit, then npm audit fix --package-lock-only --ignore-scripts, then optionally npm audit fix --force, then optionally a commit on a new branch fix/npm-audit-<date>-<time>, its push and a pull request to the analysed branch. " +
       "Needs the fix right, plus the force right with force and the push right with push. Without push, nothing leaves the clone: the result reports what the fixes change. Waits until the operation ends and reports the vulnerabilities before and after, the updated packages and the pull request.",
     inputSchema: {
       type: "object" as const,

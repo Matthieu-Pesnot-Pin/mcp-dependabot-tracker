@@ -1,4 +1,4 @@
-import type { AddableReposResponse, AppConfig, OperationResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
+import type { AddableReposResponse, AppConfig, BranchesResponse, OperationResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
 import type { Rights } from '@shared/schemas/model.schema'
 
 /** Erreur HTTP de l'API ; `status` distingue un conflit (409) des autres échecs. */
@@ -55,6 +55,8 @@ export const api = {
   getRepo: (repoId: string) => request<RepoView>(repoPath(repoId)),
   addRepo: (repository: string) => send<RepoView>('POST', 'repos', { repository }),
   removeRepo: (repoId: string) => send<{ removed: true }>('DELETE', repoPath(repoId)),
+  listBranches: (repoId: string) => request<BranchesResponse>(`${repoPath(repoId)}/branches`),
+  setBranch: (repoId: string, branch: string) => send<RepoView>('PUT', `${repoPath(repoId)}/branch`, { branch }),
   setRights: (repoId: string, rights: Rights) => send<RepoView>('PUT', `${repoPath(repoId)}/rights`, { rights }),
   startFix: (repoId: string) => send<OperationResponse>('POST', `${repoPath(repoId)}/operations`),
   getOperation: (id: string) => request<OperationResponse>(operationPath(id)),

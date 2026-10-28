@@ -41,12 +41,16 @@ export const AlertSchema = z.object({
 
 export type Alert = z.infer<typeof AlertSchema>;
 
-/** Dépôt suivi. `id` est le nom complet GitHub, `propriétaire/nom`. */
+/**
+ * Dépôt suivi. `id` est le nom complet GitHub, `propriétaire/nom` ; `branch` est
+ * la branche que les opérations clonent et vers laquelle la pull request est ouverte.
+ */
 export const RepoSchema = z.object({
   id: z.string(),
   owner: z.string(),
   name: z.string(),
   defaultBranch: z.string(),
+  branch: z.string(),
   addedAt: z.string(),
   rights: RightsSchema,
   alerts: z.array(AlertSchema),

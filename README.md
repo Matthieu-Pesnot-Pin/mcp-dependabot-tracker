@@ -2,7 +2,7 @@
 
 Suivi des alertes Dependabot de dépôts GitHub, et correction de leurs vulnérabilités npm dans un clone temporaire, depuis une interface graphique ou par un agent.
 
-Pour chaque dépôt suivi, l'interface montre les alertes Dependabot ouvertes et lance une **correction** : clone temporaire de la branche par défaut, `npm audit`, `npm audit fix`, `npm audit fix --force` sur décision, puis commit sur une nouvelle branche, push et pull request. L'utilisateur décide, dépôt par dépôt, de ce que l'agent peut faire par les outils MCP : audit, audit fix, audit fix --force, push.
+Pour chaque dépôt suivi, l'interface montre les alertes Dependabot ouvertes et lance une **correction** : clone temporaire de la branche choisie pour le dépôt (la branche par défaut tant qu'aucune autre n'est choisie), `npm audit`, `npm audit fix`, `npm audit fix --force` sur décision, puis commit sur une nouvelle branche, push et pull request. L'utilisateur décide, dépôt par dépôt, de ce que l'agent peut faire par les outils MCP : audit, audit fix, audit fix --force, push.
 
 ```
 Utilisateur (GUI) ──ajoute un dépôt, accorde les droits, corrige──▶  Tracker  ──API GitHub──▶ alertes, PR
@@ -124,7 +124,7 @@ Cinq outils, en anglais. Le résultat d'une opération se termine par le lien ve
 | `list_repositories` | — | Dépôts suivis : alertes Dependabot ouvertes par gravité, date de la dernière lecture (et son erreur), droits de l'agent, opération en cours. |
 | `get_alerts` | — | Relit sur GitHub les alertes ouvertes d'un dépôt (`repository`) et les liste de la plus grave à la moins grave : numéro, gravité, paquet, écosystème, manifeste, résumé, version corrigée, lien. |
 | `run_audit` | audit | `npm audit` dans un clone temporaire : vulnérabilités par projet npm, avec la correction proposée (aucune, dans les plages déclarées, ou montée majeure qui demande `--force`). Rien n'est modifié. |
-| `fix_vulnerabilities` | fix (+ force, + push) | Clone, `npm audit`, `npm audit fix` ; avec `force: true`, `npm audit fix --force` s'il reste des vulnérabilités qu'une montée majeure corrige ; avec `push: true`, commit (`commit_message`, défaut `fix(deps): resolve npm audit vulnerabilities`), push d'une nouvelle branche et pull request vers la branche par défaut. Sans `push`, rien ne sort du clone : le résultat décrit ce que les corrections changent. |
+| `fix_vulnerabilities` | fix (+ force, + push) | Clone, `npm audit`, `npm audit fix` ; avec `force: true`, `npm audit fix --force` s'il reste des vulnérabilités qu'une montée majeure corrige ; avec `push: true`, commit (`commit_message`, défaut `fix(deps): resolve npm audit vulnerabilities`), push d'une nouvelle branche et pull request vers la branche analysée. Sans `push`, rien ne sort du clone : le résultat décrit ce que les corrections changent. |
 | `reconnect_gui` | — | Relance le worker GUI et le réenregistre auprès du proxy. |
 
 Un outil refuse une action dont l'agent n'a pas le droit, en le disant ; seul l'utilisateur change les droits, dans la GUI. L'agent ne peut ni ajouter ni retirer de dépôt. Un champ inconnu fait échouer l'appel. Les outils d'opération attendent la fin de l'opération.
@@ -133,13 +133,15 @@ Un outil refuse une action dont l'agent n'a pas le droit, en le disant ; seul l'
 
 ## Une opération
 
-Chaque opération travaille dans un clone temporaire (`<CLONE_DIR>/mcp-dependabot-tracker-*/repo`, `git clone --depth 1` de la branche par défaut), supprimé dès qu'elle se termine, réussie, échouée ou annulée. Il reste sur le disque tant qu'une correction lancée depuis la GUI attend une décision.
+Chaque opération travaille dans un clone temporaire (`<CLONE_DIR>/mcp-dependabot-tracker-*/repo`, `git clone --depth 1` de la branche analysée), supprimé dès qu'elle se termine, réussie, échouée ou annulée. Il reste sur le disque tant qu'une correction lancée depuis la GUI attend une décision.
+
+La **branche analysée** se choisit par dépôt dans la GUI ; c'est la branche par défaut tant qu'aucune autre n'est choisie. L'agent l'utilise aussi, sans pouvoir en changer. Les alertes Dependabot, elles, portent toujours sur la branche par défaut, la seule que GitHub analyse : sur une autre branche, c'est `npm audit` qui mesure les vulnérabilités.
 
 1. **Cloner le dépôt** — puis repérer les projets npm : chaque dossier dont le `package-lock.json` est suivi par git (racine, `gui/`…). Un dépôt sans lockfile fait échouer l'opération : `npm audit` en a besoin. Un lockfile v1 (npm 6) est refusé.
 2. **npm audit** — `npm audit --json` dans chaque projet.
 3. **npm audit fix** — `npm audit fix --package-lock-only --ignore-scripts` dans chaque projet vulnérable : seuls les lockfiles changent, sans installation de `node_modules` ni script de paquet. Puis un nouvel audit.
 4. **npm audit fix --force** — proposé quand des vulnérabilités restantes ne se corrigent que par une version majeure (`fixAvailable.isSemVerMajor` du rapport npm). L'écran liste les paquets concernés, leur version installée et la version cible, et le nombre de vulnérabilités en jeu.
-5. **Commit et push** — commit des fichiers modifiés sur la branche `fix/npm-audit-<AAAA-MM-JJ>-<HHMMSS>` (heure locale du serveur, fixée quand la correction est prête), push, puis pull request vers la branche par défaut. Son corps donne les vulnérabilités avant et après, l'application de `--force` et les paquets mis à jour.
+5. **Commit et push** — commit des fichiers modifiés sur la branche `fix/npm-audit-<AAAA-MM-JJ>-<HHMMSS>` (heure locale du serveur, fixée quand la correction est prête), push, puis pull request vers la branche analysée. Son corps donne les vulnérabilités avant et après, l'application de `--force` et les paquets mis à jour.
 
 Les paquets mis à jour sont lus en comparant chaque lockfile à celui du commit cloné : version changée, paquet ajouté ou retiré. S'il n'y a rien à corriger, ou si les corrections ne changent rien, l'opération se termine sans push.
 
@@ -154,7 +156,7 @@ Depuis la GUI, l'opération s'arrête aux étapes 4 et 5 pour la décision de l'
 Thème sombre, une information par ligne, une action principale par écran.
 
 - **Accueil (`#/`)** — les dépôts suivis, du plus exposé au moins exposé (gravité la plus haute, puis nombre d'alertes). En bout de ligne, une seule information : le nombre d'alertes coloré selon la gravité la plus haute, « Correction en cours », « Synchronisation impossible » (l'erreur en infobulle) ou « À jour ». « Ajouter un dépôt » ouvre une fenêtre à un seul champ de recherche : dès la première lettre, jusqu'à dix dépôts accessibles au token et pas encore suivis sont proposés (ceux dont le nom commence par la saisie d'abord). ↑ et ↓ choisissent, Entrée ou un clic ajoutent le dépôt choisi ; Échap referme la liste, puis la fenêtre. Sans suggestion, « Ajouter » prend la saisie telle quelle, `propriétaire/dépôt` ou lien GitHub. Un nouveau dépôt n'accorde que l'audit à l'agent.
-- **Dépôt (`#/r/<propriétaire>/<nom>`)** — branche par défaut, date de la dernière lecture des alertes et lien vers la dernière correction ; les alertes ouvertes (gravité, paquet, résumé), chacune ouvrant l'alerte sur GitHub. « Corriger » lance une correction, ou « Reprendre la correction » rouvre celle en cours. « Agent » ouvre le volet des droits : quatre interrupteurs, enregistrés aussitôt, et « Retirer le dépôt » (un second clic confirme dans les 4 secondes ; refusé pendant une opération).
+- **Dépôt (`#/r/<propriétaire>/<nom>`)** — sélecteur de la branche analysée (un clic ouvre la liste des branches avec un champ de recherche, la branche par défaut en tête ; ↑ ↓ et Entrée ou un clic choisissent, Échap ferme), date de la dernière lecture des alertes et lien vers la dernière correction ; les alertes ouvertes (gravité, paquet, résumé), chacune ouvrant l'alerte sur GitHub. « Corriger » lance une correction, ou « Reprendre la correction » rouvre celle en cours. « Agent » ouvre le volet des droits : quatre interrupteurs, enregistrés aussitôt, et « Retirer le dépôt » (un second clic confirme dans les 4 secondes ; refusé pendant une opération).
 - **Correction (`#/r/<propriétaire>/<nom>/op/<id>`)** — qui l'a lancée (vous ou l'agent), la branche clonée, puis les étapes : celles qui sont faites tiennent sur une ligne avec leur résultat (« 4 vulnérabilités », « 3 corrigées », lien vers la pull request), seule l'étape qui attend une décision est dépliée. L'étape `--force` liste les montées majeures avec « Appliquer --force » et « Passer » ; l'étape du push montre le message de commit modifiable, le nom de la branche, « voir les changements » (paquets mis à jour, replié) et « Pousser et ouvrir la PR ». Une erreur s'affiche sous l'étape qui a échoué. « Journal » déplie les commandes lancées et leurs résultats ; « Annuler » arrête l'opération.
 
 Les écrans se relisent par polling : toutes les 3 s pour les listes, toutes les secondes pendant une opération.
@@ -175,6 +177,7 @@ Deux processus, selon le standard de l'écosystème (`@imenam/mcp-gui-interface`
 | `GET /api/github/repos` | Dépôts accessibles au token (`/user/repos`) et pas encore suivis, pour les suggestions d'ajout. |
 | `GET` / `DELETE /api/repos/:propriétaire/:nom` | Dépôt ; retrait. |
 | `PUT /api/repos/:propriétaire/:nom/rights` | Droits de l'agent. |
+| `GET /api/repos/:propriétaire/:nom/branches`, `PUT …/branch` | Branches du dépôt, la branche par défaut en tête ; choix de la branche analysée (`{ branch }`, qui doit exister). |
 | `POST /api/repos/:propriétaire/:nom/operations` | Lance une correction. |
 | `GET /api/operations/:id` | Opération. |
 | `POST /api/operations/:id/force`, `/push`, `/cancel` | Décision `--force` (`{ apply }`), push (`{ commitMessage }`), annulation. |

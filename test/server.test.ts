@@ -41,7 +41,7 @@ before(async () => {
     { number: 1, severity: "high", package: "lodash", summary: "Command Injection in lodash" },
     { number: 2, severity: "critical", package: "simple-git", summary: "Remote code execution" },
   ]);
-  github.addRepo("octo", "locked", "main", []);
+  github.addRepo("octo", "locked", "main", [], ["release", "develop", "main"]);
   for (const name of ["extra-1", "extra-2", "extra-3"]) github.addRepo("octo", name, "main", []);
   github.repos.get("octo/locked")!.alertsStatus = 403;
 
@@ -105,13 +105,22 @@ test("the GUI adds a repository, syncs its paginated alerts and refuses bad inpu
   const addable = await call("GET", "github/repos");
   assert.equal(addable.status, 200, addable.json.error);
   assert.deepEqual(addable.json.repositories.sort(), ["octo/extra-1", "octo/extra-2", "octo/extra-3"]);
+  const branches = await call("GET", "repos/octo/locked/branches");
+  assert.deepEqual(branches.json.branches, ["main", "develop", "release"]);
+  assert.equal((await call("PUT", "repos/octo/locked/branch", { branch: "nope" })).status, 404);
+  assert.equal((await call("PUT", "repos/octo/locked/branch", {})).status, 400);
+  const chosen = await call("PUT", "repos/octo/locked/branch", { branch: "develop" });
+  assert.equal(chosen.status, 200, chosen.json.error);
+  assert.equal(chosen.json.repo.branch, "develop");
+  assert.match((await client.callTool("list_repositories")).text, /octo\/locked \(analysed branch develop; default branch main\)/);
+
   assert.equal((await call("DELETE", "repos/octo/locked")).status, 200);
   assert.equal((await call("GET", "repos/octo/locked")).status, 404);
 });
 
 test("the agent reads the alerts and is held to its rights", async () => {
   const listed = await client.callTool("list_repositories");
-  assert.match(listed.text, /octo\/demo \(default branch main\)/);
+  assert.match(listed.text, /octo\/demo \(analysed branch main, the default one\)/);
   assert.match(listed.text, /Open Dependabot alerts: 3 \(critical 1, high 1, medium 1\)/);
   assert.match(listed.text, /Agent rights: audit/);
 

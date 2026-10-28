@@ -7,7 +7,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 
 import { IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
-import { AddRepoBodySchema, ForceBodySchema, PushBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
+import { AddRepoBodySchema, ForceBodySchema, PushBodySchema, SetBranchBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { z } from "zod";
@@ -248,6 +248,14 @@ app.put("/api/repos/:owner/:name/rights", async (c) => {
   const read = await readBody(c, SetRightsBodySchema);
   if ("response" in read) return read.response;
   return forward(c, "SET_RIGHTS", { repoId: repoId(c), body: read.body });
+});
+
+app.get("/api/repos/:owner/:name/branches", (c) => forward(c, "LIST_BRANCHES", { repoId: repoId(c) }));
+
+app.put("/api/repos/:owner/:name/branch", async (c) => {
+  const read = await readBody(c, SetBranchBodySchema);
+  if ("response" in read) return read.response;
+  return forward(c, "SET_BRANCH", { repoId: repoId(c), body: read.body });
 });
 
 app.post("/api/repos/:owner/:name/operations", (c) => forward(c, "START_FIX", { repoId: repoId(c) }));

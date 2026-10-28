@@ -1,7 +1,7 @@
 import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
 import type { RepoView } from "../../shared/schemas/api.schema.js";
 import type { GitHubConfig } from "./config.js";
-import { ConflictError } from "./errors.js";
+import { ConflictError, NotFoundError } from "./errors.js";
 import { GitHubClient } from "./github.js";
 import { parseRepoRef } from "./repo-ref.js";
 import { isActive, type Store } from "./store.js";
@@ -75,6 +75,7 @@ export async function addRepository(store: Store, config: GitHubConfig, input: s
     owner: remote.owner,
     name: remote.name,
     defaultBranch: remote.defaultBranch,
+    branch: remote.defaultBranch,
     addedAt: new Date().toISOString(),
     rights: DEFAULT_RIGHTS,
     alerts: [],
@@ -89,6 +90,21 @@ export async function listAddableRepositories(store: Store, config: GitHubConfig
   const tracked = new Set(store.listRepos().map((repo) => repo.id.toLowerCase()));
   const accessible = await new GitHubClient(config).listAccessibleRepositories();
   return accessible.filter((name) => !tracked.has(name.toLowerCase()));
+}
+
+/** Branches du dépôt sur GitHub, la branche par défaut en tête, les autres dans l'ordre alphabétique. */
+export async function listRepoBranches(store: Store, config: GitHubConfig, repoId: string): Promise<string[]> {
+  const repo = store.getRepo(repoId);
+  const branches = await new GitHubClient(config).listBranches(repo.owner, repo.name);
+  const others = branches.filter((branch) => branch !== repo.defaultBranch).sort((a, b) => a.localeCompare(b));
+  return branches.includes(repo.defaultBranch) ? [repo.defaultBranch, ...others] : others;
+}
+
+/** Choisit la branche analysée ; elle doit exister sur GitHub. */
+export async function setBranch(store: Store, config: GitHubConfig, repoId: string, branch: string): Promise<Repo> {
+  const branches = await listRepoBranches(store, config, repoId);
+  if (!branches.includes(branch)) throw new NotFoundError(`Branch "${branch}" does not exist in ${store.getRepo(repoId).id}.`);
+  return store.updateRepo(repoId, (repo) => ({ ...repo, branch }));
 }
 
 export function setRights(store: Store, repoId: string, rights: Rights): Repo {

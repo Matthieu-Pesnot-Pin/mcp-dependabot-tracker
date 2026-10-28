@@ -22,7 +22,7 @@ function alert(number: number, severity: Alert["severity"], pkg: string): Alert 
 
 function repo(id: string, alerts: Alert[] = [], syncedAt: string | null = null): Repo {
   const [owner, name] = id.split("/");
-  return { id, owner, name, defaultBranch: "main", addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, syncedAt, syncError: null };
+  return { id, owner, name, defaultBranch: "main", branch: "main", addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, syncedAt, syncError: null };
 }
 
 function operation(overrides: Partial<Operation> = {}): Operation {
@@ -175,6 +175,19 @@ test("Store tracks repositories, refuses a duplicate and a second active operati
     assert.equal(store.listRepos().length, 0);
     assert.throws(() => store.getOperation("op-a"), /not found/);
     assert.throws(() => store.getOperation("../evil"), /not found/);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("Store reads a repository saved without a chosen branch as analysing its default branch", () => {
+  const temp = makeTempDir("tracker-branch-");
+  try {
+    const saved = { ...repo("octo/demo"), defaultBranch: "master" } as Partial<Repo>;
+    delete saved.branch;
+    fs.writeFileSync(path.join(temp.dir, "repos.json"), JSON.stringify({ repos: [saved] }));
+    const store = new Store(temp.dir);
+    assert.equal(store.getRepo("octo/demo").branch, "master");
   } finally {
     temp.cleanup();
   }
