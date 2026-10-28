@@ -166,6 +166,9 @@ function toAlert(raw: any): Alert {
   if (!(ALERT_SEVERITIES as readonly string[]).includes(severity)) {
     throw new TrackerError(`Dependabot alert #${raw?.number} has an unknown severity: ${JSON.stringify(severity)}.`);
   }
+  if (typeof raw?.created_at !== "string") {
+    throw new TrackerError(`Dependabot alert #${raw?.number} has no creation date.`);
+  }
   return {
     number: raw.number,
     severity: severity as AlertSeverity,
@@ -175,5 +178,6 @@ function toAlert(raw: any): Alert {
     summary: raw.security_advisory?.summary ?? "",
     url: raw.html_url ?? "",
     patchedVersion: raw.security_vulnerability?.first_patched_version?.identifier ?? null,
+    createdAt: raw.created_at,
   };
 }

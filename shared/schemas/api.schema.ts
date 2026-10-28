@@ -53,12 +53,18 @@ export const RepoRequestSchema = z.object({ repoId: z.string().min(1) });
 
 export const OperationRequestSchema = z.object({ operationId: z.string().min(1) });
 
-/** Dépôt, sa catégorie, et l'état de son opération en cours et de la dernière opération, pour la liste et l'écran du dépôt. */
+/**
+ * Dépôt, sa catégorie, et l'état de son opération en cours et de la dernière
+ * opération, pour la liste et l'écran du dépôt. `cleanAuditAt` est la date du
+ * dernier audit quand il n'a trouvé aucune vulnérabilité alors que Dependabot
+ * signale encore des alertes émises avant lui.
+ */
 export interface RepoView {
   repo: Repo;
   category: Category | null;
   activeOperation: Operation | null;
   latestOperation: Operation | null;
+  cleanAuditAt: string | null;
 }
 
 /** Dépôts suivis et catégories, pour l'accueil et sa barre latérale. */

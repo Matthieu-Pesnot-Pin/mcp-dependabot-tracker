@@ -50,6 +50,14 @@ export function projectPrefix(project: string): string {
   return project === '' ? '' : `${project}/`
 }
 
+/** Jour et heure locaux d'un instant ISO : « 28/10 à 14:32 ». */
+export function dayAndTime(iso: string): string {
+  const date = new Date(iso)
+  const day = date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })
+  const time = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+  return `${day} à ${time}`
+}
+
 /** Heure locale `HH:MM:SS` d'un instant ISO. */
 export function clockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })

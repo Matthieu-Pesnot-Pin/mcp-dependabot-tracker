@@ -27,6 +27,9 @@ export function describeRepo(view: RepoView, category: Category | null): string 
     `  Open Dependabot alerts: ${alertsLabel(repo)}${repo.syncedAt ? ` · synced ${repo.syncedAt}` : " · not synced yet"}`,
   ];
   if (repo.syncError) lines.push(`  Last sync failed: ${repo.syncError}`);
+  if (view.cleanAuditAt) {
+    lines.push(`  npm audit of ${view.cleanAuditAt} found no vulnerability on the default branch: these Dependabot alerts are probably not refreshed yet.`);
+  }
   lines.push(`  Agent rights: ${rightsLabel(repo)}`);
   if (activeOperation) lines.push(`  Operation in progress: ${activeOperation.id} (${activeOperation.status})`);
   return lines.join("\n");

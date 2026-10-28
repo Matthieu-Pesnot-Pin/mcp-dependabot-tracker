@@ -51,7 +51,9 @@ export function processAlive(pid: number): boolean {
 /**
  * Complète un fichier écrit par une version antérieure : un dépôt sans branche
  * choisie analyse sa branche par défaut, un dépôt sans catégorie n'est rangé
- * dans aucune, un fichier sans catégories n'en a aucune.
+ * dans aucune, un fichier sans catégories n'en a aucune. Une alerte sans date
+ * d'émission prend celle de la lecture qui l'a rapportée ; la lecture suivante
+ * la remplace par la vraie.
  */
 function normalizeReposFile(file: any): unknown {
   if (!Array.isArray(file?.repos)) return file;
@@ -62,6 +64,9 @@ function normalizeReposFile(file: any): unknown {
       ...repo,
       branch: typeof repo?.branch === "string" ? repo.branch : repo?.defaultBranch,
       categoryId: repo?.categoryId ?? null,
+      alerts: Array.isArray(repo?.alerts)
+        ? repo.alerts.map((alert: any) => ({ ...alert, createdAt: alert?.createdAt ?? repo.syncedAt ?? repo.addedAt }))
+        : repo?.alerts,
     })),
   };
 }

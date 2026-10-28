@@ -120,6 +120,7 @@ export interface FakeAlert {
   severity: string;
   package: string;
   summary: string;
+  createdAt?: string;
 }
 
 interface FakeRepo {
@@ -194,6 +195,7 @@ export class FakeGitHub {
       const start = Number(url.searchParams.get("after") ?? "0");
       const page = repo.alerts.slice(start, start + FAKE_PAGE_SIZE).map((alert) => ({
         number: alert.number,
+        created_at: alert.createdAt ?? "2026-01-01T00:00:00Z",
         state: "open",
         html_url: `https://github.com/${repo.owner}/${repo.name}/security/dependabot/${alert.number}`,
         dependency: { package: { ecosystem: "npm", name: alert.package }, manifest_path: "package-lock.json", scope: "runtime" },

@@ -476,6 +476,20 @@ code {
   color: var(--faint);
 }
 
+.status-clean {
+  gap: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.status-clean svg {
+  margin-right: 6px;
+}
+
+.status-clean .pill {
+  margin-left: 20px;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;
@@ -486,6 +500,10 @@ code {
   font-size: 12px;
   white-space: nowrap;
   flex-shrink: 0;
+}
+
+.pill-faded {
+  opacity: 0.45;
 }
 
 .pill-wide {

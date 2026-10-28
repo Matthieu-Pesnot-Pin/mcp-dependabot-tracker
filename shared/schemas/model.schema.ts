@@ -27,7 +27,7 @@ export type Rights = z.infer<typeof RightsSchema>;
 /** Droits d'un dépôt qui vient d'être ajouté : l'audit seul. */
 export const DEFAULT_RIGHTS: Rights = { audit: true, fix: false, force: false, push: false };
 
-/** Alerte Dependabot ouverte, telle que la renvoie l'API GitHub, réduite à ce qui s'affiche. */
+/** Alerte Dependabot ouverte, telle que la renvoie l'API GitHub, réduite à ce qui s'affiche ; `createdAt` est sa date d'émission. */
 export const AlertSchema = z.object({
   number: z.number().int(),
   severity: z.enum(ALERT_SEVERITIES),
@@ -37,6 +37,7 @@ export const AlertSchema = z.object({
   summary: z.string(),
   url: z.string(),
   patchedVersion: z.string().nullable(),
+  createdAt: z.string(),
 });
 
 export type Alert = z.infer<typeof AlertSchema>;

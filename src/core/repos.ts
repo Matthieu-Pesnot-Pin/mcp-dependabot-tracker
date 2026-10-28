@@ -1,4 +1,4 @@
-import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
+import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type Operation, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
 import type { RepoView } from "../../shared/schemas/api.schema.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, NotFoundError } from "./errors.js";
@@ -38,6 +38,20 @@ export function sortRepos<T extends { repo: Repo }>(views: T[]): T[] {
   });
 }
 
+/**
+ * Date du dernier audit, quand il n'a trouvé aucune vulnérabilité alors que
+ * Dependabot signale encore des alertes : l'audit doit porter sur la branche
+ * par défaut, la seule que Dependabot analyse, et dater d'après chacune des
+ * alertes. Null sinon. `operations` va de la plus récente à la plus ancienne.
+ */
+export function cleanAuditAt(repo: Repo, operations: Operation[]): string | null {
+  if (repo.alerts.length === 0) return null;
+  const audited = operations.find((operation) => operation.steps.audit === "done");
+  if (!audited || audited.counts.initial !== 0 || audited.baseBranch !== repo.defaultBranch) return null;
+  const auditedAt = Date.parse(audited.createdAt);
+  return repo.alerts.every((alert) => Date.parse(alert.createdAt) <= auditedAt) ? audited.createdAt : null;
+}
+
 export function repoView(store: Store, repo: Repo): RepoView {
   const operations = store.listOperations(repo.id);
   return {
@@ -45,6 +59,7 @@ export function repoView(store: Store, repo: Repo): RepoView {
     category: repo.categoryId === null ? null : store.getCategory(repo.categoryId),
     activeOperation: operations.find(isActive) ?? null,
     latestOperation: operations[0] ?? null,
+    cleanAuditAt: cleanAuditAt(repo, operations),
   };
 }
 

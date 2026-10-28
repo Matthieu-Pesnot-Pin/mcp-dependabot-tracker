@@ -8,7 +8,7 @@ import { SeverityPill } from '../components/Pill'
 import { Toggle } from '../components/Toggle'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../utils/api'
-import { plural, worstSeverity } from '../utils/format'
+import { dayAndTime, plural, worstSeverity } from '../utils/format'
 import { hrefs, navigate, rememberHomeCategory } from '../utils/router'
 
 const POLL_MS = 3000
@@ -32,9 +32,12 @@ function writeOnlyVulnerable(value: boolean) {
   }
 }
 
-/** État d'un dépôt en bout de ligne : une seule information, la plus utile. */
+/**
+ * État d'un dépôt en bout de ligne : une seule information, la plus utile. Un
+ * audit sans vulnérabilité, plus récent que les alertes, estompe leur pastille.
+ */
 function RepoStatus({ view }: { view: RepoView }) {
-  const { repo, activeOperation } = view
+  const { repo, activeOperation, cleanAuditAt } = view
   if (activeOperation) {
     return (
       <span className="status status-busy">
@@ -44,6 +47,17 @@ function RepoStatus({ view }: { view: RepoView }) {
     )
   }
   const worst = worstSeverity(repo)
+  if (worst && cleanAuditAt) {
+    return (
+      <span className="status status-clean" title="Le dernier audit n'a trouvé aucune vulnérabilité : Dependabot n'a pas encore repassé.">
+        <Icon name="circle-check" className="text-ok" />
+        Audit OK le {dayAndTime(cleanAuditAt)}
+        <SeverityPill severity={worst} faded>
+          {plural(repo.alerts.length, 'alerte')}
+        </SeverityPill>
+      </span>
+    )
+  }
   if (worst) return <SeverityPill severity={worst}>{plural(repo.alerts.length, 'alerte')}</SeverityPill>
   if (repo.syncError) {
     return (

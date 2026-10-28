@@ -9,7 +9,7 @@ import { diffLockfiles, forceCandidates, parseAuditReport, parseLockfile, parseN
 import { branchName } from "../src/core/operations.js";
 import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
-import { sortAlerts, sortRepos, staleRepos } from "../src/core/repos.js";
+import { cleanAuditAt, sortAlerts, sortRepos, staleRepos } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
 import { describeOperation } from "../src/tools/format.js";
@@ -17,7 +17,7 @@ import { DEFAULT_RIGHTS, type Alert, type Operation, type Repo } from "../shared
 import { makeTempDir } from "./helpers.js";
 
 function alert(number: number, severity: Alert["severity"], pkg: string): Alert {
-  return { number, severity, ecosystem: "npm", package: pkg, manifestPath: "package-lock.json", summary: "s", url: "u", patchedVersion: null };
+  return { number, severity, ecosystem: "npm", package: pkg, manifestPath: "package-lock.json", summary: "s", url: "u", patchedVersion: null, createdAt: "2026-01-01T00:00:00.000Z" };
 }
 
 function repo(id: string, alerts: Alert[] = [], syncedAt: string | null = null): Repo {
@@ -157,6 +157,23 @@ test("repositories sort by worst severity, then alert count; alerts by severity 
   assert.deepEqual(sortAlerts([alert(3, "low", "z"), alert(1, "critical", "b"), alert(2, "critical", "a")]).map((a) => a.number), [2, 1, 3]);
 });
 
+test("cleanAuditAt reports an audit without vulnerability on the default branch, newer than every alert", () => {
+  const alerted = repo("octo/demo", [alert(1, "high", "lodash")]);
+  const clean = (overrides: Partial<Operation> = {}) =>
+    operation({ status: "done", createdAt: "2026-03-01T10:00:00.000Z", steps: { clone: "done", audit: "done", fix: "skipped", force: "skipped", push: "skipped" }, counts: { initial: 0, afterFix: null, afterForce: null }, ...overrides });
+
+  assert.equal(cleanAuditAt(alerted, [clean()]), "2026-03-01T10:00:00.000Z");
+  assert.equal(cleanAuditAt(repo("octo/demo"), [clean()]), null, "no alert, nothing to explain");
+  assert.equal(cleanAuditAt(alerted, [clean({ counts: { initial: 2, afterFix: 0, afterForce: null } })]), null, "the audit found vulnerabilities");
+  assert.equal(cleanAuditAt(alerted, [clean({ baseBranch: "develop" })]), null, "Dependabot only covers the default branch");
+  const newer = repo("octo/demo", [alert(1, "high", "lodash"), { ...alert(2, "critical", "tar"), createdAt: "2026-03-02T08:00:00.000Z" }]);
+  assert.equal(cleanAuditAt(newer, [clean()]), null, "an alert emitted after the audit");
+  const running = operation({ id: "op-2", createdAt: "2026-03-03T10:00:00.000Z", steps: { clone: "running", audit: "pending", fix: "pending", force: "pending", push: "pending" } });
+  assert.equal(cleanAuditAt(alerted, [running, clean()]), "2026-03-01T10:00:00.000Z", "an operation still auditing does not count");
+  const dirty = clean({ id: "op-3", createdAt: "2026-03-04T10:00:00.000Z", counts: { initial: 1, afterFix: 1, afterForce: null } });
+  assert.equal(cleanAuditAt(alerted, [dirty, clean()]), null, "the latest audit decides");
+});
+
 test("Store tracks repositories, refuses a duplicate and a second active operation", () => {
   const temp = makeTempDir("tracker-store-");
   try {
@@ -196,9 +213,11 @@ test("Store reads a repository saved without a chosen branch as analysing its de
 test("Store keeps categories unique by name and frees their repositories when deleted", () => {
   const temp = makeTempDir("tracker-categories-");
   try {
-    fs.writeFileSync(path.join(temp.dir, "repos.json"), JSON.stringify({ repos: [{ ...repo("octo/demo"), categoryId: undefined }] }));
+    const { createdAt: _createdAt, ...undated } = alert(1, "high", "lodash");
+    fs.writeFileSync(path.join(temp.dir, "repos.json"), JSON.stringify({ repos: [{ ...repo("octo/demo", [undated as Alert], "2026-02-01T00:00:00.000Z"), categoryId: undefined }] }));
     const store = new Store(temp.dir);
     assert.equal(store.getRepo("octo/demo").categoryId, null);
+    assert.equal(store.getRepo("octo/demo").alerts[0].createdAt, "2026-02-01T00:00:00.000Z");
     assert.deepEqual(store.listCategories(), []);
 
     const tools = store.createCategory("  Outils ");
