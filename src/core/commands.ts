@@ -37,12 +37,19 @@ function killTree(pid: number): void {
   }
 }
 
+/** Environnement du serveur transmis aux commandes, sans le token GitHub. */
+function inheritedEnv(): NodeJS.ProcessEnv {
+  const { GITHUB_TOKEN: _token, ...env } = process.env;
+  return env;
+}
+
 /**
- * Lance `git` ou `npm` sans shell, et attend sa fin. Sous Windows, `npm` est un
- * script `.cmd` que Node ne lance qu'à travers un shell : ses arguments sont alors
- * des options fixes, jamais une valeur venue de l'utilisateur. Le code de sortie
- * n'est pas interprété ici ; un dépassement de `timeoutMs` ou l'annulation par
- * `signal` arrêtent la commande.
+ * Lance `git` ou `npm` sans shell, et attend sa fin. La commande reçoit
+ * l'environnement du serveur sans GITHUB_TOKEN, plus `options.env`. Sous Windows,
+ * `npm` est un script `.cmd` que Node ne lance qu'à travers un shell : ses
+ * arguments sont alors des options fixes, jamais une valeur venue de
+ * l'utilisateur. Le code de sortie n'est pas interprété ici ; un dépassement de
+ * `timeoutMs` ou l'annulation par `signal` arrêtent la commande.
  */
 export function runCommand(command: "git" | "npm", args: string[], options: CommandOptions): Promise<CommandResult> {
   const viaShell = command === "npm" && process.platform === "win32";
@@ -54,7 +61,7 @@ export function runCommand(command: "git" | "npm", args: string[], options: Comm
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env },
+      env: { ...inheritedEnv(), ...options.env },
       shell: viaShell,
       detached: process.platform !== "win32",
       windowsHide: true,

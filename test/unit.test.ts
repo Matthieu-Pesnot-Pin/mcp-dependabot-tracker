@@ -7,6 +7,7 @@ import { parseRepoRef } from "../src/core/repo-ref.js";
 import { nextPageUrl } from "../src/core/github.js";
 import { diffLockfiles, forceCandidates, parseAuditReport, parseLockfile, parseNpmJson } from "../src/core/npm-audit.js";
 import { branchName } from "../src/core/operations.js";
+import { runCommand } from "../src/core/commands.js";
 import { sortAlerts, sortRepos, staleRepos } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
@@ -116,6 +117,19 @@ test("diffLockfiles lists changed, added and removed packages", () => {
     { project: "", name: "x/node_modules/d", from: null, to: "3.0.0" },
   ]);
   assert.throws(() => parseLockfile('{"lockfileVersion":1,"dependencies":{}}', "gui"), /gui\/package-lock.json has no "packages" section/);
+});
+
+test("commands run without GITHUB_TOKEN in their environment", async () => {
+  const previous = process.env.GITHUB_TOKEN;
+  process.env.GITHUB_TOKEN = "secret-token";
+  try {
+    const result = await runCommand("git", ["-c", "alias.showtoken=!echo token=[$GITHUB_TOKEN]", "showtoken"], { cwd: process.cwd() });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "token=[]");
+  } finally {
+    if (previous === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = previous;
+  }
 });
 
 test("branchName encodes the local date and time down to the second", () => {

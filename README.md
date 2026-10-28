@@ -66,7 +66,7 @@ Un token à grain fin, limité aux dépôts suivis, avec les permissions :
 | Pull requests | lecture et écriture | ouvrir la pull request |
 | Metadata | lecture | imposée par GitHub |
 
-Un token classique convient aussi, avec les scopes `repo` et `security_events`. Les commits sont signés du compte du token, avec son adresse `noreply` GitHub. Le token est transmis à `git` par un en-tête HTTP (`http.<serveur>/.extraheader`, dans l'environnement de la commande) : il n'est écrit ni dans le clone ni dans la ligne de commande.
+Un token classique convient aussi, avec les scopes `repo` et `security_events`. Les commits sont signés du compte du token, avec son adresse `noreply` GitHub. Le token est transmis à `git` par un en-tête HTTP (`http.<serveur>/.extraheader`, dans l'environnement de la commande) : il n'est écrit ni dans le clone ni dans la ligne de commande. Les commandes `git` et `npm` ne reçoivent pas `GITHUB_TOKEN` dans leur environnement.
 
 ### Variables d'environnement
 
