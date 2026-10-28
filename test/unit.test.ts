@@ -8,6 +8,7 @@ import { nextPageUrl } from "../src/core/github.js";
 import { diffLockfiles, forceCandidates, parseAuditReport, parseLockfile, parseNpmJson } from "../src/core/npm-audit.js";
 import { branchName } from "../src/core/operations.js";
 import { runCommand } from "../src/core/commands.js";
+import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
 import { sortAlerts, sortRepos, staleRepos } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
@@ -60,6 +61,15 @@ test("parseRepoRef reads owner/name, web links and clone URLs", () => {
   assert.throws(() => parseRepoRef("mcp-documentor"), /not a GitHub repository/);
   assert.throws(() => parseRepoRef("a/b c"), /not a GitHub repository/);
   assert.throws(() => parseRepoRef("owner/.."), /not a GitHub repository/);
+});
+
+test("searchRepositories ranks name prefixes first and caps the suggestions", () => {
+  const repositories = ["Imena/mcp-design", "Imena/proxy-setup", "Other/old-mcp-tool", "Imena/mcp-telegram", "mcp-org/website"];
+  assert.deepEqual(searchRepositories(repositories, "MCP"), ["Imena/mcp-design", "Imena/mcp-telegram", "mcp-org/website", "Other/old-mcp-tool"]);
+  assert.deepEqual(searchRepositories(repositories, "imena/p"), ["Imena/proxy-setup"]);
+  assert.deepEqual(searchRepositories(repositories, "  "), []);
+  const many = Array.from({ length: 30 }, (_, index) => `o/repo-${String(index).padStart(2, "0")}`);
+  assert.equal(searchRepositories(many, "repo").length, MAX_SUGGESTIONS);
 });
 
 test("nextPageUrl follows rel=next and stops without it", () => {

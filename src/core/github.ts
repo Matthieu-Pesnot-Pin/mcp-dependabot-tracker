@@ -27,6 +27,9 @@ const REQUEST_TIMEOUT_MS = 30_000;
 /** Nombre maximal de pages d'alertes lues (100 alertes par page). */
 const MAX_ALERT_PAGES = 20;
 
+/** Nombre maximal de pages de dépôts lues (100 dépôts par page). */
+const MAX_REPOSITORY_PAGES = 30;
+
 /** URL de la page suivante dans un en-tête `Link` de pagination, ou null. */
 export function nextPageUrl(link: string | null): string | null {
   if (!link) return null;
@@ -102,6 +105,22 @@ export class GitHubClient {
       url = nextPageUrl(link);
     }
     return alerts;
+  }
+
+  /** Noms complets (`propriétaire/nom`) des dépôts accessibles au token, toutes pages comprises. */
+  async listAccessibleRepositories(): Promise<string[]> {
+    const names: string[] = [];
+    let url: string | null = "/user/repos?per_page=100&sort=full_name";
+    for (let page = 0; url !== null; page += 1) {
+      if (page === MAX_REPOSITORY_PAGES) {
+        throw new TrackerError(`GITHUB_TOKEN can access more than ${MAX_REPOSITORY_PAGES * 100} repositories; the tracker lists at most that many.`);
+      }
+      const { json, link } = await this.request("GET", url);
+      if (!Array.isArray(json)) throw new TrackerError("GitHub API returned an unexpected list of repositories.");
+      for (const raw of json) names.push(raw.full_name);
+      url = nextPageUrl(link);
+    }
+    return names;
   }
 
   async getAuthenticatedUser(): Promise<GitHubUser> {

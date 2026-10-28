@@ -16,7 +16,7 @@ import { githubConfigured, readGitHubConfig } from "./core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
 import { cancelOperation, decideForce, pushOperation, startUserFix, type OperationContext } from "./core/operations.js";
-import { SYNC_INTERVAL_MS, addRepository, listRepoViews, repoView, setRights, staleRepos, syncRepository } from "./core/repos.js";
+import { SYNC_INTERVAL_MS, addRepository, listAddableRepositories, listRepoViews, repoView, setRights, staleRepos, syncRepository } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
   AddRepoBodySchema,
@@ -25,6 +25,7 @@ import {
   PushBodySchema,
   RepoRequestSchema,
   SetRightsBodySchema,
+  type AddableReposResponse,
   type AppConfig,
 } from "../shared/schemas/api.schema.js";
 import { errorResult, textResult, type ToolResult } from "./tools/types.js";
@@ -154,6 +155,9 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
 
     case "LIST_REPOS":
       return { repos: listRepoViews(store) };
+
+    case "LIST_ADDABLE_REPOS":
+      return { repositories: await listAddableRepositories(store, readGitHubConfig()) } satisfies AddableReposResponse;
 
     case "GET_REPO": {
       store.failOrphanedOperations();

@@ -42,6 +42,7 @@ before(async () => {
     { number: 2, severity: "critical", package: "simple-git", summary: "Remote code execution" },
   ]);
   github.addRepo("octo", "locked", "main", []);
+  for (const name of ["extra-1", "extra-2", "extra-3"]) github.addRepo("octo", name, "main", []);
   github.repos.get("octo/locked")!.alertsStatus = 403;
 
   port = await freePort();
@@ -100,6 +101,10 @@ test("the GUI adds a repository, syncs its paginated alerts and refuses bad inpu
 
   const list = await call("GET", "repos");
   assert.deepEqual(list.json.repos.map((view: { repo: { id: string } }) => view.repo.id), ["octo/demo", "octo/locked"]);
+
+  const addable = await call("GET", "github/repos");
+  assert.equal(addable.status, 200, addable.json.error);
+  assert.deepEqual(addable.json.repositories.sort(), ["octo/extra-1", "octo/extra-2", "octo/extra-3"]);
   assert.equal((await call("DELETE", "repos/octo/locked")).status, 200);
   assert.equal((await call("GET", "repos/octo/locked")).status, 404);
 });

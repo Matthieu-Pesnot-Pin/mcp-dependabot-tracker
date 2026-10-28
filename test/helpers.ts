@@ -166,6 +166,13 @@ export class FakeGitHub {
     if (req.method === "GET" && url.pathname === "/user") {
       return this.send(res, 200, { login: "tracker-bot", id: 4242, name: "Tracker Bot" });
     }
+    if (req.method === "GET" && url.pathname === "/user/repos") {
+      const all = [...this.repos.values()].map((repo) => ({ full_name: `${repo.owner}/${repo.name}` }));
+      const start = Number(url.searchParams.get("after") ?? "0");
+      const next: Record<string, string> =
+        start + FAKE_PAGE_SIZE < all.length ? { Link: `<${this.url}/user/repos?per_page=100&after=${start + FAKE_PAGE_SIZE}>; rel="next"` } : {};
+      return this.send(res, 200, all.slice(start, start + FAKE_PAGE_SIZE), next);
+    }
     if (parts[0] !== "repos" || parts.length < 3) return this.send(res, 404, { message: "Not Found" });
     const repo = this.repos.get(`${parts[1]}/${parts[2]}`.toLowerCase());
     if (!repo) return this.send(res, 404, { message: "Not Found" });

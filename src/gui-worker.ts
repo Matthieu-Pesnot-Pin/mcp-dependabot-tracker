@@ -238,7 +238,9 @@ app.post("/api/repos", async (c) => {
   return forward(c, "ADD_REPO", { body: read.body });
 });
 
-app.get("/api/repos/:owner/:name", (c) => forward(c, "GET_REPO", { repoId: repoId(c) }));
+app.get("/api/github/repos", (c) => forward(c, "LIST_ADDABLE_REPOS"));
+
+app.get("/api/repos/:owner/:name",(c) => forward(c, "GET_REPO", { repoId: repoId(c) }));
 
 app.delete("/api/repos/:owner/:name", (c) => forward(c, "REMOVE_REPO", { repoId: repoId(c) }));
 

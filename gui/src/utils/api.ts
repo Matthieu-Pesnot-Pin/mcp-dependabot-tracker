@@ -1,4 +1,4 @@
-import type { AppConfig, OperationResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
+import type { AddableReposResponse, AppConfig, OperationResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
 import type { Rights } from '@shared/schemas/model.schema'
 
 /** Erreur HTTP de l'API ; `status` distingue un conflit (409) des autres échecs. */
@@ -51,6 +51,7 @@ function operationPath(id: string): string {
 export const api = {
   getConfig: () => request<AppConfig>('config'),
   listRepos: () => request<ReposResponse>('repos'),
+  listAddableRepos: () => request<AddableReposResponse>('github/repos'),
   getRepo: (repoId: string) => request<RepoView>(repoPath(repoId)),
   addRepo: (repository: string) => send<RepoView>('POST', 'repos', { repository }),
   removeRepo: (repoId: string) => send<{ removed: true }>('DELETE', repoPath(repoId)),

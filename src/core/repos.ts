@@ -84,6 +84,13 @@ export async function addRepository(store: Store, config: GitHubConfig, input: s
   return syncRepository(store, config, remote.fullName);
 }
 
+/** Dépôts accessibles au token qui ne sont pas encore suivis, proposés à l'ajout. */
+export async function listAddableRepositories(store: Store, config: GitHubConfig): Promise<string[]> {
+  const tracked = new Set(store.listRepos().map((repo) => repo.id.toLowerCase()));
+  const accessible = await new GitHubClient(config).listAccessibleRepositories();
+  return accessible.filter((name) => !tracked.has(name.toLowerCase()));
+}
+
 export function setRights(store: Store, repoId: string, rights: Rights): Repo {
   return store.updateRepo(repoId, (repo) => ({ ...repo, rights }));
 }

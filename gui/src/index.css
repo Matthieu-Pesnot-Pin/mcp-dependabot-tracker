@@ -621,6 +621,34 @@ code {
   border-color: var(--accent);
 }
 
+.suggestions {
+  margin-top: 8px;
+  padding: 4px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.suggestion {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-soft);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestion.is-active {
+  background: var(--brand-bg);
+  color: var(--text);
+}
+
 .field-hint,
 .field-error {
   margin-top: 12px;

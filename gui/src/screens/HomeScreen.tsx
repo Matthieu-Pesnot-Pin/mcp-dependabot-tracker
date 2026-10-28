@@ -1,5 +1,6 @@
+import { searchRepositories } from '@shared/repo-search'
 import type { RepoView } from '@shared/schemas/api.schema'
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Icon } from '../components/Icon'
 import { SeverityPill } from '../components/Pill'
 import { usePolling } from '../hooks/usePolling'
@@ -38,11 +39,22 @@ function RepoStatus({ view }: { view: RepoView }) {
   )
 }
 
+/**
+ * Fenêtre d'ajout : la frappe propose jusqu'à dix dépôts accessibles au token
+ * GitHub ; ↑ et ↓ choisissent, Entrée ou un clic ajoutent. Sans suggestion,
+ * « Ajouter » prend la saisie telle quelle (`propriétaire/dépôt` ou lien).
+ */
 function AddRepoModal({ onClose }: { onClose: () => void }) {
   const [value, setValue] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [active, setActive] = useState(0)
+  const [listClosed, setListClosed] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const addable = usePolling('addable-repos', api.listAddableRepos, null)
+
+  const suggestions = listClosed ? [] : searchRepositories(addable.data?.repositories ?? [], value)
+  const activeIndex = Math.min(active, suggestions.length - 1)
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -53,19 +65,36 @@ function AddRepoModal({ onClose }: { onClose: () => void }) {
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [onClose])
 
-  async function submit(event: FormEvent) {
-    event.preventDefault()
-    if (value.trim() === '' || busy) return
+  async function add(repository: string) {
+    if (repository.trim() === '' || busy) return
     setBusy(true)
     setError(null)
     try {
-      const view = await api.addRepo(value.trim())
+      const view = await api.addRepo(repository.trim())
       onClose()
       navigate(hrefs.repo(view.repo.id))
     } catch (err) {
       setError((err as Error).message)
       setBusy(false)
     }
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    void add(activeIndex >= 0 ? suggestions[activeIndex] : value)
+  }
+
+  function onInputKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Escape' && suggestions.length > 0) {
+      event.stopPropagation()
+      setListClosed(true)
+      return
+    }
+    if (suggestions.length === 0 || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')) return
+    event.preventDefault()
+    const step = event.key === 'ArrowDown' ? 1 : -1
+    const count = suggestions.length
+    setActive((current) => (Math.min(current, count - 1) + step + count) % count)
   }
 
   return (
@@ -76,11 +105,46 @@ function AddRepoModal({ onClose }: { onClose: () => void }) {
           ref={inputRef}
           className="input"
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(event) => {
+            setValue(event.target.value)
+            setActive(0)
+            setListClosed(false)
+          }}
+          onKeyDown={onInputKeyDown}
           placeholder="propriétaire/dépôt ou lien GitHub"
           spellCheck={false}
+          role="combobox"
+          aria-expanded={suggestions.length > 0}
+          aria-controls="repo-suggestions"
+          aria-activedescendant={activeIndex >= 0 ? `repo-suggestion-${activeIndex}` : undefined}
         />
-        {error ? <p className="field-error">{error}</p> : <p className="field-hint">L'agent pourra seulement lancer un audit. Modifiable ensuite.</p>}
+        {suggestions.length > 0 && (
+          <ul className="suggestions" id="repo-suggestions" role="listbox">
+            {suggestions.map((repository, index) => (
+              <li
+                key={repository}
+                id={`repo-suggestion-${index}`}
+                role="option"
+                aria-selected={index === activeIndex}
+                className={`suggestion${index === activeIndex ? ' is-active' : ''}`}
+                onMouseEnter={() => setActive(index)}
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  void add(repository)
+                }}
+              >
+                {repository}
+              </li>
+            ))}
+          </ul>
+        )}
+        {error ? (
+          <p className="field-error">{error}</p>
+        ) : addable.error ? (
+          <p className="field-error">Suggestions indisponibles : {addable.error}</p>
+        ) : (
+          <p className="field-hint">L'agent pourra seulement lancer un audit. Modifiable ensuite.</p>
+        )}
         <div className="modal-actions">
           <button type="button" className="button button-secondary" onClick={onClose}>
             Annuler

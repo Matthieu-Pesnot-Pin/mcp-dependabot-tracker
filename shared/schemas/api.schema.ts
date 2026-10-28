@@ -35,6 +35,11 @@ export interface ReposResponse {
   repos: RepoView[];
 }
 
+/** Dépôts accessibles au token GitHub et pas encore suivis, `propriétaire/nom`. */
+export interface AddableReposResponse {
+  repositories: string[];
+}
+
 export interface OperationResponse {
   operation: Operation;
 }

@@ -64,7 +64,7 @@ Un token à grain fin, limité aux dépôts suivis, avec les permissions :
 | Dependabot alerts | lecture | lire les alertes |
 | Contents | lecture et écriture | cloner, pousser la branche de correction |
 | Pull requests | lecture et écriture | ouvrir la pull request |
-| Metadata | lecture | imposée par GitHub |
+| Metadata | lecture | imposée par GitHub ; liste les dépôts proposés à l'ajout |
 
 Un token classique convient aussi, avec les scopes `repo` et `security_events`. Les commits sont signés du compte du token, avec son adresse `noreply` GitHub. Le token est transmis à `git` par un en-tête HTTP (`http.<serveur>/.extraheader`, dans l'environnement de la commande) : il n'est écrit ni dans le clone ni dans la ligne de commande. Les commandes `git` et `npm` ne reçoivent pas `GITHUB_TOKEN` dans leur environnement.
 
@@ -153,7 +153,7 @@ Depuis la GUI, l'opération s'arrête aux étapes 4 et 5 pour la décision de l'
 
 Thème sombre, une information par ligne, une action principale par écran.
 
-- **Accueil (`#/`)** — les dépôts suivis, du plus exposé au moins exposé (gravité la plus haute, puis nombre d'alertes). En bout de ligne, une seule information : le nombre d'alertes coloré selon la gravité la plus haute, « Correction en cours », « Synchronisation impossible » (l'erreur en infobulle) ou « À jour ». « Ajouter un dépôt » ouvre une fenêtre à un seul champ, `propriétaire/dépôt` ou lien GitHub (Entrée valide, Échap ferme) ; un nouveau dépôt n'accorde que l'audit à l'agent.
+- **Accueil (`#/`)** — les dépôts suivis, du plus exposé au moins exposé (gravité la plus haute, puis nombre d'alertes). En bout de ligne, une seule information : le nombre d'alertes coloré selon la gravité la plus haute, « Correction en cours », « Synchronisation impossible » (l'erreur en infobulle) ou « À jour ». « Ajouter un dépôt » ouvre une fenêtre à un seul champ de recherche : dès la première lettre, jusqu'à dix dépôts accessibles au token et pas encore suivis sont proposés (ceux dont le nom commence par la saisie d'abord). ↑ et ↓ choisissent, Entrée ou un clic ajoutent le dépôt choisi ; Échap referme la liste, puis la fenêtre. Sans suggestion, « Ajouter » prend la saisie telle quelle, `propriétaire/dépôt` ou lien GitHub. Un nouveau dépôt n'accorde que l'audit à l'agent.
 - **Dépôt (`#/r/<propriétaire>/<nom>`)** — branche par défaut, date de la dernière lecture des alertes et lien vers la dernière correction ; les alertes ouvertes (gravité, paquet, résumé), chacune ouvrant l'alerte sur GitHub. « Corriger » lance une correction, ou « Reprendre la correction » rouvre celle en cours. « Agent » ouvre le volet des droits : quatre interrupteurs, enregistrés aussitôt, et « Retirer le dépôt » (un second clic confirme dans les 4 secondes ; refusé pendant une opération).
 - **Correction (`#/r/<propriétaire>/<nom>/op/<id>`)** — qui l'a lancée (vous ou l'agent), la branche clonée, puis les étapes : celles qui sont faites tiennent sur une ligne avec leur résultat (« 4 vulnérabilités », « 3 corrigées », lien vers la pull request), seule l'étape qui attend une décision est dépliée. L'étape `--force` liste les montées majeures avec « Appliquer --force » et « Passer » ; l'étape du push montre le message de commit modifiable, le nom de la branche, « voir les changements » (paquets mis à jour, replié) et « Pousser et ouvrir la PR ». Une erreur s'affiche sous l'étape qui a échoué. « Journal » déplie les commandes lancées et leurs résultats ; « Annuler » arrête l'opération.
 
@@ -172,6 +172,7 @@ Deux processus, selon le standard de l'écosystème (`@imenam/mcp-gui-interface`
 |---|---|
 | `GET /api/config` | Version, répertoire des données, présence du token. |
 | `GET /api/repos`, `POST /api/repos` | Dépôts suivis (avec opération en cours et dernière opération) ; ajout d'un dépôt. |
+| `GET /api/github/repos` | Dépôts accessibles au token (`/user/repos`) et pas encore suivis, pour les suggestions d'ajout. |
 | `GET` / `DELETE /api/repos/:propriétaire/:nom` | Dépôt ; retrait. |
 | `PUT /api/repos/:propriétaire/:nom/rights` | Droits de l'agent. |
 | `POST /api/repos/:propriétaire/:nom/operations` | Lance une correction. |

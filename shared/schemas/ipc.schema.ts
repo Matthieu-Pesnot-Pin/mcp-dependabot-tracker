@@ -25,6 +25,7 @@ export type IPCMessage = z.infer<typeof IPCMessageSchema>;
 export const GUI_REQUEST_TYPES = [
   "GET_CONFIG",
   "LIST_REPOS",
+  "LIST_ADDABLE_REPOS",
   "GET_REPO",
   "ADD_REPO",
   "REMOVE_REPO",
