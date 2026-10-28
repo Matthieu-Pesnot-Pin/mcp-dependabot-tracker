@@ -47,5 +47,13 @@
   "devDependencies": {
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Matthieu-Pesnot-Pin/mcp-dependabot-tracker.git"
+  },
+  "homepage": "https://github.com/Matthieu-Pesnot-Pin/mcp-dependabot-tracker#readme",
+  "bugs": {
+    "url": "https://github.com/Matthieu-Pesnot-Pin/mcp-dependabot-tracker/issues"
   }
 }
