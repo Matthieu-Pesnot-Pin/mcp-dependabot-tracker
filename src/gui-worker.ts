@@ -264,6 +264,14 @@ app.put("/api/repos/:owner/:name/category", async (c) => {
   return forward(c, "SET_CATEGORY", { repoId: repoId(c), body: read.body });
 });
 
+app.put("/api/repos/:owner/:name/alerts/:number/handled", (c) =>
+  forward(c, "MARK_ALERT_HANDLED", { repoId: repoId(c), number: c.req.param("number") })
+);
+
+app.delete("/api/repos/:owner/:name/alerts/:number/handled", (c) =>
+  forward(c, "UNMARK_ALERT_HANDLED", { repoId: repoId(c), number: c.req.param("number") })
+);
+
 app.get("/api/categories", (c) => forward(c, "LIST_CATEGORIES"));
 
 app.post("/api/categories", async (c) => {

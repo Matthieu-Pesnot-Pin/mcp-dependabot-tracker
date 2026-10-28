@@ -1,4 +1,5 @@
-import type { AlertSeverity, NpmSeverity, Repo } from '@shared/schemas/model.schema'
+import { pendingAlerts } from '@shared/alerts'
+import type { Alert, AlertSeverity, NpmSeverity, Repo } from '@shared/schemas/model.schema'
 import { ALERT_SEVERITIES } from '@shared/schemas/model.schema'
 
 /** Durée écoulée depuis `iso`, en français court : « à l'instant », « il y a 5 min ». */
@@ -31,18 +32,15 @@ export function fromNpmSeverity(severity: NpmSeverity): AlertSeverity {
   return severity
 }
 
-/** Gravité la plus haute des alertes ouvertes d'un dépôt, ou null sans alerte. */
-export function worstSeverity(repo: Repo): AlertSeverity | null {
-  for (const severity of ALERT_SEVERITIES) {
-    if (repo.alerts.some((alert) => alert.severity === severity)) return severity
-  }
-  return null
+/** Gravité la plus haute d'un ensemble d'alertes, ou null sans alerte. */
+export function worstSeverity(alerts: Alert[]): AlertSeverity | null {
+  return ALERT_SEVERITIES.find((severity) => alerts.some((alert) => alert.severity === severity)) ?? null
 }
 
-/** Alertes ouvertes d'un ensemble de dépôts : leur nombre et la gravité la plus haute, null sans alerte. */
+/** Alertes restantes d'un ensemble de dépôts, hors corrigées à la main : leur nombre et la gravité la plus haute, null sans alerte. */
 export function alertTotals(repos: Repo[]): { count: number; worst: AlertSeverity | null } {
-  const worst = ALERT_SEVERITIES.find((severity) => repos.some((repo) => repo.alerts.some((alert) => alert.severity === severity))) ?? null
-  return { count: repos.reduce((total, repo) => total + repo.alerts.length, 0), worst }
+  const alerts = repos.flatMap(pendingAlerts)
+  return { count: alerts.length, worst: worstSeverity(alerts) }
 }
 
 /** Préfixe d'un projet npm du dépôt : `""` pour la racine, `gui/` pour le dossier `gui`. */

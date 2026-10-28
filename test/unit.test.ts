@@ -9,7 +9,7 @@ import { diffLockfiles, forceCandidates, parseAuditReport, parseLockfile, parseN
 import { branchName } from "../src/core/operations.js";
 import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
-import { cleanAuditAt, sortAlerts, sortRepos, staleRepos } from "../src/core/repos.js";
+import { cleanAuditAt, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, unfixablePackages } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
 import { describeOperation } from "../src/tools/format.js";
@@ -22,7 +22,7 @@ function alert(number: number, severity: Alert["severity"], pkg: string): Alert 
 
 function repo(id: string, alerts: Alert[] = [], syncedAt: string | null = null): Repo {
   const [owner, name] = id.split("/");
-  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, syncedAt, syncError: null };
+  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, handledAlerts: [], syncedAt, syncError: null };
 }
 
 function operation(overrides: Partial<Operation> = {}): Operation {
@@ -174,6 +174,37 @@ test("cleanAuditAt reports an audit without vulnerability on the default branch,
   assert.equal(cleanAuditAt(alerted, [dirty, clean()]), null, "the latest audit decides");
 });
 
+test("a mark of an alert fixed by hand drops when that alert closes or its package gets a newer alert", () => {
+  const mark = (number: number, pkg: string) => ({ number, package: pkg, markedAt: "2026-03-01T10:00:00.000Z" });
+  const xlsx = alert(1, "high", "xlsx");
+  const lodash = alert(2, "high", "lodash");
+  const marks = [mark(1, "xlsx"), mark(2, "lodash")];
+
+  assert.deepEqual(pruneHandledAlerts(marks, [xlsx, lodash]), marks);
+  assert.deepEqual(pruneHandledAlerts(marks, [lodash]).map((kept) => kept.number), [2], "a closed alert loses its mark");
+  const newXlsx = { ...alert(3, "critical", "xlsx"), createdAt: "2026-03-05T00:00:00.000Z" };
+  assert.deepEqual(pruneHandledAlerts(marks, [xlsx, lodash, newXlsx]).map((kept) => kept.number), [2], "only the package of the new alert loses its marks");
+  const olderXlsx = { ...alert(4, "low", "xlsx"), createdAt: "2026-02-01T00:00:00.000Z" };
+  assert.deepEqual(pruneHandledAlerts(marks, [xlsx, lodash, olderXlsx]), marks, "an alert emitted before the mark changes nothing");
+});
+
+test("unfixablePackages lists the packages without a published fix from the latest audit, except those fixed by hand", () => {
+  const audited = operation({
+    status: "done",
+    steps: { clone: "done", audit: "done", fix: "done", force: "skipped", push: "skipped" },
+    remaining: [
+      { project: "", name: "xlsx", severity: "high", fix: "none" },
+      { project: "gui", name: "xlsx", severity: "high", fix: "none" },
+      { project: "", name: "nth-check", severity: "high", fix: "major" },
+      { project: "", name: "abc", severity: "low", fix: "none" },
+    ],
+  });
+  const target = repo("octo/demo", [alert(1, "high", "xlsx")]);
+  assert.deepEqual(unfixablePackages(target, [audited]), ["abc", "xlsx"]);
+  assert.deepEqual(unfixablePackages({ ...target, handledAlerts: [{ number: 1, package: "xlsx", markedAt: "2026-03-01T10:00:00.000Z" }] }, [audited]), ["abc"]);
+  assert.deepEqual(unfixablePackages(target, []), []);
+});
+
 test("Store tracks repositories, refuses a duplicate and a second active operation", () => {
   const temp = makeTempDir("tracker-store-");
   try {
@@ -218,6 +249,7 @@ test("Store keeps categories unique by name and frees their repositories when de
     const store = new Store(temp.dir);
     assert.equal(store.getRepo("octo/demo").categoryId, null);
     assert.equal(store.getRepo("octo/demo").alerts[0].createdAt, "2026-02-01T00:00:00.000Z");
+    assert.deepEqual(store.getRepo("octo/demo").handledAlerts, []);
     assert.deepEqual(store.listCategories(), []);
 
     const tools = store.createCategory("  Outils ");

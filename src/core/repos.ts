@@ -1,4 +1,5 @@
-import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type Operation, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
+import { pendingAlerts } from "../../shared/alerts.js";
+import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type HandledAlert, type Operation, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
 import type { RepoView } from "../../shared/schemas/api.schema.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, NotFoundError } from "./errors.js";
@@ -25,11 +26,16 @@ export function countBySeverity(alerts: Alert[]): Record<AlertSeverity, number> 
   return counts;
 }
 
-/** Dépôts triés par gravité la plus haute, puis par nombre d'alertes, puis par nom ; un dépôt sans alerte vient en dernier. */
+/**
+ * Dépôts triés par gravité la plus haute, puis par nombre d'alertes, puis par
+ * nom, sans compter les alertes corrigées à la main ; un dépôt sans alerte
+ * restante vient en dernier.
+ */
 export function sortRepos<T extends { repo: Repo }>(views: T[]): T[] {
   const key = (repo: Repo) => {
-    const worst = repo.alerts.reduce<number>((best, alert) => Math.min(best, severityRank(alert.severity)), ALERT_SEVERITIES.length);
-    return { worst, count: repo.alerts.length };
+    const pending = pendingAlerts(repo);
+    const worst = pending.reduce<number>((best, alert) => Math.min(best, severityRank(alert.severity)), ALERT_SEVERITIES.length);
+    return { worst, count: pending.length };
   };
   return [...views].sort((a, b) => {
     const ka = key(a.repo);
@@ -52,6 +58,31 @@ export function cleanAuditAt(repo: Repo, operations: Operation[]): string | null
   return repo.alerts.every((alert) => Date.parse(alert.createdAt) <= auditedAt) ? audited.createdAt : null;
 }
 
+/**
+ * Paquets pour lesquels le dernier audit n'a trouvé aucune version corrigée,
+ * hors ceux dont une alerte est marquée corrigée à la main. `operations` va de
+ * la plus récente à la plus ancienne.
+ */
+export function unfixablePackages(repo: Repo, operations: Operation[]): string[] {
+  const audited = operations.find((operation) => operation.steps.audit === "done");
+  if (!audited) return [];
+  const handled = new Set(repo.handledAlerts.map((mark) => mark.package));
+  const names = audited.remaining.filter((vulnerability) => vulnerability.fix === "none" && !handled.has(vulnerability.name)).map((vulnerability) => vulnerability.name);
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Marques « corrigée à la main » encore valables après une lecture des alertes :
+ * l'alerte est toujours ouverte, et aucune alerte du même paquet n'a été émise
+ * depuis le marquage.
+ */
+export function pruneHandledAlerts(handled: HandledAlert[], alerts: Alert[]): HandledAlert[] {
+  const open = new Set(alerts.map((alert) => alert.number));
+  return handled.filter(
+    (mark) => open.has(mark.number) && !alerts.some((alert) => alert.package === mark.package && Date.parse(alert.createdAt) > Date.parse(mark.markedAt))
+  );
+}
+
 export function repoView(store: Store, repo: Repo): RepoView {
   const operations = store.listOperations(repo.id);
   return {
@@ -60,6 +91,7 @@ export function repoView(store: Store, repo: Repo): RepoView {
     activeOperation: operations.find(isActive) ?? null,
     latestOperation: operations[0] ?? null,
     cleanAuditAt: cleanAuditAt(repo, operations),
+    unfixable: unfixablePackages(repo, operations),
   };
 }
 
@@ -74,7 +106,13 @@ export async function syncRepository(store: Store, config: GitHubConfig, repoId:
   const github = new GitHubClient(config);
   try {
     const alerts = await github.listOpenAlerts(repo.owner, repo.name);
-    return store.updateRepo(repo.id, (current) => ({ ...current, alerts, syncedAt: new Date().toISOString(), syncError: null }));
+    return store.updateRepo(repo.id, (current) => ({
+      ...current,
+      alerts,
+      handledAlerts: pruneHandledAlerts(current.handledAlerts, alerts),
+      syncedAt: new Date().toISOString(),
+      syncError: null,
+    }));
   } catch (err: any) {
     const message = err?.message ?? String(err);
     return store.updateRepo(repo.id, (current) => ({ ...current, syncedAt: new Date().toISOString(), syncError: message }));
@@ -97,6 +135,7 @@ export async function addRepository(store: Store, config: GitHubConfig, input: s
     addedAt: new Date().toISOString(),
     rights: DEFAULT_RIGHTS,
     alerts: [],
+    handledAlerts: [],
     syncedAt: null,
     syncError: null,
   });
@@ -128,6 +167,21 @@ export async function setBranch(store: Store, config: GitHubConfig, repoId: stri
 /** Range le dépôt dans une catégorie, ou dans aucune avec null. */
 export function setCategory(store: Store, repoId: string, categoryId: string | null): Repo {
   return store.updateRepo(repoId, (repo) => ({ ...repo, categoryId }));
+}
+
+/** Marque une alerte ouverte comme corrigée à la main ; sans effet si elle l'est déjà. */
+export function markAlertHandled(store: Store, repoId: string, number: number): Repo {
+  return store.updateRepo(repoId, (repo) => {
+    const alert = repo.alerts.find((candidate) => candidate.number === number);
+    if (!alert) throw new NotFoundError(`Alert #${number} is not open on ${repo.id}.`);
+    if (repo.handledAlerts.some((mark) => mark.number === number)) return repo;
+    return { ...repo, handledAlerts: [...repo.handledAlerts, { number, package: alert.package, markedAt: new Date().toISOString() }] };
+  });
+}
+
+/** Retire la marque « corrigée à la main » d'une alerte. */
+export function unmarkAlertHandled(store: Store, repoId: string, number: number): Repo {
+  return store.updateRepo(repoId, (repo) => ({ ...repo, handledAlerts: repo.handledAlerts.filter((mark) => mark.number !== number) }));
 }
 
 export function setRights(store: Store, repoId: string, rights: Rights): Repo {

@@ -1,3 +1,4 @@
+import { pendingAlerts } from '@shared/alerts'
 import { searchRepositories } from '@shared/repo-search'
 import type { RepoView } from '@shared/schemas/api.schema'
 import type { Category } from '@shared/schemas/model.schema'
@@ -33,11 +34,13 @@ function writeOnlyVulnerable(value: boolean) {
 }
 
 /**
- * État d'un dépôt en bout de ligne : une seule information, la plus utile. Un
- * audit sans vulnérabilité, plus récent que les alertes, estompe leur pastille.
+ * État d'un dépôt en bout de ligne : une seule information, la plus utile. Des
+ * alertes toutes corrigées à la main, ou un audit sans vulnérabilité plus
+ * récent qu'elles, estompent leur pastille ; des paquets sans version corrigée
+ * sont signalés devant elle.
  */
 function RepoStatus({ view }: { view: RepoView }) {
-  const { repo, activeOperation, cleanAuditAt } = view
+  const { repo, activeOperation, cleanAuditAt, unfixable } = view
   if (activeOperation) {
     return (
       <span className="status status-busy">
@@ -46,19 +49,44 @@ function RepoStatus({ view }: { view: RepoView }) {
       </span>
     )
   }
-  const worst = worstSeverity(repo)
+  const pending = pendingAlerts(repo)
+  const all = worstSeverity(repo.alerts)
+  if (all && pending.length === 0) {
+    return (
+      <span className="status status-clean" title="Toutes les alertes sont marquées corrigées à la main.">
+        <Icon name="circle-check" className="text-ok" />
+        Corrigé à la main
+        <SeverityPill severity={all} faded>
+          {plural(repo.alerts.length, 'alerte')}
+        </SeverityPill>
+      </span>
+    )
+  }
+  const worst = worstSeverity(pending)
   if (worst && cleanAuditAt) {
     return (
       <span className="status status-clean" title="Le dernier audit n'a trouvé aucune vulnérabilité : Dependabot n'a pas encore repassé.">
         <Icon name="circle-check" className="text-ok" />
         Audit OK le {dayAndTime(cleanAuditAt)}
         <SeverityPill severity={worst} faded>
-          {plural(repo.alerts.length, 'alerte')}
+          {plural(pending.length, 'alerte')}
         </SeverityPill>
       </span>
     )
   }
-  if (worst) return <SeverityPill severity={worst}>{plural(repo.alerts.length, 'alerte')}</SeverityPill>
+  if (worst) {
+    return (
+      <span className="status status-clean">
+        {unfixable.length > 0 && (
+          <span className="unfixable-note" title={`Aucune version corrigée publiée : ${unfixable.join(', ')}`}>
+            <Icon name="triangle-alert" />
+            {plural(unfixable.length, 'sans correctif', 'sans correctif')}
+          </span>
+        )}
+        <SeverityPill severity={worst}>{plural(pending.length, 'alerte')}</SeverityPill>
+      </span>
+    )
+  }
   if (repo.syncError) {
     return (
       <span className="status status-error" title={repo.syncError}>
@@ -227,7 +255,7 @@ export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { category
   const unknownCategory = categoryId !== null && repos.data !== null && category === null
   const [onlyVulnerable, setOnlyVulnerable] = useState(readOnlyVulnerable)
   const inCategory = (repos.data?.repos ?? []).filter((view) => categoryId === null || view.repo.categoryId === categoryId)
-  const views = onlyVulnerable ? inCategory.filter((view) => view.repo.alerts.length > 0) : inCategory
+  const views = onlyVulnerable ? inCategory.filter((view) => pendingAlerts(view.repo).length > 0) : inCategory
 
   function toggleOnlyVulnerable(value: boolean) {
     setOnlyVulnerable(value)

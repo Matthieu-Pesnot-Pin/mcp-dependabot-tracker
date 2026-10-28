@@ -51,13 +51,18 @@ export type PushBody = z.infer<typeof PushBodySchema>;
 /** Identifiant d'un dépôt dans une requête IPC. */
 export const RepoRequestSchema = z.object({ repoId: z.string().min(1) });
 
+/** Alerte d'un dépôt, par son numéro GitHub. */
+export const AlertRequestSchema = z.object({ repoId: z.string().min(1), number: z.coerce.number().int().positive() });
+
 export const OperationRequestSchema = z.object({ operationId: z.string().min(1) });
 
 /**
  * Dépôt, sa catégorie, et l'état de son opération en cours et de la dernière
  * opération, pour la liste et l'écran du dépôt. `cleanAuditAt` est la date du
  * dernier audit quand il n'a trouvé aucune vulnérabilité alors que Dependabot
- * signale encore des alertes émises avant lui.
+ * signale encore des alertes émises avant lui ; `unfixable` les paquets pour
+ * lesquels le dernier audit n'a trouvé aucune version corrigée, hors ceux
+ * marqués corrigés à la main.
  */
 export interface RepoView {
   repo: Repo;
@@ -65,6 +70,7 @@ export interface RepoView {
   activeOperation: Operation | null;
   latestOperation: Operation | null;
   cleanAuditAt: string | null;
+  unfixable: string[];
 }
 
 /** Dépôts suivis et catégories, pour l'accueil et sa barre latérale. */

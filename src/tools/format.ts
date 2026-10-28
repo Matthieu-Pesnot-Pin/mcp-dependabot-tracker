@@ -1,5 +1,6 @@
 import { ALERT_SEVERITIES, RIGHTS, type Category, type Operation, type Repo } from "../../shared/schemas/model.schema.js";
 import type { RepoView } from "../../shared/schemas/api.schema.js";
+import { pendingAlerts } from "../../shared/alerts.js";
 import { projectLabel } from "../core/npm-audit.js";
 import { countBySeverity } from "../core/repos.js";
 
@@ -11,11 +12,15 @@ export function rightsLabel(repo: Repo): string {
   return allowed.length === 0 ? "none" : allowed.join(", ");
 }
 
+/** Alertes restantes par gravité, et le nombre de celles que l'utilisateur a corrigées à la main. */
 function alertsLabel(repo: Repo): string {
-  if (repo.alerts.length === 0) return "none";
-  const counts = countBySeverity(repo.alerts);
+  const pending = pendingAlerts(repo);
+  const handled = repo.alerts.length - pending.length;
+  const handledNote = handled > 0 ? ` + ${handled} fixed by hand by the user` : "";
+  if (pending.length === 0) return `none${handledNote}`;
+  const counts = countBySeverity(pending);
   const detail = ALERT_SEVERITIES.filter((severity) => counts[severity] > 0).map((severity) => `${severity} ${counts[severity]}`);
-  return `${repo.alerts.length} (${detail.join(", ")})`;
+  return `${pending.length} (${detail.join(", ")})${handledNote}`;
 }
 
 /** Description d'un dépôt pour l'agent ; `category` est la catégorie où l'utilisateur l'a rangé. */
@@ -27,6 +32,7 @@ export function describeRepo(view: RepoView, category: Category | null): string 
     `  Open Dependabot alerts: ${alertsLabel(repo)}${repo.syncedAt ? ` · synced ${repo.syncedAt}` : " · not synced yet"}`,
   ];
   if (repo.syncError) lines.push(`  Last sync failed: ${repo.syncError}`);
+  if (view.unfixable.length > 0) lines.push(`  Last npm audit found no published fix for: ${view.unfixable.join(", ")}`);
   if (view.cleanAuditAt) {
     lines.push(`  npm audit of ${view.cleanAuditAt} found no vulnerability on the default branch: these Dependabot alerts are probably not refreshed yet.`);
   }
@@ -39,7 +45,9 @@ export function describeAlerts(repo: Repo): string {
   const header = `${repo.id}: ${repo.alerts.length} open Dependabot alert(s), synced ${repo.syncedAt}.`;
   const lines = repo.alerts.map((alert) => {
     const patched = alert.patchedVersion ? ` — patched in ${alert.patchedVersion}` : " — no patched version";
-    return `- #${alert.number} ${alert.severity} ${alert.package} (${alert.ecosystem}, ${alert.manifestPath}): ${alert.summary}${patched} — ${alert.url}`;
+    const mark = repo.handledAlerts.find((candidate) => candidate.number === alert.number);
+    const handled = mark ? ` — fixed by hand by the user on ${mark.markedAt}` : "";
+    return `- #${alert.number} ${alert.severity} ${alert.package} (${alert.ecosystem}, ${alert.manifestPath}): ${alert.summary}${patched}${handled} — ${alert.url}`;
   });
   return [header, ...lines].join("\n");
 }

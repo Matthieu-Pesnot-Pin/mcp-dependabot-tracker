@@ -16,10 +16,11 @@ import { githubConfigured, readGitHubConfig } from "./core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
 import { cancelOperation, decideForce, pushOperation, startUserFix, type OperationContext } from "./core/operations.js";
-import { SYNC_INTERVAL_MS, addRepository, listAddableRepositories, listRepoBranches, listRepoViews, setBranch, setCategory, repoView, setRights, staleRepos, syncRepository } from "./core/repos.js";
+import { SYNC_INTERVAL_MS, addRepository, listAddableRepositories, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncRepository, unmarkAlertHandled } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
   AddRepoBodySchema,
+  AlertRequestSchema,
   CategoryBodySchema,
   CategoryRequestSchema,
   ForceBodySchema,
@@ -202,6 +203,16 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
       const { repoId } = parseRequest(RepoRequestSchema, msg.data);
       const body = parseRequest(SetCategoryBodySchema, msg.data?.body);
       return repoView(store, setCategory(store, repoId, body.categoryId));
+    }
+
+    case "MARK_ALERT_HANDLED": {
+      const { repoId, number } = parseRequest(AlertRequestSchema, msg.data);
+      return repoView(store, markAlertHandled(store, repoId, number));
+    }
+
+    case "UNMARK_ALERT_HANDLED": {
+      const { repoId, number } = parseRequest(AlertRequestSchema, msg.data);
+      return repoView(store, unmarkAlertHandled(store, repoId, number));
     }
 
     case "LIST_CATEGORIES":

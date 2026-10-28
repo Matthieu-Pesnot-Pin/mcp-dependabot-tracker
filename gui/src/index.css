@@ -490,6 +490,70 @@ code {
   margin-left: 20px;
 }
 
+.unfixable-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--warning);
+  white-space: nowrap;
+}
+
+.alert-line {
+  position: relative;
+  border-top: 1px solid var(--divider);
+}
+
+.alert-line:first-child {
+  border-top: none;
+}
+
+.alert-line .row {
+  border-top: none;
+}
+
+.alert-mark-space {
+  width: 164px;
+  flex-shrink: 0;
+}
+
+.alert-mark.button {
+  position: absolute;
+  top: 12px;
+  right: 56px;
+  display: none;
+  height: 32px;
+  font-size: 12px;
+}
+
+.alert-line:hover .alert-mark {
+  display: inline-flex;
+}
+
+.alert-line:hover .row {
+  background: var(--surface-raised);
+}
+
+.handled-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.handled-note svg {
+  flex-shrink: 0;
+}
+
+.restore-link {
+  font-size: 12px;
+}
+
+.section-label-spaced {
+  margin-top: 28px;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

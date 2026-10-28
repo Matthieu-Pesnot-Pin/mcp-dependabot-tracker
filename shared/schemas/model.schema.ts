@@ -42,6 +42,18 @@ export const AlertSchema = z.object({
 
 export type Alert = z.infer<typeof AlertSchema>;
 
+/**
+ * Alerte que l'utilisateur a corrigée à la main alors que Dependabot la signale
+ * encore. `package` est son paquet, `markedAt` la date du marquage.
+ */
+export const HandledAlertSchema = z.object({
+  number: z.number().int(),
+  package: z.string(),
+  markedAt: z.string(),
+});
+
+export type HandledAlert = z.infer<typeof HandledAlertSchema>;
+
 /** Catégorie de dépôts, choisie par l'utilisateur ; un dépôt appartient à une catégorie au plus. */
 export const CategorySchema = z.object({
   id: z.string(),
@@ -53,7 +65,8 @@ export type Category = z.infer<typeof CategorySchema>;
 /**
  * Dépôt suivi. `id` est le nom complet GitHub, `propriétaire/nom` ; `branch` est
  * la branche que les opérations clonent et vers laquelle la pull request est ouverte ;
- * `categoryId` est sa catégorie, null s'il n'est rangé dans aucune.
+ * `categoryId` est sa catégorie, null s'il n'est rangé dans aucune ;
+ * `handledAlerts` les alertes qu'il a marquées corrigées à la main.
  */
 export const RepoSchema = z.object({
   id: z.string(),
@@ -65,6 +78,7 @@ export const RepoSchema = z.object({
   addedAt: z.string(),
   rights: RightsSchema,
   alerts: z.array(AlertSchema),
+  handledAlerts: z.array(HandledAlertSchema),
   syncedAt: z.string().nullable(),
   syncError: z.string().nullable(),
 });

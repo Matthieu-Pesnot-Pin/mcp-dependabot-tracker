@@ -142,6 +142,23 @@ test("the agent reads the alerts and is held to its rights", async () => {
   assert.equal((await call("PUT", "repos/octo/demo/rights", { rights: { audit: true } })).status, 400);
 });
 
+test("the GUI marks an alert fixed by hand; the agent sees it", async () => {
+  const marked = await call("PUT", "repos/octo/demo/alerts/2/handled");
+  assert.equal(marked.status, 200, marked.json.error);
+  assert.deepEqual(marked.json.repo.handledAlerts.map((mark: { number: number; package: string }) => [mark.number, mark.package]), [[2, "simple-git"]]);
+  assert.equal((await call("PUT", "repos/octo/demo/alerts/2/handled")).json.repo.handledAlerts.length, 1, "marking twice keeps one mark");
+  assert.equal((await call("PUT", "repos/octo/demo/alerts/99/handled")).status, 404);
+  assert.equal((await call("PUT", "repos/octo/demo/alerts/abc/handled")).status, 400);
+
+  const listed = await client.callTool("list_repositories");
+  assert.match(listed.text, /Open Dependabot alerts: 2 \(high 1, medium 1\) \+ 1 fixed by hand by the user/);
+  assert.match((await client.callTool("get_alerts", { repository: "octo/demo" })).text, /#2 critical simple-git .*fixed by hand by the user on /);
+
+  const restored = await call("DELETE", "repos/octo/demo/alerts/2/handled");
+  assert.equal(restored.status, 200, restored.json.error);
+  assert.deepEqual(restored.json.repo.handledAlerts, []);
+});
+
 test("the GUI files repositories in categories, which the agent can list", async () => {
   const created = await call("POST", "categories", { name: "MCP" });
   assert.equal(created.status, 200, created.json.error);
