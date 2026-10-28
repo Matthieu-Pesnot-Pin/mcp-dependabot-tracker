@@ -629,6 +629,15 @@ code {
   color: var(--faint);
 }
 
+.unfixable-toggle {
+  font-size: 13px;
+  color: var(--warning);
+}
+
+.unfixable-toggle:hover {
+  text-decoration: underline;
+}
+
 .step-body {
   padding: 0 20px 18px 52px;
   font-size: 13px;
