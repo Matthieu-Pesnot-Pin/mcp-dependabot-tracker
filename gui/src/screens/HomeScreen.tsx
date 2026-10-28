@@ -5,12 +5,32 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as Reac
 import { CategorySidebar } from '../components/CategorySidebar'
 import { Icon } from '../components/Icon'
 import { SeverityPill } from '../components/Pill'
+import { Toggle } from '../components/Toggle'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../utils/api'
 import { plural, worstSeverity } from '../utils/format'
 import { hrefs, navigate, rememberHomeCategory } from '../utils/router'
 
 const POLL_MS = 3000
+
+/** Clé du navigateur qui retient la position de l'interrupteur « Vulnérables seulement ». */
+const ONLY_VULNERABLE_KEY = 'dependabot-tracker.only-vulnerable'
+
+function readOnlyVulnerable(): boolean {
+  try {
+    return localStorage.getItem(ONLY_VULNERABLE_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function writeOnlyVulnerable(value: boolean) {
+  try {
+    localStorage.setItem(ONLY_VULNERABLE_KEY, String(value))
+  } catch {
+    // Stockage indisponible : la position vaut pour cette visite seulement.
+  }
+}
 
 /** État d'un dépôt en bout de ligne : une seule information, la plus utile. */
 function RepoStatus({ view }: { view: RepoView }) {
@@ -191,7 +211,14 @@ export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { category
   const categories = repos.data?.categories ?? []
   const category = categories.find((candidate) => candidate.id === categoryId) ?? null
   const unknownCategory = categoryId !== null && repos.data !== null && category === null
-  const views = (repos.data?.repos ?? []).filter((view) => categoryId === null || view.repo.categoryId === categoryId)
+  const [onlyVulnerable, setOnlyVulnerable] = useState(readOnlyVulnerable)
+  const inCategory = (repos.data?.repos ?? []).filter((view) => categoryId === null || view.repo.categoryId === categoryId)
+  const views = onlyVulnerable ? inCategory.filter((view) => view.repo.alerts.length > 0) : inCategory
+
+  function toggleOnlyVulnerable(value: boolean) {
+    setOnlyVulnerable(value)
+    writeOnlyVulnerable(value)
+  }
 
   useEffect(() => {
     if (!unknownCategory) rememberHomeCategory(categoryId)
@@ -201,7 +228,13 @@ export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { category
     <div className="home">
       {repos.data && <CategorySidebar categories={categories} views={repos.data.repos} selected={categoryId} onChanged={repos.reload} />}
       <div className="page">
-        <h1 className="page-title">{category ? category.name : 'Tous mes projets'}</h1>
+        <div className="home-head">
+          <h1 className="page-title">{category ? category.name : 'Tous mes projets'}</h1>
+          <label className="filter">
+            Vulnérables seulement
+            <Toggle checked={onlyVulnerable} onChange={toggleOnlyVulnerable} label="Vulnérables seulement" />
+          </label>
+        </div>
         {config.data && !config.data.githubConfigured && (
           <p className="banner banner-error">
             <Icon name="triangle-alert" />
@@ -214,7 +247,12 @@ export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { category
             Cette catégorie n'existe plus. <a className="link" href={hrefs.home()}>Voir tous les projets</a>.
           </p>
         )}
-        {repos.data && !unknownCategory && views.length === 0 && (
+        {repos.data && !unknownCategory && inCategory.length > 0 && views.length === 0 && (
+          <div className="panel empty">
+            <p>Aucun dépôt vulnérable {categoryId === null ? 'parmi vos projets' : 'dans cette catégorie'}.</p>
+          </div>
+        )}
+        {repos.data && !unknownCategory && inCategory.length === 0 && (
           <div className="panel empty">
             <p>{categoryId === null ? 'Aucun dépôt suivi.' : 'Aucun dépôt dans cette catégorie.'}</p>
             <button type="button" className="button button-primary" onClick={onAdd}>

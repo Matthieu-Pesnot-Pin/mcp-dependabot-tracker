@@ -973,6 +973,27 @@ code {
   min-width: 0;
 }
 
+.home-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.home-head .page-title {
+  margin-bottom: 0;
+}
+
+.filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
 .sidebar {
   position: sticky;
   top: 0;
