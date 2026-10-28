@@ -41,9 +41,18 @@ export const AlertSchema = z.object({
 
 export type Alert = z.infer<typeof AlertSchema>;
 
+/** Catégorie de dépôts, choisie par l'utilisateur ; un dépôt appartient à une catégorie au plus. */
+export const CategorySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+
+export type Category = z.infer<typeof CategorySchema>;
+
 /**
  * Dépôt suivi. `id` est le nom complet GitHub, `propriétaire/nom` ; `branch` est
- * la branche que les opérations clonent et vers laquelle la pull request est ouverte.
+ * la branche que les opérations clonent et vers laquelle la pull request est ouverte ;
+ * `categoryId` est sa catégorie, null s'il n'est rangé dans aucune.
  */
 export const RepoSchema = z.object({
   id: z.string(),
@@ -51,6 +60,7 @@ export const RepoSchema = z.object({
   name: z.string(),
   defaultBranch: z.string(),
   branch: z.string(),
+  categoryId: z.string().nullable(),
   addedAt: z.string(),
   rights: RightsSchema,
   alerts: z.array(AlertSchema),
@@ -60,7 +70,9 @@ export const RepoSchema = z.object({
 
 export type Repo = z.infer<typeof RepoSchema>;
 
-export const ReposFileSchema = z.object({ repos: z.array(RepoSchema) });
+export const ReposFileSchema = z.object({ categories: z.array(CategorySchema), repos: z.array(RepoSchema) });
+
+export type ReposFile = z.infer<typeof ReposFileSchema>;
 
 /** `audit` : clone et `npm audit` seulement ; `fix` : jusqu'aux corrections, à la branche et à la PR. */
 export const OPERATION_KINDS = ["audit", "fix"] as const;

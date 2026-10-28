@@ -142,6 +142,41 @@ test("the agent reads the alerts and is held to its rights", async () => {
   assert.equal((await call("PUT", "repos/octo/demo/rights", { rights: { audit: true } })).status, 400);
 });
 
+test("the GUI files repositories in categories, which the agent can list", async () => {
+  const created = await call("POST", "categories", { name: "MCP" });
+  assert.equal(created.status, 200, created.json.error);
+  assert.equal((await call("POST", "categories", { name: " mcp " })).status, 409);
+  assert.equal((await call("POST", "categories", { name: "" })).status, 400);
+  const tools = await call("POST", "categories", { name: "Outils" });
+
+  const added = await call("POST", "repos", { repository: "octo/extra-1", categoryId: created.json.id });
+  assert.equal(added.status, 200, added.json.error);
+  assert.equal(added.json.category.name, "MCP");
+  assert.equal((await call("POST", "repos", { repository: "octo/extra-2", categoryId: "missing" })).status, 404);
+
+  const filed = await call("PUT", "repos/octo/demo/category", { categoryId: tools.json.id });
+  assert.equal(filed.status, 200, filed.json.error);
+  assert.equal(filed.json.repo.categoryId, tools.json.id);
+  assert.equal((await call("PUT", "repos/octo/demo/category", { categoryId: "missing" })).status, 404);
+
+  const renamed = await call("PUT", `categories/${created.json.id}`, { name: "Serveurs MCP" });
+  assert.equal(renamed.json.name, "Serveurs MCP");
+  const list = await call("GET", "repos");
+  assert.deepEqual(list.json.categories.map((category: { name: string }) => category.name), ["Outils", "Serveurs MCP"]);
+
+  const inCategory = await client.callTool("list_repositories", { category: "serveurs mcp" });
+  assert.match(inCategory.text, /^1 repository in category Serveurs MCP:/);
+  assert.match(inCategory.text, /octo\/extra-1[\s\S]*Category: Serveurs MCP/);
+  assert.doesNotMatch(inCategory.text, /octo\/demo/);
+  assert.match((await client.callTool("list_repositories", { category: "Nope" })).text, /Category "Nope" does not exist \(existing categories: Outils, Serveurs MCP\)/);
+
+  assert.equal((await call("DELETE", `categories/${tools.json.id}`)).status, 200);
+  assert.equal((await call("GET", "repos/octo/demo")).json.category, null);
+  assert.equal((await call("DELETE", `categories/${tools.json.id}`)).status, 404);
+  assert.equal((await call("DELETE", "repos/octo/extra-1")).status, 200);
+  assert.equal((await call("DELETE", `categories/${created.json.id}`)).status, 200);
+});
+
 test("the agent fixes and pushes; the result links to the operation in the GUI", { skip }, async () => {
   const fixed = await client.callTool("fix_vulnerabilities", { repository: "octo/demo", push: true }, 180_000);
   assert.equal(fixed.isError, false, fixed.text);

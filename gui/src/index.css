@@ -239,15 +239,15 @@ code {
   margin-bottom: 12px;
 }
 
-/* --- Sélecteur de branche ------------------------------------------------- */
+/* --- Sélecteurs de branche et de catégorie ----------------------------- */
 
-.branch-selector {
+.picker {
   position: relative;
   display: inline-block;
   vertical-align: middle;
 }
 
-.branch-chip {
+.picker-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -260,20 +260,20 @@ code {
   color: var(--text-strong);
 }
 
-.branch-chip svg:first-child {
+.picker-chip svg:first-child {
   color: var(--muted);
 }
 
-.branch-chip:hover,
-.branch-chip[aria-expanded='true'] {
+.picker-chip:hover,
+.picker-chip[aria-expanded='true'] {
   border-color: var(--idle);
 }
 
-.branch-chevron {
+.picker-chevron {
   color: var(--faint);
 }
 
-.branch-menu {
+.picker-menu {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
@@ -294,14 +294,14 @@ code {
   font-size: 12px;
 }
 
-.branch-options {
+.picker-options {
   max-height: 272px;
   overflow: auto;
   padding: 0;
   list-style: none;
 }
 
-.branch-option {
+.picker-option {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -313,12 +313,12 @@ code {
   cursor: pointer;
 }
 
-.branch-option.is-active {
+.picker-option.is-active {
   background: var(--brand-bg);
   color: var(--text);
 }
 
-.branch-name {
+.picker-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -331,12 +331,12 @@ code {
   color: var(--faint);
 }
 
-.branch-check {
+.picker-check {
   flex-shrink: 0;
   color: var(--accent-soft);
 }
 
-.branch-note {
+.picker-note {
   padding: 8px 14px;
   font-size: 12px;
   color: var(--faint);
@@ -960,4 +960,229 @@ code {
   .alert-summary {
     display: none;
   }
+}
+
+/* --- Accueil : barre des catégories ------------------------------------------ */
+
+.home {
+  display: flex;
+  min-height: 100%;
+}
+
+.home .page {
+  min-width: 0;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 248px;
+  min-height: calc(100vh - var(--topbar-height));
+  flex-shrink: 0;
+  padding: 24px 12px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+
+.side-row {
+  position: relative;
+}
+
+.side-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-soft);
+  text-align: left;
+}
+
+.side-item svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.side-item:hover {
+  background: var(--surface-raised);
+}
+
+.side-item.is-active {
+  background: var(--brand-bg);
+  color: var(--text);
+}
+
+.side-item.is-active svg {
+  color: var(--accent-soft);
+}
+
+.side-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-count {
+  display: inline-flex;
+}
+
+.side-more {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--text-soft);
+}
+
+.side-more:hover {
+  background: var(--border-strong);
+}
+
+.side-row:hover .side-more,
+.side-row.is-open .side-more {
+  display: inline-flex;
+}
+
+.side-row:hover .side-count,
+.side-row.is-open .side-count {
+  visibility: hidden;
+}
+
+.side-menu {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 4px);
+  z-index: 30;
+  width: 160px;
+  padding: 4px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.side-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.side-menu-item:hover {
+  background: var(--border);
+}
+
+.side-menu-item.is-danger {
+  color: var(--danger);
+}
+
+.side-divider {
+  height: 1px;
+  margin: 8px 12px;
+  background: var(--divider);
+}
+
+.side-new {
+  margin-top: 8px;
+  color: var(--faint);
+}
+
+.side-new svg {
+  color: var(--faint);
+}
+
+.side-editing {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.side-editing:hover {
+  background: var(--surface);
+}
+
+.side-input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  font: inherit;
+  color: var(--text);
+}
+
+.pill-small {
+  height: 20px;
+  min-width: 32px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.picker-menu-narrow {
+  width: 220px;
+  padding: 6px;
+}
+
+.picker-menu-narrow .picker-option:hover {
+  background: var(--brand-bg);
+  color: var(--text);
+}
+
+.select-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.select-field > svg:first-child {
+  position: absolute;
+  left: 12px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.select-field select {
+  width: 100%;
+  height: 40px;
+  padding: 0 36px 0 38px;
+  appearance: none;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+}
+
+.select-field select:focus {
+  border-color: var(--accent);
+}
+
+.select-chevron {
+  position: absolute;
+  right: 12px;
+  color: var(--faint);
+  pointer-events: none;
 }

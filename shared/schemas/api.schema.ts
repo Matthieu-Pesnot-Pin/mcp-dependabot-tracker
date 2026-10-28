@@ -1,8 +1,11 @@
 import { z } from "zod";
-import { RightsSchema, type Operation, type Repo } from "./model.schema.js";
+import { RightsSchema, type Category, type Operation, type Repo } from "./model.schema.js";
 
-/** Corps de `POST /api/repos` : `propriétaire/nom` ou lien GitHub. */
-export const AddRepoBodySchema = z.object({ repository: z.string().trim().min(1) });
+/** Corps de `POST /api/repos` : `propriétaire/nom` ou lien GitHub, et la catégorie où le ranger (aucune par défaut). */
+export const AddRepoBodySchema = z.object({
+  repository: z.string().trim().min(1),
+  categoryId: z.string().min(1).nullable().default(null),
+});
 
 export type AddRepoBody = z.infer<typeof AddRepoBodySchema>;
 
@@ -13,6 +16,23 @@ export type SetRightsBody = z.infer<typeof SetRightsBodySchema>;
 export const SetBranchBodySchema = z.object({ branch: z.string().trim().min(1) });
 
 export type SetBranchBody = z.infer<typeof SetBranchBodySchema>;
+
+/** Catégorie du dépôt ; null le sort de toute catégorie. */
+export const SetCategoryBodySchema = z.object({ categoryId: z.string().min(1).nullable() });
+
+export type SetCategoryBody = z.infer<typeof SetCategoryBodySchema>;
+
+/** Corps de `POST /api/categories` et de `PUT /api/categories/:id`. */
+export const CategoryBodySchema = z.object({ name: z.string().trim().min(1).max(60) });
+
+export type CategoryBody = z.infer<typeof CategoryBodySchema>;
+
+export const CategoryRequestSchema = z.object({ categoryId: z.string().min(1) });
+
+/** Catégories dans l'ordre alphabétique. */
+export interface CategoriesResponse {
+  categories: Category[];
+}
 
 /** Branches du dépôt, la branche par défaut en tête. */
 export interface BranchesResponse {
@@ -33,15 +53,18 @@ export const RepoRequestSchema = z.object({ repoId: z.string().min(1) });
 
 export const OperationRequestSchema = z.object({ operationId: z.string().min(1) });
 
-/** Dépôt et état de son opération en cours et de la dernière opération, pour la liste et l'écran du dépôt. */
+/** Dépôt, sa catégorie, et l'état de son opération en cours et de la dernière opération, pour la liste et l'écran du dépôt. */
 export interface RepoView {
   repo: Repo;
+  category: Category | null;
   activeOperation: Operation | null;
   latestOperation: Operation | null;
 }
 
+/** Dépôts suivis et catégories, pour l'accueil et sa barre latérale. */
 export interface ReposResponse {
   repos: RepoView[];
+  categories: Category[];
 }
 
 /** Dépôts accessibles au token GitHub et pas encore suivis, `propriétaire/nom`. */

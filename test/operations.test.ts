@@ -32,7 +32,7 @@ async function newRepo(files: Record<string, string> = { ".": VULNERABLE_FIXTURE
   const name = `demo-${counter}`;
   remotes.create("octo", name, "main", files);
   github.addRepo("octo", name, "main", [{ number: 1, severity: "high", package: "lodash", summary: "Command Injection in lodash" }]);
-  return (await addRepository(ctx.store, ctx.githubConfig(), `octo/${name}`)).id;
+  return (await addRepository(ctx.store, ctx.githubConfig(), `octo/${name}`, null)).id;
 }
 
 function waitStatus(id: string, statuses: Operation["status"][]): Promise<Operation> {
@@ -180,7 +180,7 @@ test("an operation clones the chosen branch and opens the pull request towards i
   remotes.create("octo", name, "main", { ".": VULNERABLE_FIXTURE });
   remotes.addBranch("octo", name, "main", "develop");
   github.addRepo("octo", name, "main", [], ["main", "develop"]);
-  const repoId = (await addRepository(ctx.store, ctx.githubConfig(), `octo/${name}`)).id;
+  const repoId = (await addRepository(ctx.store, ctx.githubConfig(), `octo/${name}`, null)).id;
   assert.equal(ctx.store.getRepo(repoId).branch, "main");
   assert.deepEqual(await listRepoBranches(ctx.store, ctx.githubConfig(), repoId), ["main", "develop"]);
   await assert.rejects(setBranch(ctx.store, ctx.githubConfig(), repoId, "nope"), /Branch "nope" does not exist/);
@@ -211,7 +211,7 @@ test("a repository without package-lock.json fails with an explicit error", asyn
 
 test("a clone of an unknown remote fails and reports git's message", async () => {
   github.addRepo("octo", "ghost", "main", []);
-  const repoId = (await addRepository(ctx.store, ctx.githubConfig(), "octo/ghost")).id;
+  const repoId = (await addRepository(ctx.store, ctx.githubConfig(), "octo/ghost", null)).id;
   const operation = await runAgentOperation(ctx, repoId, "audit", { force: false, push: false, commitMessage: "x" });
   assert.equal(operation.status, "failed");
   assert.match(operation.error ?? "", /^git clone failed:/);

@@ -7,7 +7,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 
 import { IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
-import { AddRepoBodySchema, ForceBodySchema, PushBodySchema, SetBranchBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
+import { AddRepoBodySchema, CategoryBodySchema, ForceBodySchema, PushBodySchema, SetBranchBodySchema, SetCategoryBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { z } from "zod";
@@ -257,6 +257,28 @@ app.put("/api/repos/:owner/:name/branch", async (c) => {
   if ("response" in read) return read.response;
   return forward(c, "SET_BRANCH", { repoId: repoId(c), body: read.body });
 });
+
+app.put("/api/repos/:owner/:name/category", async (c) => {
+  const read = await readBody(c, SetCategoryBodySchema);
+  if ("response" in read) return read.response;
+  return forward(c, "SET_CATEGORY", { repoId: repoId(c), body: read.body });
+});
+
+app.get("/api/categories", (c) => forward(c, "LIST_CATEGORIES"));
+
+app.post("/api/categories", async (c) => {
+  const read = await readBody(c, CategoryBodySchema);
+  if ("response" in read) return read.response;
+  return forward(c, "CREATE_CATEGORY", { body: read.body });
+});
+
+app.put("/api/categories/:id", async (c) => {
+  const read = await readBody(c, CategoryBodySchema);
+  if ("response" in read) return read.response;
+  return forward(c, "RENAME_CATEGORY", { categoryId: c.req.param("id"), body: read.body });
+});
+
+app.delete("/api/categories/:id", (c) => forward(c, "DELETE_CATEGORY", { categoryId: c.req.param("id") }));
 
 app.post("/api/repos/:owner/:name/operations", (c) => forward(c, "START_FIX", { repoId: repoId(c) }));
 

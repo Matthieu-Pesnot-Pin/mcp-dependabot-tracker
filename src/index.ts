@@ -16,18 +16,23 @@ import { githubConfigured, readGitHubConfig } from "./core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
 import { cancelOperation, decideForce, pushOperation, startUserFix, type OperationContext } from "./core/operations.js";
-import { SYNC_INTERVAL_MS, addRepository, listAddableRepositories, listRepoBranches, listRepoViews, setBranch, repoView, setRights, staleRepos, syncRepository } from "./core/repos.js";
+import { SYNC_INTERVAL_MS, addRepository, listAddableRepositories, listRepoBranches, listRepoViews, setBranch, setCategory, repoView, setRights, staleRepos, syncRepository } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
   AddRepoBodySchema,
+  CategoryBodySchema,
+  CategoryRequestSchema,
   ForceBodySchema,
   OperationRequestSchema,
   PushBodySchema,
   RepoRequestSchema,
   SetBranchBodySchema,
+  SetCategoryBodySchema,
   SetRightsBodySchema,
   type AddableReposResponse,
+  type CategoriesResponse,
   type BranchesResponse,
+  type ReposResponse,
   type AppConfig,
 } from "../shared/schemas/api.schema.js";
 import { errorResult, textResult, type ToolResult } from "./tools/types.js";
@@ -157,7 +162,7 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
       return { version: APP_VERSION, dataDir, githubConfigured: githubConfigured() } satisfies AppConfig;
 
     case "LIST_REPOS":
-      return { repos: listRepoViews(store) };
+      return { repos: listRepoViews(store), categories: store.listCategories() } satisfies ReposResponse;
 
     case "LIST_ADDABLE_REPOS":
       return { repositories: await listAddableRepositories(store, readGitHubConfig()) } satisfies AddableReposResponse;
@@ -169,7 +174,7 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
 
     case "ADD_REPO": {
       const body = parseRequest(AddRepoBodySchema, msg.data?.body);
-      return repoView(store, await addRepository(store, readGitHubConfig(), body.repository));
+      return repoView(store, await addRepository(store, readGitHubConfig(), body.repository, body.categoryId));
     }
 
     case "REMOVE_REPO":
@@ -192,6 +197,27 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
       const body = parseRequest(SetBranchBodySchema, msg.data?.body);
       return repoView(store, await setBranch(store, readGitHubConfig(), repoId, body.branch));
     }
+
+    case "SET_CATEGORY": {
+      const { repoId } = parseRequest(RepoRequestSchema, msg.data);
+      const body = parseRequest(SetCategoryBodySchema, msg.data?.body);
+      return repoView(store, setCategory(store, repoId, body.categoryId));
+    }
+
+    case "LIST_CATEGORIES":
+      return { categories: store.listCategories() } satisfies CategoriesResponse;
+
+    case "CREATE_CATEGORY":
+      return store.createCategory(parseRequest(CategoryBodySchema, msg.data?.body).name);
+
+    case "RENAME_CATEGORY": {
+      const { categoryId } = parseRequest(CategoryRequestSchema, msg.data);
+      return store.renameCategory(categoryId, parseRequest(CategoryBodySchema, msg.data?.body).name);
+    }
+
+    case "DELETE_CATEGORY":
+      store.deleteCategory(parseRequest(CategoryRequestSchema, msg.data).categoryId);
+      return { deleted: true };
 
     case "START_FIX":
       return { operation: startUserFix(operations, parseRequest(RepoRequestSchema, msg.data).repoId) };
@@ -331,8 +357,11 @@ const TOOLS = [
   {
     name: "list_repositories",
     description:
-      "List the tracked repositories with their analysed branch, their open Dependabot alerts by severity, the time of the last sync, the rights the user gave you (audit, fix, force, push) and the operation in progress. Start here.",
-    inputSchema: { type: "object" as const, properties: {} },
+      "List the tracked repositories with their category, their analysed branch, their open Dependabot alerts by severity, the time of the last sync, the rights the user gave you (audit, fix, force, push) and the operation in progress. Start here.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { category: { type: "string", description: "Only list the repositories of this category, by name (case-insensitive). The user creates the categories in the GUI." } },
+    },
   },
   {
     name: "get_alerts",

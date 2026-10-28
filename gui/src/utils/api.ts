@@ -1,5 +1,5 @@
-import type { AddableReposResponse, AppConfig, BranchesResponse, OperationResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
-import type { Rights } from '@shared/schemas/model.schema'
+import type { AddableReposResponse, AppConfig, BranchesResponse, CategoriesResponse, OperationResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
+import type { Category, Rights } from '@shared/schemas/model.schema'
 
 /** Erreur HTTP de l'API ; `status` distingue un conflit (409) des autres échecs. */
 export class ApiError extends Error {
@@ -44,6 +44,10 @@ function repoPath(repoId: string): string {
   return `repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
 }
 
+function categoryPath(id: string): string {
+  return `categories/${encodeURIComponent(id)}`
+}
+
 function operationPath(id: string): string {
   return `operations/${encodeURIComponent(id)}`
 }
@@ -53,10 +57,15 @@ export const api = {
   listRepos: () => request<ReposResponse>('repos'),
   listAddableRepos: () => request<AddableReposResponse>('github/repos'),
   getRepo: (repoId: string) => request<RepoView>(repoPath(repoId)),
-  addRepo: (repository: string) => send<RepoView>('POST', 'repos', { repository }),
+  addRepo: (repository: string, categoryId: string | null) => send<RepoView>('POST', 'repos', { repository, categoryId }),
   removeRepo: (repoId: string) => send<{ removed: true }>('DELETE', repoPath(repoId)),
   listBranches: (repoId: string) => request<BranchesResponse>(`${repoPath(repoId)}/branches`),
   setBranch: (repoId: string, branch: string) => send<RepoView>('PUT', `${repoPath(repoId)}/branch`, { branch }),
+  setCategory: (repoId: string, categoryId: string | null) => send<RepoView>('PUT', `${repoPath(repoId)}/category`, { categoryId }),
+  listCategories: () => request<CategoriesResponse>('categories'),
+  createCategory: (name: string) => send<Category>('POST', 'categories', { name }),
+  renameCategory: (id: string, name: string) => send<Category>('PUT', categoryPath(id), { name }),
+  deleteCategory: (id: string) => send<{ deleted: true }>('DELETE', categoryPath(id)),
   setRights: (repoId: string, rights: Rights) => send<RepoView>('PUT', `${repoPath(repoId)}/rights`, { rights }),
   startFix: (repoId: string) => send<OperationResponse>('POST', `${repoPath(repoId)}/operations`),
   getOperation: (id: string) => request<OperationResponse>(operationPath(id)),

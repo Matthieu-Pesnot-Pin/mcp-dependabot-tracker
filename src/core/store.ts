@@ -5,8 +5,10 @@ import {
   ACTIVE_STATUSES,
   OperationSchema,
   ReposFileSchema,
+  type Category,
   type Operation,
   type Repo,
+  type ReposFile,
 } from "../../shared/schemas/model.schema.js";
 import { ConflictError, NotFoundError, TrackerError } from "./errors.js";
 
@@ -46,10 +48,37 @@ export function processAlive(pid: number): boolean {
   }
 }
 
-/** Un dépôt enregistré sans branche choisie analyse sa branche par défaut. */
-function withBranches(file: any): unknown {
+/**
+ * Complète un fichier écrit par une version antérieure : un dépôt sans branche
+ * choisie analyse sa branche par défaut, un dépôt sans catégorie n'est rangé
+ * dans aucune, un fichier sans catégories n'en a aucune.
+ */
+function normalizeReposFile(file: any): unknown {
   if (!Array.isArray(file?.repos)) return file;
-  return { ...file, repos: file.repos.map((repo: any) => (typeof repo?.branch === "string" ? repo : { ...repo, branch: repo?.defaultBranch })) };
+  return {
+    ...file,
+    categories: file.categories ?? [],
+    repos: file.repos.map((repo: any) => ({
+      ...repo,
+      branch: typeof repo?.branch === "string" ? repo.branch : repo?.defaultBranch,
+      categoryId: repo?.categoryId ?? null,
+    })),
+  };
+}
+
+function sameName(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+function findCategoryIn(file: ReposFile, categoryId: string): Category {
+  const category = file.categories.find((candidate) => candidate.id === categoryId);
+  if (!category) throw new NotFoundError(`Category "${categoryId}" does not exist.`);
+  return category;
+}
+
+function assertNameFree(file: ReposFile, name: string, exceptId: string | null): void {
+  const taken = file.categories.find((category) => category.id !== exceptId && sameName(category.name, name));
+  if (taken) throw new ConflictError(`A category named "${taken.name}" already exists.`);
 }
 
 export function isActive(operation: Operation): boolean {
@@ -111,33 +140,33 @@ export class Store {
     }
   }
 
-  // --- Dépôts -----------------------------------------------------------------
+  // --- Dépôts et catégories ----------------------------------------------------
 
-  private readRepos(): Repo[] {
+  private readReposFile(): ReposFile {
     let raw: string;
     try {
       raw = fs.readFileSync(this.reposPath, "utf-8");
     } catch (err: any) {
-      if (err.code === "ENOENT") return [];
+      if (err.code === "ENOENT") return { categories: [], repos: [] };
       throw err;
     }
-    const parsed = ReposFileSchema.safeParse(withBranches(JSON.parse(raw)));
+    const parsed = ReposFileSchema.safeParse(normalizeReposFile(JSON.parse(raw)));
     if (!parsed.success) throw new TrackerError(`${this.reposPath} is invalid: ${parsed.error.message}`);
-    return parsed.data.repos;
+    return parsed.data;
   }
 
-  private writeRepos(repos: Repo[]): void {
-    writeJsonAtomic(this.reposPath, ReposFileSchema.parse({ repos }));
+  private writeReposFile(file: ReposFile): void {
+    writeJsonAtomic(this.reposPath, ReposFileSchema.parse(file));
   }
 
   listRepos(): Repo[] {
-    return this.readRepos();
+    return this.readReposFile().repos;
   }
 
   /** Dépôt d'identifiant `propriétaire/nom`, sans tenir compte de la casse, comme GitHub. */
   findRepo(repoId: string): Repo | null {
     const key = repoId.toLowerCase();
-    return this.readRepos().find((repo) => repo.id.toLowerCase() === key) ?? null;
+    return this.listRepos().find((repo) => repo.id.toLowerCase() === key) ?? null;
   }
 
   getRepo(repoId: string): Repo {
@@ -146,25 +175,30 @@ export class Store {
     return repo;
   }
 
+  /** Ajoute un dépôt ; sa catégorie, s'il en a une, doit exister. */
   addRepo(repo: Repo): Repo {
     return this.withLock(() => {
-      const repos = this.readRepos();
-      if (repos.some((existing) => existing.id.toLowerCase() === repo.id.toLowerCase())) {
+      const file = this.readReposFile();
+      if (file.repos.some((existing) => existing.id.toLowerCase() === repo.id.toLowerCase())) {
         throw new ConflictError(`Repository ${repo.id} is already tracked.`);
       }
-      this.writeRepos([...repos, repo]);
+      if (repo.categoryId !== null) findCategoryIn(file, repo.categoryId);
+      this.writeReposFile({ ...file, repos: [...file.repos, repo] });
       return repo;
     });
   }
 
+  /** Modifie un dépôt ; une catégorie qui lui est attribuée doit exister. */
   updateRepo(repoId: string, fn: (repo: Repo) => Repo): Repo {
     return this.withLock(() => {
-      const repos = this.readRepos();
-      const index = repos.findIndex((repo) => repo.id.toLowerCase() === repoId.toLowerCase());
+      const file = this.readReposFile();
+      const index = file.repos.findIndex((repo) => repo.id.toLowerCase() === repoId.toLowerCase());
       if (index === -1) throw new NotFoundError(`Repository "${repoId}" is not tracked.`);
-      const updated = fn(repos[index]);
+      const updated = fn(file.repos[index]);
+      if (updated.categoryId !== null) findCategoryIn(file, updated.categoryId);
+      const repos = [...file.repos];
       repos[index] = updated;
-      this.writeRepos(repos);
+      this.writeReposFile({ ...file, repos });
       return updated;
     });
   }
@@ -172,13 +206,56 @@ export class Store {
   /** Retire un dépôt et ses opérations ; refusé pendant une opération en cours. */
   removeRepo(repoId: string): void {
     this.withLock(() => {
-      const repos = this.readRepos();
-      const repo = repos.find((candidate) => candidate.id.toLowerCase() === repoId.toLowerCase());
+      const file = this.readReposFile();
+      const repo = file.repos.find((candidate) => candidate.id.toLowerCase() === repoId.toLowerCase());
       if (!repo) throw new NotFoundError(`Repository "${repoId}" is not tracked.`);
       const operations = this.readOperationsOf(repo.id);
       if (operations.some(isActive)) throw new ConflictError(`An operation is in progress on ${repo.id}: cancel it before removing the repository.`);
       for (const operation of operations) fs.rmSync(this.operationPath(operation.id), { force: true });
-      this.writeRepos(repos.filter((candidate) => candidate !== repo));
+      this.writeReposFile({ ...file, repos: file.repos.filter((candidate) => candidate !== repo) });
+    });
+  }
+
+  /** Catégories dans l'ordre alphabétique. */
+  listCategories(): Category[] {
+    return [...this.readReposFile().categories].sort((a, b) => a.name.localeCompare(b.name, "fr", { sensitivity: "base" }));
+  }
+
+  getCategory(categoryId: string): Category {
+    return findCategoryIn(this.readReposFile(), categoryId);
+  }
+
+  /** Crée une catégorie ; deux catégories ne portent pas le même nom, sans tenir compte de la casse. */
+  createCategory(name: string): Category {
+    return this.withLock(() => {
+      const file = this.readReposFile();
+      assertNameFree(file, name, null);
+      const category = { id: crypto.randomBytes(6).toString("hex"), name: name.trim() };
+      this.writeReposFile({ ...file, categories: [...file.categories, category] });
+      return category;
+    });
+  }
+
+  renameCategory(categoryId: string, name: string): Category {
+    return this.withLock(() => {
+      const file = this.readReposFile();
+      findCategoryIn(file, categoryId);
+      assertNameFree(file, name, categoryId);
+      const renamed = { id: categoryId, name: name.trim() };
+      this.writeReposFile({ ...file, categories: file.categories.map((category) => (category.id === categoryId ? renamed : category)) });
+      return renamed;
+    });
+  }
+
+  /** Supprime une catégorie ; ses dépôts restent suivis, sans catégorie. */
+  deleteCategory(categoryId: string): void {
+    this.withLock(() => {
+      const file = this.readReposFile();
+      findCategoryIn(file, categoryId);
+      this.writeReposFile({
+        categories: file.categories.filter((category) => category.id !== categoryId),
+        repos: file.repos.map((repo) => (repo.categoryId === categoryId ? { ...repo, categoryId: null } : repo)),
+      });
     });
   }
 

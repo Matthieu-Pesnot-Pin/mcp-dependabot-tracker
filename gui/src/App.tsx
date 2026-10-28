@@ -15,7 +15,7 @@ export default function App() {
 
   let screen: ReactNode
   if (route.name === 'home') {
-    screen = <HomeScreen adding={adding} onAdd={openAdd} onCloseAdd={closeAdd} />
+    screen = <HomeScreen categoryId={route.categoryId} adding={adding} onAdd={openAdd} onCloseAdd={closeAdd} />
   } else if (route.name === 'repo') {
     screen = <RepoScreen key={route.repoId} repoId={route.repoId} />
   } else if (route.name === 'operation') {

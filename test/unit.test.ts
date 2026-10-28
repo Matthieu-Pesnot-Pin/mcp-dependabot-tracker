@@ -22,7 +22,7 @@ function alert(number: number, severity: Alert["severity"], pkg: string): Alert 
 
 function repo(id: string, alerts: Alert[] = [], syncedAt: string | null = null): Repo {
   const [owner, name] = id.split("/");
-  return { id, owner, name, defaultBranch: "main", branch: "main", addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, syncedAt, syncError: null };
+  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, syncedAt, syncError: null };
 }
 
 function operation(overrides: Partial<Operation> = {}): Operation {
@@ -188,6 +188,33 @@ test("Store reads a repository saved without a chosen branch as analysing its de
     fs.writeFileSync(path.join(temp.dir, "repos.json"), JSON.stringify({ repos: [saved] }));
     const store = new Store(temp.dir);
     assert.equal(store.getRepo("octo/demo").branch, "master");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("Store keeps categories unique by name and frees their repositories when deleted", () => {
+  const temp = makeTempDir("tracker-categories-");
+  try {
+    fs.writeFileSync(path.join(temp.dir, "repos.json"), JSON.stringify({ repos: [{ ...repo("octo/demo"), categoryId: undefined }] }));
+    const store = new Store(temp.dir);
+    assert.equal(store.getRepo("octo/demo").categoryId, null);
+    assert.deepEqual(store.listCategories(), []);
+
+    const tools = store.createCategory("  Outils ");
+    assert.equal(tools.name, "Outils");
+    assert.throws(() => store.createCategory("outils"), /already exists/);
+    const mcp = store.createCategory("MCP");
+    assert.throws(() => store.renameCategory(mcp.id, "OUTILS"), /already exists/);
+    assert.equal(store.renameCategory(mcp.id, "mcp").name, "mcp");
+    assert.deepEqual(store.listCategories().map((category) => category.name), ["mcp", "Outils"]);
+
+    store.updateRepo("octo/demo", (current) => ({ ...current, categoryId: tools.id }));
+    assert.throws(() => store.updateRepo("octo/demo", (current) => ({ ...current, categoryId: "missing" })), /does not exist/);
+    assert.throws(() => store.addRepo({ ...repo("octo/other"), categoryId: "missing" }), /does not exist/);
+    store.deleteCategory(tools.id);
+    assert.equal(store.getRepo("octo/demo").categoryId, null);
+    assert.throws(() => store.deleteCategory(tools.id), /does not exist/);
   } finally {
     temp.cleanup();
   }

@@ -1,12 +1,14 @@
 import { searchRepositories } from '@shared/repo-search'
 import type { RepoView } from '@shared/schemas/api.schema'
+import type { Category } from '@shared/schemas/model.schema'
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { CategorySidebar } from '../components/CategorySidebar'
 import { Icon } from '../components/Icon'
 import { SeverityPill } from '../components/Pill'
 import { usePolling } from '../hooks/usePolling'
 import { api } from '../utils/api'
 import { plural, worstSeverity } from '../utils/format'
-import { hrefs, navigate } from '../utils/router'
+import { hrefs, navigate, rememberHomeCategory } from '../utils/router'
 
 const POLL_MS = 3000
 
@@ -41,11 +43,13 @@ function RepoStatus({ view }: { view: RepoView }) {
 
 /**
  * Fenêtre d'ajout : la frappe propose jusqu'à dix dépôts accessibles au token
- * GitHub ; ↑ et ↓ choisissent, Entrée ou un clic ajoutent. Sans suggestion,
- * « Ajouter » prend la saisie telle quelle (`propriétaire/dépôt` ou lien).
+ * GitHub ; ↑ et ↓ parcourent, Entrée ou un clic reportent le dépôt dans le
+ * champ. La catégorie part de celle affichée par l'accueil ; « Ajouter », ou
+ * Entrée sans suggestion, ajoute la saisie (`propriétaire/dépôt` ou lien).
  */
-function AddRepoModal({ onClose }: { onClose: () => void }) {
+function AddRepoModal({ categories, initialCategory, onClose }: { categories: Category[]; initialCategory: string | null; onClose: () => void }) {
   const [value, setValue] = useState('')
+  const [categoryId, setCategoryId] = useState(initialCategory)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [active, setActive] = useState(0)
@@ -70,7 +74,7 @@ function AddRepoModal({ onClose }: { onClose: () => void }) {
     setBusy(true)
     setError(null)
     try {
-      const view = await api.addRepo(repository.trim())
+      const view = await api.addRepo(repository.trim(), categoryId)
       onClose()
       navigate(hrefs.repo(view.repo.id))
     } catch (err) {
@@ -79,9 +83,18 @@ function AddRepoModal({ onClose }: { onClose: () => void }) {
     }
   }
 
+  /** Reporte la suggestion dans le champ et ferme la liste, sans ajouter. */
+  function pick(repository: string) {
+    setValue(repository)
+    setError(null)
+    setListClosed(true)
+    inputRef.current?.focus()
+  }
+
   function submit(event: FormEvent) {
     event.preventDefault()
-    void add(activeIndex >= 0 ? suggestions[activeIndex] : value)
+    if (activeIndex >= 0) pick(suggestions[activeIndex])
+    else void add(value)
   }
 
   function onInputKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
@@ -107,6 +120,7 @@ function AddRepoModal({ onClose }: { onClose: () => void }) {
           value={value}
           onChange={(event) => {
             setValue(event.target.value)
+            setError(null)
             setActive(0)
             setListClosed(false)
           }}
@@ -130,7 +144,7 @@ function AddRepoModal({ onClose }: { onClose: () => void }) {
                 onMouseEnter={() => setActive(index)}
                 onMouseDown={(event) => {
                   event.preventDefault()
-                  void add(repository)
+                  pick(repository)
                 }}
               >
                 {repository}
@@ -138,6 +152,18 @@ function AddRepoModal({ onClose }: { onClose: () => void }) {
             ))}
           </ul>
         )}
+        <label className="select-field">
+          <Icon name="folder" />
+          <select value={categoryId ?? ''} onChange={(event) => setCategoryId(event.target.value === '' ? null : event.target.value)} aria-label="Catégorie">
+            <option value="">Sans catégorie</option>
+            {categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+          <Icon name="chevron-down" size={14} className="select-chevron" />
+        </label>
         {error ? (
           <p className="field-error">{error}</p>
         ) : addable.error ? (
@@ -158,42 +184,58 @@ function AddRepoModal({ onClose }: { onClose: () => void }) {
   )
 }
 
-/** Accueil : les dépôts suivis, du plus exposé au moins exposé. */
-export function HomeScreen({ adding, onCloseAdd, onAdd }: { adding: boolean; onCloseAdd: () => void; onAdd: () => void }) {
+/** Accueil : la barre des catégories et les dépôts de la catégorie choisie, du plus exposé au moins exposé. */
+export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { categoryId: string | null; adding: boolean; onCloseAdd: () => void; onAdd: () => void }) {
   const repos = usePolling('repos', api.listRepos, POLL_MS)
   const config = usePolling('config', api.getConfig, null)
+  const categories = repos.data?.categories ?? []
+  const category = categories.find((candidate) => candidate.id === categoryId) ?? null
+  const unknownCategory = categoryId !== null && repos.data !== null && category === null
+  const views = (repos.data?.repos ?? []).filter((view) => categoryId === null || view.repo.categoryId === categoryId)
+
+  useEffect(() => {
+    if (!unknownCategory) rememberHomeCategory(categoryId)
+  }, [categoryId, unknownCategory])
 
   return (
-    <div className="page">
-      <h1 className="page-title">Dépôts</h1>
-      {config.data && !config.data.githubConfigured && (
-        <p className="banner banner-error">
-          <Icon name="triangle-alert" />
-          GITHUB_TOKEN n'est pas défini : déclarez un token GitHub dans le bloc env du serveur.
-        </p>
-      )}
-      {repos.error && !repos.data && <p className="banner banner-error">{repos.error}</p>}
-      {repos.data && repos.data.repos.length === 0 && (
-        <div className="panel empty">
-          <p>Aucun dépôt suivi.</p>
-          <button type="button" className="button button-primary" onClick={onAdd}>
-            <Icon name="plus" />
-            Ajouter un dépôt
-          </button>
-        </div>
-      )}
-      {repos.data && repos.data.repos.length > 0 && (
-        <div className="panel list">
-          {repos.data.repos.map((view) => (
-            <a key={view.repo.id} className="row" href={hrefs.repo(view.repo.id)}>
-              <span className="row-title">{view.repo.id}</span>
-              <RepoStatus view={view} />
-              <Icon name="chevron-right" className="row-chevron" />
-            </a>
-          ))}
-        </div>
-      )}
-      {adding && <AddRepoModal onClose={onCloseAdd} />}
+    <div className="home">
+      {repos.data && <CategorySidebar categories={categories} views={repos.data.repos} selected={categoryId} onChanged={repos.reload} />}
+      <div className="page">
+        <h1 className="page-title">{category ? category.name : 'Tous mes projets'}</h1>
+        {config.data && !config.data.githubConfigured && (
+          <p className="banner banner-error">
+            <Icon name="triangle-alert" />
+            GITHUB_TOKEN n'est pas défini : déclarez un token GitHub dans le bloc env du serveur.
+          </p>
+        )}
+        {repos.error && !repos.data && <p className="banner banner-error">{repos.error}</p>}
+        {unknownCategory && (
+          <p className="muted">
+            Cette catégorie n'existe plus. <a className="link" href={hrefs.home()}>Voir tous les projets</a>.
+          </p>
+        )}
+        {repos.data && !unknownCategory && views.length === 0 && (
+          <div className="panel empty">
+            <p>{categoryId === null ? 'Aucun dépôt suivi.' : 'Aucun dépôt dans cette catégorie.'}</p>
+            <button type="button" className="button button-primary" onClick={onAdd}>
+              <Icon name="plus" />
+              Ajouter un dépôt
+            </button>
+          </div>
+        )}
+        {views.length > 0 && (
+          <div className="panel list">
+            {views.map((view) => (
+              <a key={view.repo.id} className="row" href={hrefs.repo(view.repo.id)}>
+                <span className="row-title">{view.repo.id}</span>
+                <RepoStatus view={view} />
+                <Icon name="chevron-right" className="row-chevron" />
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+      {adding && repos.data && <AddRepoModal categories={categories} initialCategory={category?.id ?? null} onClose={onCloseAdd} />}
     </div>
   )
 }

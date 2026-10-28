@@ -2,6 +2,7 @@ import type { RepoView } from '@shared/schemas/api.schema'
 import { RIGHTS, type Right, type Rights } from '@shared/schemas/model.schema'
 import { useEffect, useState } from 'react'
 import { BranchSelector } from '../components/BranchSelector'
+import { CategorySelector } from '../components/CategorySelector'
 import { Icon } from '../components/Icon'
 import { SeverityPill } from '../components/Pill'
 import { Toggle } from '../components/Toggle'
@@ -65,7 +66,7 @@ function AgentDrawer({ view, onClose, onChanged }: { view: RepoView; onClose: ()
     }
     try {
       await api.removeRepo(repo.id)
-      navigate(hrefs.home())
+      navigate(hrefs.lastHome())
     } catch (err) {
       setConfirming(false)
       showError(err)
@@ -136,13 +137,14 @@ export function RepoScreen({ repoId }: { repoId: string }) {
   return (
     <div className="page">
       <div className="page-head">
-        <a className="back" href={hrefs.home()} aria-label="Retour aux dépôts">
+        <a className="back" href={hrefs.lastHome()} aria-label="Retour aux dépôts">
           <Icon name="arrow-left" size={20} />
         </a>
         <div className="page-head-text">
           <h1 className="page-title">{repo.name}</h1>
           <div className="subtitle">
             {repo.owner} · <BranchSelector repo={repo} onChanged={polled.reload} /> ·{' '}
+            <CategorySelector repo={repo} categoryName={view.category?.name ?? null} onChanged={polled.reload} /> ·{' '}
             {repo.syncError ? (
               <span className="error-text" title={repo.syncError}>
                 synchronisation impossible

@@ -42,6 +42,7 @@ export function repoView(store: Store, repo: Repo): RepoView {
   const operations = store.listOperations(repo.id);
   return {
     repo: { ...repo, alerts: sortAlerts(repo.alerts) },
+    category: repo.categoryId === null ? null : store.getCategory(repo.categoryId),
     activeOperation: operations.find(isActive) ?? null,
     latestOperation: operations[0] ?? null,
   };
@@ -65,10 +66,11 @@ export async function syncRepository(store: Store, config: GitHubConfig, repoId:
   }
 }
 
-/** Suit un nouveau dépôt, avec l'audit pour seul droit de l'agent, puis lit ses alertes. */
-export async function addRepository(store: Store, config: GitHubConfig, input: string): Promise<Repo> {
+/** Suit un nouveau dépôt, rangé dans `categoryId`, avec l'audit pour seul droit de l'agent, puis lit ses alertes. */
+export async function addRepository(store: Store, config: GitHubConfig, input: string, categoryId: string | null): Promise<Repo> {
   const ref = parseRepoRef(input);
   if (store.findRepo(`${ref.owner}/${ref.name}`)) throw new ConflictError(`Repository ${ref.owner}/${ref.name} is already tracked.`);
+  if (categoryId !== null) store.getCategory(categoryId);
   const remote = await new GitHubClient(config).getRepository(ref.owner, ref.name);
   store.addRepo({
     id: remote.fullName,
@@ -76,6 +78,7 @@ export async function addRepository(store: Store, config: GitHubConfig, input: s
     name: remote.name,
     defaultBranch: remote.defaultBranch,
     branch: remote.defaultBranch,
+    categoryId,
     addedAt: new Date().toISOString(),
     rights: DEFAULT_RIGHTS,
     alerts: [],
@@ -105,6 +108,11 @@ export async function setBranch(store: Store, config: GitHubConfig, repoId: stri
   const branches = await listRepoBranches(store, config, repoId);
   if (!branches.includes(branch)) throw new NotFoundError(`Branch "${branch}" does not exist in ${store.getRepo(repoId).id}.`);
   return store.updateRepo(repoId, (repo) => ({ ...repo, branch }));
+}
+
+/** Range le dépôt dans une catégorie, ou dans aucune avec null. */
+export function setCategory(store: Store, repoId: string, categoryId: string | null): Repo {
+  return store.updateRepo(repoId, (repo) => ({ ...repo, categoryId }));
 }
 
 export function setRights(store: Store, repoId: string, rights: Rights): Repo {

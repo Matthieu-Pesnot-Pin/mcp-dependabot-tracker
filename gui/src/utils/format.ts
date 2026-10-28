@@ -39,6 +39,12 @@ export function worstSeverity(repo: Repo): AlertSeverity | null {
   return null
 }
 
+/** Alertes ouvertes d'un ensemble de dépôts : leur nombre et la gravité la plus haute, null sans alerte. */
+export function alertTotals(repos: Repo[]): { count: number; worst: AlertSeverity | null } {
+  const worst = ALERT_SEVERITIES.find((severity) => repos.some((repo) => repo.alerts.some((alert) => alert.severity === severity))) ?? null
+  return { count: repos.reduce((total, repo) => total + repo.alerts.length, 0), worst }
+}
+
 /** Préfixe d'un projet npm du dépôt : `""` pour la racine, `gui/` pour le dossier `gui`. */
 export function projectPrefix(project: string): string {
   return project === '' ? '' : `${project}/`

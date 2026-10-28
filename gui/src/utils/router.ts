@@ -2,12 +2,13 @@ import { useSyncExternalStore } from 'react'
 
 /**
  * Écran désigné par le hash de l'URL :
- *   `#/`                                accueil (dépôts suivis) ;
+ *   `#/`                                accueil, tous les dépôts suivis ;
+ *   `#/c/<catégorie>`                   accueil, dépôts d'une catégorie ;
  *   `#/r/<propriétaire>/<nom>`          écran du dépôt ;
  *   `#/r/<propriétaire>/<nom>/op/<id>`  écran d'une opération.
  */
 export type Route =
-  | { name: 'home' }
+  | { name: 'home'; categoryId: string | null }
   | { name: 'repo'; repoId: string }
   | { name: 'operation'; repoId: string; operationId: string }
   | { name: 'not_found'; hash: string }
@@ -26,8 +27,9 @@ export function parseHash(hash: string): Route {
     .split('/')
     .filter((segment) => segment !== '')
     .map(decode)
-  if (segments.length === 0) return { name: 'home' }
+  if (segments.length === 0) return { name: 'home', categoryId: null }
   if (segments.some((segment) => segment === null)) return { name: 'not_found', hash }
+  if (segments.length === 2 && segments[0] === 'c') return { name: 'home', categoryId: segments[1] }
   const [section, owner, name, sub, operationId] = segments as string[]
   if (section !== 'r' || !owner || !name) return { name: 'not_found', hash }
   const repoId = `${owner}/${name}`
@@ -50,8 +52,16 @@ function repoHash(repoId: string): string {
   return `#/r/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
 }
 
+/** Catégorie affichée par l'accueil la dernière fois, où ramènent les retours depuis un dépôt. */
+let lastHomeCategory: string | null = null
+
+export function rememberHomeCategory(categoryId: string | null) {
+  lastHomeCategory = categoryId
+}
+
 export const hrefs = {
-  home: () => inPage('#/'),
+  home: (categoryId: string | null = null) => inPage(categoryId === null ? '#/' : `#/c/${encodeURIComponent(categoryId)}`),
+  lastHome: () => hrefs.home(lastHomeCategory),
   repo: (repoId: string) => inPage(repoHash(repoId)),
   operation: (repoId: string, operationId: string) => inPage(`${repoHash(repoId)}/op/${encodeURIComponent(operationId)}`),
 }

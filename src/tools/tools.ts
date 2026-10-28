@@ -1,4 +1,5 @@
 import { DEFAULT_COMMIT_MESSAGE, type Operation, type Repo, type Right } from "../../shared/schemas/model.schema.js";
+import type { RepoView } from "../../shared/schemas/api.schema.js";
 import type { GitHubConfig } from "../core/config.js";
 import { TrackerError } from "../core/errors.js";
 import { runAgentOperation, type OperationContext } from "../core/operations.js";
@@ -21,11 +22,27 @@ function assertAllowed(repo: Repo, right: Right): void {
   }
 }
 
+/** Dépôts suivis, tous ou ceux d'une catégorie désignée par son nom, sans tenir compte de la casse. */
 export function listRepositories(store: Store, args: Args): ToolResult {
-  rejectUnknownFields(args, []);
-  const views = listRepoViews(store);
-  if (views.length === 0) return textResult("No repository is tracked. The user adds repositories in the GUI.");
-  return textResult([`${views.length} tracked repositor${views.length === 1 ? "y" : "ies"}:`, ...views.map(describeRepo)].join("\n"));
+  rejectUnknownFields(args, ["category"]);
+  const categories = store.listCategories();
+  const categoryName = optionalString(args, "category");
+  let views = listRepoViews(store);
+  let scope = "tracked";
+  if (categoryName !== undefined) {
+    const category = categories.find((candidate) => candidate.name.toLowerCase() === categoryName.trim().toLowerCase());
+    if (!category) {
+      const known = categories.length === 0 ? "the user has created none" : `existing categories: ${categories.map((candidate) => candidate.name).join(", ")}`;
+      throw new TrackerError(`Category "${categoryName}" does not exist (${known}).`);
+    }
+    views = views.filter((view) => view.repo.categoryId === category.id);
+    scope = `in category ${category.name}`;
+  }
+  if (views.length === 0) {
+    return textResult(categoryName === undefined ? "No repository is tracked. The user adds repositories in the GUI." : `No repository ${scope}.`);
+  }
+  const categoryOf = (view: RepoView) => categories.find((category) => category.id === view.repo.categoryId) ?? null;
+  return textResult([`${views.length} repositor${views.length === 1 ? "y" : "ies"} ${scope}:`, ...views.map((view) => describeRepo(view, categoryOf(view)))].join("\n"));
 }
 
 /** Relit les alertes sur GitHub avant de les lister. */

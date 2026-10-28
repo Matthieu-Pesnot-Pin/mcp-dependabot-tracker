@@ -65,7 +65,7 @@ function BranchMenu({ repo, onClose, onChosen }: { repo: Repo; onClose: () => vo
   }
 
   return (
-    <div className="branch-menu">
+    <div className="picker-menu">
       <input
         ref={inputRef}
         className="input branch-search"
@@ -83,29 +83,29 @@ function BranchMenu({ repo, onClose, onChosen }: { repo: Repo; onClose: () => vo
         aria-activedescendant={activeIndex >= 0 ? `branch-option-${activeIndex}` : undefined}
       />
       {branches.error ? (
-        <p className="branch-note error-text">{branches.error}</p>
+        <p className="picker-note error-text">{branches.error}</p>
       ) : !branches.data ? (
-        <p className="branch-note">Chargement des branches…</p>
+        <p className="picker-note">Chargement des branches…</p>
       ) : matches.length === 0 ? (
-        <p className="branch-note">Aucune branche ne correspond.</p>
+        <p className="picker-note">Aucune branche ne correspond.</p>
       ) : (
-        <ul className="branch-options" id="branch-options" role="listbox" ref={listRef}>
+        <ul className="picker-options" id="branch-options" role="listbox" ref={listRef}>
           {matches.map((branch, index) => (
             <li
               key={branch}
               id={`branch-option-${index}`}
               role="option"
               aria-selected={branch === repo.branch}
-              className={`branch-option${index === activeIndex ? ' is-active' : ''}`}
+              className={`picker-option${index === activeIndex ? ' is-active' : ''}`}
               onMouseEnter={() => setActive(index)}
               onMouseDown={(event) => {
                 event.preventDefault()
                 void choose(branch)
               }}
             >
-              <span className="branch-name mono">{branch}</span>
+              <span className="picker-name mono">{branch}</span>
               {branch === repo.defaultBranch && <span className="branch-default">par défaut</span>}
-              {branch === repo.branch && <Icon name="check" size={14} className="branch-check" />}
+              {branch === repo.branch && <Icon name="check" size={14} className="picker-check" />}
             </li>
           ))}
         </ul>
@@ -129,10 +129,10 @@ export function BranchSelector({ repo, onChanged }: { repo: Repo; onChanged: () 
   }, [open])
 
   return (
-    <span className="branch-selector" ref={rootRef}>
+    <span className="picker" ref={rootRef}>
       <button
         type="button"
-        className="branch-chip"
+        className="picker-chip"
         aria-haspopup="listbox"
         aria-expanded={open}
         title="Branche analysée par les corrections"
@@ -140,7 +140,7 @@ export function BranchSelector({ repo, onChanged }: { repo: Repo; onChanged: () 
       >
         <Icon name="git-branch" size={14} />
         <span className="mono">{repo.branch}</span>
-        <Icon name="chevron-down" size={12} className="branch-chevron" />
+        <Icon name="chevron-down" size={12} className="picker-chevron" />
       </button>
       {open && <BranchMenu repo={repo} onClose={() => setOpen(false)} onChosen={onChanged} />}
     </span>

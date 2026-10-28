@@ -1,4 +1,4 @@
-import { ALERT_SEVERITIES, RIGHTS, type Operation, type Repo } from "../../shared/schemas/model.schema.js";
+import { ALERT_SEVERITIES, RIGHTS, type Category, type Operation, type Repo } from "../../shared/schemas/model.schema.js";
 import type { RepoView } from "../../shared/schemas/api.schema.js";
 import { projectLabel } from "../core/npm-audit.js";
 import { countBySeverity } from "../core/repos.js";
@@ -18,10 +18,12 @@ function alertsLabel(repo: Repo): string {
   return `${repo.alerts.length} (${detail.join(", ")})`;
 }
 
-export function describeRepo(view: RepoView): string {
+/** Description d'un dépôt pour l'agent ; `category` est la catégorie où l'utilisateur l'a rangé. */
+export function describeRepo(view: RepoView, category: Category | null): string {
   const { repo, activeOperation } = view;
   const lines = [
     `- ${repo.id} (analysed branch ${repo.branch}${repo.branch === repo.defaultBranch ? ", the default one" : `; default branch ${repo.defaultBranch}`})`,
+    `  Category: ${category ? category.name : "none"}`,
     `  Open Dependabot alerts: ${alertsLabel(repo)}${repo.syncedAt ? ` · synced ${repo.syncedAt}` : " · not synced yet"}`,
   ];
   if (repo.syncError) lines.push(`  Last sync failed: ${repo.syncError}`);
