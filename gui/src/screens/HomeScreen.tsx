@@ -34,6 +34,14 @@ function writeOnlyVulnerable(value: boolean) {
 }
 
 /**
+ * Dépôt réellement vulnérable : des paquets sans version corrigée au dernier
+ * audit, ou des alertes non corrigées à la main que cet audit ne contredit pas.
+ */
+function isVulnerable(view: RepoView): boolean {
+  return view.unfixable.length > 0 || (pendingAlerts(view.repo).length > 0 && view.cleanAuditAt === null)
+}
+
+/**
  * État d'un dépôt en bout de ligne : une seule information, la plus utile. Des
  * alertes toutes corrigées à la main, ou un audit sans vulnérabilité plus
  * récent qu'elles, estompent leur pastille ; des paquets sans version corrigée
@@ -255,7 +263,7 @@ export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { category
   const unknownCategory = categoryId !== null && repos.data !== null && category === null
   const [onlyVulnerable, setOnlyVulnerable] = useState(readOnlyVulnerable)
   const inCategory = (repos.data?.repos ?? []).filter((view) => categoryId === null || view.repo.categoryId === categoryId)
-  const views = onlyVulnerable ? inCategory.filter((view) => pendingAlerts(view.repo).length > 0) : inCategory
+  const views = onlyVulnerable ? inCategory.filter(isVulnerable) : inCategory
 
   function toggleOnlyVulnerable(value: boolean) {
     setOnlyVulnerable(value)
