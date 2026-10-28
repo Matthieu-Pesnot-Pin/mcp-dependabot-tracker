@@ -1,0 +1,51 @@
+{
+  "name": "@imenam/mcp-dependabot-tracker",
+  "version": "1.0.0",
+  "description": "MCP server and web GUI that track the Dependabot alerts of GitHub repositories and fix their npm vulnerabilities in a temporary clone: npm audit, audit fix, audit fix --force, then a branch and a pull request.",
+  "main": "dist/src/index.js",
+  "scripts": {
+    "test": "node --test \"dist/test/*.test.js\"",
+    "build:backend": "tsc",
+    "build:gui": "cd gui && npm install && npm run build",
+    "build": "npm run build:backend && npm run build:gui",
+    "start": "node dist/src/index.js",
+    "prepublishOnly": "npm run build",
+    "release": "npm version patch && npm publish && git push --follow-tags",
+    "prebuild": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "dependabot",
+    "npm-audit",
+    "security",
+    "github"
+  ],
+  "type": "module",
+  "author": "Imena",
+  "license": "ISC",
+  "bin": {
+    "mcp-dependabot-tracker": "dist/src/index.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist/src",
+    "dist/shared",
+    "gui/dist",
+    "README.md"
+  ],
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "@imenam/mcp-gui-interface": "^1.0.14",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "dotenv": "^18.0.9",
+    "hono": "^4.13.14",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}

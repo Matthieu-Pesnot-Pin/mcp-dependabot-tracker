@@ -1,0 +1,7 @@
+node_modules/
+dist/
+gui/dist/
+gui/node_modules/
+.env
+.dependabot-tracker-data/
+.mcp.json
