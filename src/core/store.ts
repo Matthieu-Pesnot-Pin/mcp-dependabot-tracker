@@ -75,6 +75,16 @@ function normalizeReposFile(file: any): unknown {
   };
 }
 
+/**
+ * Complète une opération écrite par une version antérieure : sans `found`, les
+ * vulnérabilités du premier audit sont `remaining` tant qu'aucune correction
+ * n'a suivi, et inconnues sinon.
+ */
+function normalizeOperation(operation: any): unknown {
+  if (operation === null || typeof operation !== "object" || operation.found !== undefined) return operation;
+  return { ...operation, found: operation.counts?.afterFix === null ? operation.remaining : [] };
+}
+
 function sameName(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
@@ -283,7 +293,7 @@ export class Store {
       if (err.code === "ENOENT") return null;
       throw err;
     }
-    const parsed = OperationSchema.safeParse(JSON.parse(raw));
+    const parsed = OperationSchema.safeParse(normalizeOperation(JSON.parse(raw)));
     if (!parsed.success) throw new TrackerError(`${file} is invalid: ${parsed.error.message}`);
     return parsed.data;
   }

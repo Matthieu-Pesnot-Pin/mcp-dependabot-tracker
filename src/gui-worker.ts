@@ -240,6 +240,10 @@ app.post("/api/repos", async (c) => {
 
 app.post("/api/sync", (c) => forward(c, "SYNC_REPOS"));
 
+app.get("/api/audit-all", (c) => forward(c, "GET_AUDIT_ALL"));
+
+app.post("/api/audit-all", (c) => forward(c, "START_AUDIT_ALL"));
+
 app.get("/api/github/repos", (c) => forward(c, "LIST_ADDABLE_REPOS"));
 
 app.get("/api/repos/:owner/:name",(c) => forward(c, "GET_REPO", { repoId: repoId(c) }));

@@ -1,6 +1,9 @@
-import { pendingAlerts } from '@shared/alerts'
-import type { Alert, AlertSeverity, NpmSeverity, Repo } from '@shared/schemas/model.schema'
+import { pendingAlerts, worstOf } from '@shared/alerts'
+import type { RepoView } from '@shared/schemas/api.schema'
+import type { Alert, AlertSeverity, Repo } from '@shared/schemas/model.schema'
 import { ALERT_SEVERITIES } from '@shared/schemas/model.schema'
+
+export { fromNpmSeverity } from '@shared/alerts'
 
 /** Durée écoulée depuis `iso`, en français court : « à l'instant », « il y a 5 min ». */
 export function relativeTime(iso: string, now = Date.now()): string {
@@ -25,22 +28,23 @@ export const SEVERITY_LABELS: Record<AlertSeverity, string> = {
   low: 'Faible',
 }
 
-/** Gravité d'alerte correspondant à une gravité npm (`moderate` → `medium`, `info` → `low`). */
-export function fromNpmSeverity(severity: NpmSeverity): AlertSeverity {
-  if (severity === 'moderate') return 'medium'
-  if (severity === 'info') return 'low'
-  return severity
-}
-
 /** Gravité la plus haute d'un ensemble d'alertes, ou null sans alerte. */
 export function worstSeverity(alerts: Alert[]): AlertSeverity | null {
   return ALERT_SEVERITIES.find((severity) => alerts.some((alert) => alert.severity === severity)) ?? null
 }
 
-/** Alertes restantes d'un ensemble de dépôts, hors corrigées à la main : leur nombre et la gravité la plus haute, null sans alerte. */
-export function alertTotals(repos: Repo[]): { count: number; worst: AlertSeverity | null } {
-  const alerts = repos.flatMap(pendingAlerts)
-  return { count: alerts.length, worst: worstSeverity(alerts) }
+/**
+ * Vulnérabilités d'un ensemble de dépôts : les alertes non corrigées à la main,
+ * plus celles que le dernier audit a trouvées là où Dependabot ne signale rien.
+ * Leur nombre et la gravité la plus haute, null sans vulnérabilité.
+ */
+export function alertTotals(views: RepoView[]): { count: number; worst: AlertSeverity | null } {
+  const alerts = views.flatMap((view) => pendingAlerts(view.repo))
+  const findings = views.flatMap((view) => (view.auditFindings ? [view.auditFindings] : []))
+  return {
+    count: alerts.length + findings.reduce((total, finding) => total + finding.count, 0),
+    worst: worstOf([...alerts.map((alert) => alert.severity), ...findings.map((finding) => finding.severity)]),
+  }
 }
 
 /** Nombre de pull requests du tracker en attente dans un ensemble de dépôts. */

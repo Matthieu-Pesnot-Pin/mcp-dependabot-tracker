@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RightsSchema, type Category, type Operation, type Repo } from "./model.schema.js";
+import { RightsSchema, type AlertSeverity, type Category, type Operation, type Repo } from "./model.schema.js";
 
 /** Corps de `POST /api/repos` : `propriétaire/nom` ou lien GitHub, et la catégorie où le ranger (aucune par défaut). */
 export const AddRepoBodySchema = z.object({
@@ -56,13 +56,21 @@ export const AlertRequestSchema = z.object({ repoId: z.string().min(1), number: 
 
 export const OperationRequestSchema = z.object({ operationId: z.string().min(1) });
 
+/** Vulnérabilités trouvées par un audit : leur nombre, la plus haute gravité, et la date de l'audit. */
+export interface AuditFindings {
+  at: string;
+  count: number;
+  severity: AlertSeverity;
+}
+
 /**
  * Dépôt, sa catégorie, et l'état de son opération en cours et de la dernière
  * opération, pour la liste et l'écran du dépôt. `cleanAuditAt` est la date du
  * dernier audit quand il n'a trouvé aucune vulnérabilité alors que Dependabot
- * signale encore des alertes émises avant lui ; `unfixable` les paquets pour
- * lesquels le dernier audit n'a trouvé aucune version corrigée, hors ceux
- * marqués corrigés à la main.
+ * signale encore des alertes émises avant lui ; `auditFindings` ce qu'a trouvé
+ * le dernier audit de la branche par défaut alors que Dependabot ne signale
+ * aucune alerte ; `unfixable` les paquets pour lesquels le dernier audit n'a
+ * trouvé aucune version corrigée, hors ceux marqués corrigés à la main.
  */
 export interface RepoView {
   repo: Repo;
@@ -70,7 +78,28 @@ export interface RepoView {
   activeOperation: Operation | null;
   latestOperation: Operation | null;
   cleanAuditAt: string | null;
+  auditFindings: AuditFindings | null;
   unfixable: string[];
+}
+
+/**
+ * Série « Auditer tout » : `done` dépôts traités sur `total`, dont ceux laissés
+ * de côté parce qu'une opération y était en cours (`skipped`) et ceux dont
+ * l'audit a échoué, avec la raison (`failed`).
+ */
+export interface AuditAllState {
+  running: boolean;
+  startedAt: string;
+  finishedAt: string | null;
+  total: number;
+  done: number;
+  skipped: string[];
+  failed: { repoId: string; error: string }[];
+}
+
+/** Dernière série « Auditer tout », null si aucune n'a été lancée depuis le démarrage du serveur. */
+export interface AuditAllResponse {
+  auditAll: AuditAllState | null;
 }
 
 /** Dépôts suivis et catégories, pour l'accueil et sa barre latérale. */

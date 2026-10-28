@@ -1,4 +1,4 @@
-import type { AddableReposResponse, AppConfig, BranchesResponse, CategoriesResponse, OperationResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
+import type { AddableReposResponse, AppConfig, AuditAllResponse, BranchesResponse, CategoriesResponse, OperationResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
 import type { Category, Rights } from '@shared/schemas/model.schema'
 
 /** Erreur HTTP de l'API ; `status` distingue un conflit (409) des autres échecs. */
@@ -56,6 +56,8 @@ export const api = {
   getConfig: () => request<AppConfig>('config'),
   listRepos: () => request<ReposResponse>('repos'),
   syncRepos: () => send<ReposResponse>('POST', 'sync'),
+  getAuditAll: () => request<AuditAllResponse>('audit-all'),
+  startAuditAll: () => send<AuditAllResponse>('POST', 'audit-all'),
   listAddableRepos: () => request<AddableReposResponse>('github/repos'),
   getRepo: (repoId: string) => request<RepoView>(repoPath(repoId)),
   addRepo: (repository: string, categoryId: string | null) => send<RepoView>('POST', 'repos', { repository, categoryId }),

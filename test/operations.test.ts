@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import test, { after, before } from "node:test";
 
-import { cancelOperation, decideForce, pushOperation, runAgentOperation, startUserFix, type OperationContext } from "../src/core/operations.js";
-import { addRepository, listRepoBranches, setBranch } from "../src/core/repos.js";
+import { cancelOperation, decideForce, pushOperation, runAgentOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "../src/core/operations.js";
+import { addRepository, listRepoBranches, repoView, setBranch } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import type { GitHubConfig } from "../src/core/config.js";
 import type { Operation } from "../shared/schemas/model.schema.js";
@@ -197,6 +197,24 @@ test("an operation clones the chosen branch and opens the pull request towards i
   const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
   assert.equal(pull.base, "develop");
   assert.ok(remotes.branches("octo", name).includes(operation.branch!));
+});
+
+test("the audit of the default branch ignores the analysed branch and reports what Dependabot misses", { skip }, async () => {
+  counter += 1;
+  const name = `demo-${counter}`;
+  remotes.create("octo", name, "main", { ".": VULNERABLE_FIXTURE });
+  remotes.addBranch("octo", name, "main", "develop");
+  github.addRepo("octo", name, "main", [], ["main", "develop"]);
+  const repoId = (await addRepository(ctx.store, ctx.githubConfig(), `octo/${name}`, null)).id;
+  await setBranch(ctx.store, ctx.githubConfig(), repoId, "develop");
+
+  const operation = await runDefaultBranchAudit(ctx, repoId);
+  assert.equal(operation.status, "done", operation.error ?? "");
+  assert.deepEqual([operation.kind, operation.origin, operation.baseBranch], ["audit", "user", "main"]);
+  assert.equal(operation.found.length, operation.counts.initial);
+  const findings = repoView(ctx.store, ctx.store.getRepo(repoId)).auditFindings;
+  assert.equal(findings?.count, operation.counts.initial);
+  assert.equal(findings?.at, operation.createdAt);
 });
 
 test("a repository without package-lock.json fails with an explicit error", async () => {

@@ -258,7 +258,7 @@ export function RepoScreen({ repoId }: { repoId: string }) {
               <>
                 {' · '}
                 <a className="link" href={hrefs.operation(repo.id, latestOperation.id)}>
-                  dernière correction
+                  {latestOperation.kind === 'audit' ? 'dernier audit' : 'dernière correction'}
                 </a>
               </>
             )}
@@ -271,7 +271,7 @@ export function RepoScreen({ repoId }: { repoId: string }) {
           </button>
           <button type="button" className="button button-primary" onClick={() => void fix()} disabled={starting}>
             <Icon name="wrench" />
-            {activeOperation ? 'Reprendre la correction' : 'Corriger'}
+            {activeOperation ? (activeOperation.kind === 'audit' ? "Voir l'audit en cours" : 'Reprendre la correction') : 'Corriger'}
           </button>
         </div>
       </div>

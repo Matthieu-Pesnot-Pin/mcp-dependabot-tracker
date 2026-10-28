@@ -112,6 +112,7 @@ function newOperation(repo: Repo, kind: OperationKind, origin: Origin): Operatio
     steps: { clone: "pending", audit: "pending", fix: "pending", force: "pending", push: "pending" },
     projects: [],
     counts: { initial: null, afterFix: null, afterForce: null },
+    found: [],
     remaining: [],
     forceCandidates: [],
     changes: [],
@@ -253,6 +254,7 @@ async function refreshChanges(runner: Runner): Promise<void> {
 async function auditStep(runner: Runner): Promise<AuditedVulnerability[]> {
   runner.setStep("audit", "running");
   const vulnerabilities = await auditAll(runner, "initial");
+  runner.update((operation) => ({ ...operation, found: operation.remaining }));
   runner.setStep("audit", "done");
   return vulnerabilities;
 }
@@ -453,6 +455,22 @@ export function startUserFix(ctx: OperationContext, repoId: string): Operation {
     })
   );
   return operation;
+}
+
+/**
+ * Audit de la branche par défaut, celle que Dependabot analyse, lancé par
+ * l'utilisateur et attendu jusqu'à sa fin. Refusé si une opération est en
+ * cours sur le dépôt.
+ */
+export async function runDefaultBranchAudit(ctx: OperationContext, repoId: string): Promise<Operation> {
+  ctx.githubConfig();
+  const repo = ctx.store.getRepo(repoId);
+  const operation = ctx.store.createOperation({ ...newOperation(repo, "audit", "user"), baseBranch: repo.defaultBranch });
+  return execute(ctx, operation.id, async (runner) => {
+    await cloneStep(runner);
+    await auditStep(runner);
+    finish(runner);
+  });
 }
 
 /** Applique ou passe `npm audit fix --force` sur une opération qui attend cette décision. */

@@ -48,10 +48,22 @@ function useStoredFlag(key: string): [boolean, (value: boolean) => void] {
 
 /**
  * Dépôt réellement vulnérable : des paquets sans version corrigée au dernier
- * audit, ou des alertes non corrigées à la main que cet audit ne contredit pas.
+ * audit, des alertes non corrigées à la main que cet audit ne contredit pas, ou
+ * des vulnérabilités trouvées par l'audit alors que Dependabot ne signale rien.
  */
 function isVulnerable(view: RepoView): boolean {
-  return view.unfixable.length > 0 || (pendingAlerts(view.repo).length > 0 && view.cleanAuditAt === null)
+  return view.unfixable.length > 0 || view.auditFindings !== null || (pendingAlerts(view.repo).length > 0 && view.cleanAuditAt === null)
+}
+
+/** Paquets sans version corrigée publiée, signalés devant la pastille. */
+function UnfixableNote({ unfixable }: { unfixable: string[] }) {
+  if (unfixable.length === 0) return null
+  return (
+    <span className="unfixable-note" title={`Aucune version corrigée publiée : ${unfixable.join(', ')}`}>
+      <Icon name="triangle-alert" />
+      {plural(unfixable.length, 'sans correctif', 'sans correctif')}
+    </span>
+  )
 }
 
 /**
@@ -87,16 +99,17 @@ function filteredOutMessage(onlyVulnerable: boolean, onlyPendingPr: boolean, inC
 /**
  * État d'un dépôt en bout de ligne : une seule information, la plus utile. Des
  * alertes toutes corrigées à la main, ou un audit sans vulnérabilité plus
- * récent qu'elles, estompent leur pastille ; des paquets sans version corrigée
- * sont signalés devant elle.
+ * récent qu'elles, estompent leur pastille ; des vulnérabilités que l'audit a
+ * trouvées sans alerte Dependabot ont leur propre pastille ; des paquets sans
+ * version corrigée sont signalés devant elles.
  */
 function RepoStatus({ view }: { view: RepoView }) {
-  const { repo, activeOperation, cleanAuditAt, unfixable } = view
+  const { repo, activeOperation, cleanAuditAt, auditFindings, unfixable } = view
   if (activeOperation) {
     return (
       <span className="status status-busy">
         <Icon name="loader-circle" className="spin" />
-        Correction en cours
+        {activeOperation.kind === 'audit' ? 'Audit en cours' : 'Correction en cours'}
       </span>
     )
   }
@@ -128,13 +141,21 @@ function RepoStatus({ view }: { view: RepoView }) {
   if (worst) {
     return (
       <span className="status status-clean">
-        {unfixable.length > 0 && (
-          <span className="unfixable-note" title={`Aucune version corrigée publiée : ${unfixable.join(', ')}`}>
-            <Icon name="triangle-alert" />
-            {plural(unfixable.length, 'sans correctif', 'sans correctif')}
-          </span>
-        )}
+        <UnfixableNote unfixable={unfixable} />
         <SeverityPill severity={worst}>{plural(pending.length, 'alerte')}</SeverityPill>
+      </span>
+    )
+  }
+  if (auditFindings) {
+    return (
+      <span
+        className="status status-clean"
+        title="Dependabot ne signale aucune alerte, mais le dernier audit de la branche par défaut a trouvé des vulnérabilités : Dependabot n'a pas encore repassé."
+      >
+        <UnfixableNote unfixable={unfixable} />
+        <Icon name="triangle-alert" className="text-warning" />
+        Audit du {dayAndTime(auditFindings.at)}
+        <SeverityPill severity={auditFindings.severity}>{plural(auditFindings.count, 'vulnérabilité')}</SeverityPill>
       </span>
     )
   }

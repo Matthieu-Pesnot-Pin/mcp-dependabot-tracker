@@ -13,7 +13,7 @@ const CONFIRM_MS = 4000
 
 /** Nombre de vulnérabilités d'un ensemble de dépôts, coloré selon la plus grave ; rien sans vulnérabilité. */
 function CountPill({ views }: { views: RepoView[] }) {
-  const { count, worst } = alertTotals(views.map((view) => view.repo))
+  const { count, worst } = alertTotals(views)
   if (worst === null) return null
   return (
     <SeverityPill severity={worst} small>

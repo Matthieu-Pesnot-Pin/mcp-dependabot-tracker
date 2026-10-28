@@ -1,6 +1,6 @@
-import { pendingAlerts } from "../../shared/alerts.js";
+import { fromNpmSeverity, pendingAlerts, worstOf } from "../../shared/alerts.js";
 import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type HandledAlert, type Operation, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
-import type { RepoView } from "../../shared/schemas/api.schema.js";
+import type { AuditFindings, RepoView } from "../../shared/schemas/api.schema.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, NotFoundError } from "./errors.js";
 import { GitHubClient, type OpenPullRequest } from "./github.js";
@@ -28,19 +28,22 @@ export function countBySeverity(alerts: Alert[]): Record<AlertSeverity, number> 
 }
 
 /**
- * Dépôts triés par gravité la plus haute, puis par nombre d'alertes, puis par
- * nom, sans compter les alertes corrigées à la main ; un dépôt sans alerte
- * restante vient en dernier.
+ * Dépôts triés par gravité la plus haute, puis par nombre de vulnérabilités,
+ * puis par nom. Comptent les alertes non corrigées à la main et, sans alerte,
+ * les vulnérabilités du dernier audit ; un dépôt sans rien de tout cela vient
+ * en dernier.
  */
-export function sortRepos<T extends { repo: Repo }>(views: T[]): T[] {
-  const key = (repo: Repo) => {
-    const pending = pendingAlerts(repo);
-    const worst = pending.reduce<number>((best, alert) => Math.min(best, severityRank(alert.severity)), ALERT_SEVERITIES.length);
-    return { worst, count: pending.length };
+export function sortRepos<T extends { repo: Repo; auditFindings?: AuditFindings | null }>(views: T[]): T[] {
+  const key = (view: T) => {
+    const pending = pendingAlerts(view.repo);
+    const severities = pending.map((alert) => alert.severity);
+    if (view.auditFindings) severities.push(view.auditFindings.severity);
+    const worst = severities.reduce<number>((best, severity) => Math.min(best, severityRank(severity)), ALERT_SEVERITIES.length);
+    return { worst, count: pending.length + (view.auditFindings?.count ?? 0) };
   };
   return [...views].sort((a, b) => {
-    const ka = key(a.repo);
-    const kb = key(b.repo);
+    const ka = key(a);
+    const kb = key(b);
     return ka.worst - kb.worst || kb.count - ka.count || a.repo.id.localeCompare(b.repo.id);
   });
 }
@@ -57,6 +60,19 @@ export function cleanAuditAt(repo: Repo, operations: Operation[]): string | null
   if (!audited || audited.counts.initial !== 0 || audited.baseBranch !== repo.defaultBranch) return null;
   const auditedAt = Date.parse(audited.createdAt);
   return repo.alerts.every((alert) => Date.parse(alert.createdAt) <= auditedAt) ? audited.createdAt : null;
+}
+
+/**
+ * Vulnérabilités trouvées par le dernier audit de la branche par défaut, la
+ * seule que Dependabot analyse, quand Dependabot ne signale aucune alerte.
+ * Null sinon. `operations` va de la plus récente à la plus ancienne.
+ */
+export function auditFindings(repo: Repo, operations: Operation[]): AuditFindings | null {
+  if (repo.alerts.length > 0) return null;
+  const audited = operations.find((operation) => operation.steps.audit === "done" && operation.baseBranch === repo.defaultBranch);
+  const severity = audited ? worstOf(audited.found.map((vulnerability) => fromNpmSeverity(vulnerability.severity))) : null;
+  if (!audited || severity === null) return null;
+  return { at: audited.createdAt, count: audited.found.length, severity };
 }
 
 /**
@@ -104,6 +120,7 @@ export function repoView(store: Store, repo: Repo): RepoView {
     activeOperation: operations.find(isActive) ?? null,
     latestOperation: operations[0] ?? null,
     cleanAuditAt: cleanAuditAt(repo, operations),
+    auditFindings: auditFindings(repo, operations),
     unfixable: unfixablePackages(repo, operations),
   };
 }

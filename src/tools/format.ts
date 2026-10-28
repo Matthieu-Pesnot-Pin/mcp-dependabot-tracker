@@ -39,6 +39,10 @@ export function describeRepo(view: RepoView, category: Category | null): string 
   if (view.cleanAuditAt) {
     lines.push(`  npm audit of ${view.cleanAuditAt} found no vulnerability on the default branch: these Dependabot alerts are probably not refreshed yet.`);
   }
+  if (view.auditFindings) {
+    const { at, count, severity } = view.auditFindings;
+    lines.push(`  npm audit of ${at} found ${count} vulnerabilit${count === 1 ? "y" : "ies"} (worst: ${severity}) on the default branch although Dependabot reports none: Dependabot has probably not caught up yet.`);
+  }
   lines.push(`  Agent rights: ${rightsLabel(repo)}`);
   if (activeOperation) lines.push(`  Operation in progress: ${activeOperation.id} (${activeOperation.status})`);
   return lines.join("\n");

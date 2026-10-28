@@ -42,6 +42,8 @@ before(async () => {
     { number: 2, severity: "critical", package: "simple-git", summary: "Remote code execution" },
   ]);
   github.addRepo("octo", "locked", "main", [], ["release", "develop", "main"]);
+  remotes.create("octo", "quiet", "main", { ".": VULNERABLE_FIXTURE });
+  github.addRepo("octo", "quiet", "main", []);
   for (const name of ["extra-1", "extra-2", "extra-3"]) github.addRepo("octo", name, "main", []);
   github.repos.get("octo/locked")!.alertsStatus = 403;
 
@@ -104,7 +106,7 @@ test("the GUI adds a repository, syncs its paginated alerts and refuses bad inpu
 
   const addable = await call("GET", "github/repos");
   assert.equal(addable.status, 200, addable.json.error);
-  assert.deepEqual(addable.json.repositories.sort(), ["octo/extra-1", "octo/extra-2", "octo/extra-3"]);
+  assert.deepEqual(addable.json.repositories.sort(), ["octo/extra-1", "octo/extra-2", "octo/extra-3", "octo/quiet"]);
   const branches = await call("GET", "repos/octo/locked/branches");
   assert.deepEqual(branches.json.branches, ["main", "develop", "release"]);
   assert.equal((await call("PUT", "repos/octo/locked/branch", { branch: "nope" })).status, 404);
@@ -209,6 +211,24 @@ test("the GUI syncs every repository now, with the pull requests the tracker ope
   github.pulls.splice(github.pulls.findIndex((candidate) => candidate.number === 900), 2);
   const after = await call("POST", "sync");
   assert.deepEqual(after.json.repos.find((view: { repo: { id: string } }) => view.repo.id === "octo/demo").repo.pullRequests, []);
+});
+
+test("the GUI audits every repository; the agent sees what Dependabot misses", { skip }, async () => {
+  assert.equal((await call("POST", "repos", { repository: "octo/quiet" })).status, 200);
+  assert.deepEqual((await call("GET", "audit-all")).json, { auditAll: null });
+  const started = await call("POST", "audit-all");
+  assert.equal(started.status, 200, started.json.error);
+  assert.equal(started.json.auditAll.running, true);
+  assert.equal((await call("POST", "audit-all")).status, 409);
+  const finished = await waitFor("the audit of every repository", () => call("GET", "audit-all"), (response) => response.json.auditAll.running === false);
+  const { total, done, skipped, failed } = finished.json.auditAll;
+  assert.deepEqual({ done, skipped, failed }, { done: total, skipped: [], failed: [] });
+
+  const quiet = (await call("GET", "repos/octo/quiet")).json;
+  assert.ok(quiet.auditFindings?.count > 0, JSON.stringify(quiet.auditFindings));
+  assert.equal(quiet.latestOperation.baseBranch, "main");
+  assert.match((await client.callTool("list_repositories")).text, /octo\/quiet[\s\S]*found \d+ vulnerabilities \(worst: \w+\) on the default branch although Dependabot reports none/);
+  assert.equal((await call("DELETE", "repos/octo/quiet")).status, 200);
 });
 
 test("the agent fixes and pushes; the result links to the operation in the GUI", { skip }, async () => {

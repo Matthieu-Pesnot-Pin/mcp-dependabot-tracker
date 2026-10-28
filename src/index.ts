@@ -15,7 +15,8 @@ import { resolveLogDir } from "./core/log-dir.js";
 import { githubConfigured, readGitHubConfig } from "./core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
-import { cancelOperation, decideForce, pushOperation, startUserFix, type OperationContext } from "./core/operations.js";
+import { cancelOperation, decideForce, pushOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "./core/operations.js";
+import { AuditAll } from "./core/audit-all.js";
 import { SYNC_INTERVAL_MS, addRepository, listAddableRepositories, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
@@ -31,6 +32,7 @@ import {
   SetCategoryBodySchema,
   SetRightsBodySchema,
   type AddableReposResponse,
+  type AuditAllResponse,
   type CategoriesResponse,
   type BranchesResponse,
   type ReposResponse,
@@ -97,6 +99,12 @@ const operations: OperationContext = {
   cloneDir: resolveCloneDir,
   logError: (message) => logger.error(message),
 };
+
+/** Série « Auditer tout » de la GUI servie par ce processus. */
+const auditAll = new AuditAll(
+  (repoId) => runDefaultBranchAudit(operations, repoId),
+  (message) => logger.error(message)
+);
 
 /** Présentation du serveur transmise au client MCP : concepts, déroulé et règles. */
 const INSTRUCTIONS = `mcp-dependabot-tracker follows the Dependabot alerts of GitHub repositories and fixes their npm vulnerabilities. The user tracks repositories and decides what you may do on each of them in a web GUI; you act only through these tools, never with git or npm yourself.
@@ -168,6 +176,14 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
     case "SYNC_REPOS":
       await syncAllRepositories(store, readGitHubConfig());
       return { repos: listRepoViews(store), categories: store.listCategories() } satisfies ReposResponse;
+
+    case "GET_AUDIT_ALL":
+      return { auditAll: auditAll.status() } satisfies AuditAllResponse;
+
+    case "START_AUDIT_ALL":
+      readGitHubConfig();
+      store.failOrphanedOperations();
+      return { auditAll: auditAll.start(store.listRepos().map((repo) => repo.id)) } satisfies AuditAllResponse;
 
     case "LIST_ADDABLE_REPOS":
       return { repositories: await listAddableRepositories(store, readGitHubConfig()) } satisfies AddableReposResponse;

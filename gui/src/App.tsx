@@ -1,4 +1,5 @@
 import { useCallback, useState, type ReactNode } from 'react'
+import { AuditAllButton } from './components/AuditAllButton'
 import { Icon } from './components/Icon'
 import { NoticeToast } from './components/NoticeToast'
 import { SyncButton } from './components/SyncButton'
@@ -35,6 +36,7 @@ export default function App() {
     route.name === 'home' ? (
       <>
         <SyncButton />
+        <AuditAllButton />
         <button type="button" className="button button-primary" onClick={openAdd}>
           <Icon name="plus" />
           Ajouter un dépôt

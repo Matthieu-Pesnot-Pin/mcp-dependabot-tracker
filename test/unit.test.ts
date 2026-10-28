@@ -9,7 +9,9 @@ import { diffLockfiles, forceCandidates, parseAuditReport, parseLockfile, parseN
 import { branchName, isTrackerBranch } from "../src/core/operations.js";
 import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
-import { cleanAuditAt, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
+import { AuditAll } from "../src/core/audit-all.js";
+import { ConflictError } from "../src/core/errors.js";
+import { auditFindings, cleanAuditAt, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
 import { describeOperation } from "../src/tools/format.js";
@@ -42,6 +44,7 @@ function operation(overrides: Partial<Operation> = {}): Operation {
     projects: [],
     counts: { initial: null, afterFix: null, afterForce: null },
     remaining: [],
+    found: [],
     forceCandidates: [],
     changes: [],
     commitMessage: "fix",
@@ -191,6 +194,60 @@ test("cleanAuditAt reports an audit without vulnerability on the default branch,
   assert.equal(cleanAuditAt(alerted, [dirty, clean()]), null, "the latest audit decides");
 });
 
+test("auditFindings reports what the latest audit of the default branch found while Dependabot reports nothing", () => {
+  const audited = (overrides: Partial<Operation> = {}) =>
+    operation({
+      status: "done",
+      createdAt: "2026-03-01T10:00:00.000Z",
+      steps: { clone: "done", audit: "done", fix: "skipped", force: "skipped", push: "skipped" },
+      counts: { initial: 2, afterFix: null, afterForce: null },
+      found: [
+        { project: "", name: "lodash", severity: "moderate", fix: "available" },
+        { project: "", name: "tar", severity: "high", fix: "none" },
+      ],
+      ...overrides,
+    });
+  const quiet = repo("octo/demo");
+  assert.deepEqual(auditFindings(quiet, [audited()]), { at: "2026-03-01T10:00:00.000Z", count: 2, severity: "high" });
+  assert.equal(auditFindings(repo("octo/demo", [alert(1, "high", "lodash")]), [audited()]), null, "Dependabot reports alerts");
+  assert.equal(auditFindings(quiet, [audited({ found: [], counts: { initial: 0, afterFix: null, afterForce: null } })]), null, "a clean audit");
+  const develop = audited({ id: "op-2", createdAt: "2026-03-02T10:00:00.000Z", baseBranch: "develop", found: [] });
+  assert.deepEqual(auditFindings(quiet, [develop, audited()])?.count, 2, "an audit of another branch does not count");
+  const fixed = audited({ id: "op-3", kind: "fix", createdAt: "2026-03-03T10:00:00.000Z", remaining: [] });
+  assert.deepEqual(auditFindings(quiet, [fixed])?.severity, "high", "a fix reports what its first audit found");
+  const views = [{ repo: repo("o/alerted", [alert(1, "medium", "a")]) }, { repo: quiet, auditFindings: auditFindings(quiet, [audited()]) }, { repo: repo("o/clean") }];
+  assert.deepEqual(sortRepos(views).map((view) => view.repo.id), ["octo/demo", "o/alerted", "o/clean"]);
+});
+
+test("AuditAll audits three repositories at a time and reports those skipped or failed", async () => {
+  let running = 0;
+  let peak = 0;
+  const audit = async (repoId: string): Promise<Operation> => {
+    if (repoId === "o/busy") throw new ConflictError("An operation is already in progress");
+    running += 1;
+    peak = Math.max(peak, running);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    running -= 1;
+    return operation({ repoId, status: repoId === "o/broken" ? "failed" : "done", error: repoId === "o/broken" ? "No package-lock.json" : null });
+  };
+  const errors: string[] = [];
+  const auditAll = new AuditAll(audit, (message) => errors.push(message));
+  assert.equal(auditAll.status(), null);
+  const ids = ["o/a", "o/busy", "o/b", "o/broken", "o/c", "o/d"];
+  const started = auditAll.start(ids);
+  assert.deepEqual([started.running, started.total, started.done], [true, 6, 0]);
+  assert.throws(() => auditAll.start(ids), /already running/);
+  await auditAll.finished();
+  const done = auditAll.status()!;
+  assert.equal(done.running, false);
+  assert.equal(done.done, 6);
+  assert.ok(done.finishedAt);
+  assert.deepEqual(done.skipped, ["o/busy"]);
+  assert.deepEqual(done.failed, [{ repoId: "o/broken", error: "No package-lock.json" }]);
+  assert.equal(peak, 3);
+  assert.deepEqual(errors, []);
+});
+
 test("a mark of an alert fixed by hand drops when that alert closes or its package gets a newer alert", () => {
   const mark = (number: number, pkg: string) => ({ number, package: pkg, markedAt: "2026-03-01T10:00:00.000Z" });
   const xlsx = alert(1, "high", "xlsx");
@@ -304,6 +361,23 @@ test("Store fails a running operation whose process is gone and deletes its clon
     assert.equal(failed.workDir, null);
     assert.match(failed.error ?? "", /Interrupted/);
     assert.equal(fs.existsSync(workDir), false);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("Store reads an operation saved without the vulnerabilities of its first audit", () => {
+  const temp = makeTempDir("tracker-found-");
+  try {
+    const store = new Store(temp.dir);
+    const remaining = [{ project: "", name: "lodash", severity: "high" as const, fix: "available" as const }];
+    for (const [id, afterFix] of [["op-audit", null], ["op-fix", 1]] as const) {
+      const saved = { ...operation({ id, remaining, counts: { initial: 1, afterFix, afterForce: null } }) } as Partial<Operation>;
+      delete saved.found;
+      fs.writeFileSync(path.join(temp.dir, "operations", `${id}.json`), JSON.stringify(saved));
+    }
+    assert.deepEqual(store.getOperation("op-audit").found, remaining, "without a fix, the remaining ones are those of the audit");
+    assert.deepEqual(store.getOperation("op-fix").found, [], "after a fix, they are unknown");
   } finally {
     temp.cleanup();
   }

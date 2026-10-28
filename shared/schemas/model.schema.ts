@@ -172,7 +172,8 @@ export type LogEntry = z.infer<typeof LogEntrySchema>;
 /**
  * Opération d'audit ou de correction sur un clone temporaire. `workDir` est le
  * clone, présent tant que l'opération n'est pas terminée ; `pid` est le processus
- * qui exécute l'étape en cours.
+ * qui exécute l'étape en cours. `found` liste les vulnérabilités du premier
+ * audit, `remaining` celles qui restent après la dernière étape.
  */
 export const OperationSchema = z.object({
   id: z.string(),
@@ -199,6 +200,7 @@ export const OperationSchema = z.object({
     afterFix: z.number().int().nullable(),
     afterForce: z.number().int().nullable(),
   }),
+  found: z.array(VulnerabilitySchema),
   remaining: z.array(VulnerabilitySchema),
   forceCandidates: z.array(ForceCandidateSchema),
   changes: z.array(ChangeSchema),
