@@ -119,6 +119,11 @@ export async function syncRepository(store: Store, config: GitHubConfig, repoId:
   }
 }
 
+/** Relit tout de suite, en parallèle, les données GitHub de chaque dépôt suivi. */
+export async function syncAllRepositories(store: Store, config: GitHubConfig): Promise<void> {
+  await Promise.all(store.listRepos().map((repo) => syncRepository(store, config, repo.id)));
+}
+
 /** Suit un nouveau dépôt, rangé dans `categoryId`, avec l'audit pour seul droit de l'agent, puis lit ses alertes. */
 export async function addRepository(store: Store, config: GitHubConfig, input: string, categoryId: string | null): Promise<Repo> {
   const ref = parseRepoRef(input);

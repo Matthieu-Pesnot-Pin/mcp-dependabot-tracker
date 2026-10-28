@@ -1,6 +1,7 @@
 import { useCallback, useState, type ReactNode } from 'react'
 import { Icon } from './components/Icon'
 import { NoticeToast } from './components/NoticeToast'
+import { SyncButton } from './components/SyncButton'
 import { TopBar } from './components/TopBar'
 import { HomeScreen } from './screens/HomeScreen'
 import { OperationScreen } from './screens/OperationScreen'
@@ -32,10 +33,13 @@ export default function App() {
 
   const action =
     route.name === 'home' ? (
-      <button type="button" className="button button-primary" onClick={openAdd}>
-        <Icon name="plus" />
-        Ajouter un dépôt
-      </button>
+      <>
+        <SyncButton />
+        <button type="button" className="button button-primary" onClick={openAdd}>
+          <Icon name="plus" />
+          Ajouter un dépôt
+        </button>
+      </>
     ) : null
 
   return (

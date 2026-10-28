@@ -55,6 +55,7 @@ function operationPath(id: string): string {
 export const api = {
   getConfig: () => request<AppConfig>('config'),
   listRepos: () => request<ReposResponse>('repos'),
+  syncRepos: () => send<ReposResponse>('POST', 'sync'),
   listAddableRepos: () => request<AddableReposResponse>('github/repos'),
   getRepo: (repoId: string) => request<RepoView>(repoPath(repoId)),
   addRepo: (repository: string, categoryId: string | null) => send<RepoView>('POST', 'repos', { repository, categoryId }),

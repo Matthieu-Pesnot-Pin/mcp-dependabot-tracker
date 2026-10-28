@@ -194,6 +194,16 @@ test("the GUI files repositories in categories, which the agent can list", async
   assert.equal((await call("DELETE", `categories/${created.json.id}`)).status, 200);
 });
 
+test("the GUI syncs every repository now", async () => {
+  github.repos.get("octo/demo")!.alerts.push({ number: 4, severity: "low", package: "debug", summary: "ReDoS in debug" });
+  const synced = await call("POST", "sync");
+  assert.equal(synced.status, 200, synced.json.error);
+  const demo = synced.json.repos.find((view: { repo: { id: string } }) => view.repo.id === "octo/demo");
+  assert.ok(demo.repo.alerts.some((alert: { number: number }) => alert.number === 4));
+  github.repos.get("octo/demo")!.alerts.pop();
+  await call("POST", "sync");
+});
+
 test("the agent fixes and pushes; the result links to the operation in the GUI", { skip }, async () => {
   const fixed = await client.callTool("fix_vulnerabilities", { repository: "octo/demo", push: true }, 180_000);
   assert.equal(fixed.isError, false, fixed.text);

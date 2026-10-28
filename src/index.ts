@@ -16,7 +16,7 @@ import { githubConfigured, readGitHubConfig } from "./core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
 import { cancelOperation, decideForce, pushOperation, startUserFix, type OperationContext } from "./core/operations.js";
-import { SYNC_INTERVAL_MS, addRepository, listAddableRepositories, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncRepository, unmarkAlertHandled } from "./core/repos.js";
+import { SYNC_INTERVAL_MS, addRepository, listAddableRepositories, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
   AddRepoBodySchema,
@@ -163,6 +163,10 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
       return { version: APP_VERSION, dataDir, githubConfigured: githubConfigured() } satisfies AppConfig;
 
     case "LIST_REPOS":
+      return { repos: listRepoViews(store), categories: store.listCategories() } satisfies ReposResponse;
+
+    case "SYNC_REPOS":
+      await syncAllRepositories(store, readGitHubConfig());
       return { repos: listRepoViews(store), categories: store.listCategories() } satisfies ReposResponse;
 
     case "LIST_ADDABLE_REPOS":
