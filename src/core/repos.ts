@@ -1,9 +1,10 @@
 import { pendingAlerts } from "../../shared/alerts.js";
-import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type HandledAlert, type Operation, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
+import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type HandledAlert, type Operation, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
 import type { RepoView } from "../../shared/schemas/api.schema.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, NotFoundError } from "./errors.js";
-import { GitHubClient } from "./github.js";
+import { GitHubClient, type OpenPullRequest } from "./github.js";
+import { isTrackerBranch } from "./operations.js";
 import { parseRepoRef } from "./repo-ref.js";
 import { isActive, type Store } from "./store.js";
 
@@ -83,6 +84,18 @@ export function pruneHandledAlerts(handled: HandledAlert[], alerts: Alert[]): Ha
   );
 }
 
+/**
+ * Pull requests ouvertes par le tracker parmi celles ouvertes sur le dépôt :
+ * leur branche suit le nommage `fix/npm-audit-…` et appartient au dépôt
+ * lui-même, pas à une fourche. Par numéro croissant.
+ */
+export function trackerPullRequests(repoId: string, pulls: OpenPullRequest[]): PullRequest[] {
+  return pulls
+    .filter((pull) => isTrackerBranch(pull.branch) && pull.headRepo?.toLowerCase() === repoId.toLowerCase())
+    .sort((a, b) => a.number - b.number)
+    .map(({ number, url, branch, createdAt }) => ({ number, url, branch, createdAt }));
+}
+
 export function repoView(store: Store, repo: Repo): RepoView {
   const operations = store.listOperations(repo.id);
   return {
@@ -100,16 +113,21 @@ export function listRepoViews(store: Store): RepoView[] {
   return sortRepos(store.listRepos().map((repo) => repoView(store, repo)));
 }
 
-/** Relit les alertes Dependabot ouvertes du dépôt ; un échec est enregistré dans `syncError`, alertes précédentes conservées. */
+/**
+ * Relit les alertes Dependabot ouvertes du dépôt et ses pull requests ouvertes
+ * par le tracker ; un échec est enregistré dans `syncError`, données précédentes
+ * conservées.
+ */
 export async function syncRepository(store: Store, config: GitHubConfig, repoId: string): Promise<Repo> {
   const repo = store.getRepo(repoId);
   const github = new GitHubClient(config);
   try {
-    const alerts = await github.listOpenAlerts(repo.owner, repo.name);
+    const [alerts, pulls] = await Promise.all([github.listOpenAlerts(repo.owner, repo.name), github.listOpenPullRequests(repo.owner, repo.name)]);
     return store.updateRepo(repo.id, (current) => ({
       ...current,
       alerts,
       handledAlerts: pruneHandledAlerts(current.handledAlerts, alerts),
+      pullRequests: trackerPullRequests(current.id, pulls),
       syncedAt: new Date().toISOString(),
       syncError: null,
     }));
@@ -119,7 +137,7 @@ export async function syncRepository(store: Store, config: GitHubConfig, repoId:
   }
 }
 
-/** Relit tout de suite, en parallèle, les données GitHub de chaque dépôt suivi. */
+/** Relit tout de suite, en parallèle, les alertes et les pull requests de chaque dépôt suivi. */
 export async function syncAllRepositories(store: Store, config: GitHubConfig): Promise<void> {
   await Promise.all(store.listRepos().map((repo) => syncRepository(store, config, repo.id)));
 }
@@ -141,6 +159,7 @@ export async function addRepository(store: Store, config: GitHubConfig, input: s
     rights: DEFAULT_RIGHTS,
     alerts: [],
     handledAlerts: [],
+    pullRequests: [],
     syncedAt: null,
     syncError: null,
   });

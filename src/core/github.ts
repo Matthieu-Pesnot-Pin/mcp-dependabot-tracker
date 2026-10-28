@@ -17,9 +17,20 @@ export interface GitHubUser {
   name: string | null;
 }
 
-export interface PullRequest {
+/** Pull request créée ; `createdAt` est sa date d'ouverture. */
+export interface CreatedPullRequest {
   number: number;
   url: string;
+  createdAt: string;
+}
+
+/** Pull request ouverte ; `headRepo` est le dépôt de sa branche, null si ce dépôt a été supprimé. */
+export interface OpenPullRequest {
+  number: number;
+  url: string;
+  branch: string;
+  headRepo: string | null;
+  createdAt: string;
 }
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -144,9 +155,27 @@ export class GitHubClient {
     return { login: json.login, id: json.id, name: json.name ?? null };
   }
 
-  async createPullRequest(owner: string, name: string, pr: { title: string; head: string; base: string; body: string }): Promise<PullRequest> {
+  /** Pull requests ouvertes du dépôt, toutes pages comprises. */
+  async listOpenPullRequests(owner: string, name: string): Promise<OpenPullRequest[]> {
+    const pulls: OpenPullRequest[] = [];
+    let url: string | null = `/repos/${owner}/${name}/pulls?state=open&per_page=100`;
+    for (let page = 0; url !== null; page += 1) {
+      if (page === MAX_REPOSITORY_PAGES) {
+        throw new TrackerError(`${owner}/${name} has more than ${MAX_REPOSITORY_PAGES * 100} open pull requests; the tracker reads at most that many.`);
+      }
+      const { json, link } = await this.request("GET", url);
+      if (!Array.isArray(json)) throw new TrackerError(`GitHub API returned an unexpected list of pull requests for ${owner}/${name}.`);
+      for (const raw of json) {
+        pulls.push({ number: raw.number, url: raw.html_url, branch: raw.head?.ref ?? "", headRepo: raw.head?.repo?.full_name ?? null, createdAt: raw.created_at });
+      }
+      url = nextPageUrl(link);
+    }
+    return pulls;
+  }
+
+  async createPullRequest(owner: string, name: string, pr: { title: string; head: string; base: string; body: string }): Promise<CreatedPullRequest> {
     const { json } = await this.request("POST", `/repos/${owner}/${name}/pulls`, pr);
-    return { number: json.number, url: json.html_url };
+    return { number: json.number, url: json.html_url, createdAt: json.created_at };
   }
 }
 

@@ -1,7 +1,7 @@
 import { pendingAlerts } from '@shared/alerts'
 import { searchRepositories } from '@shared/repo-search'
 import type { RepoView } from '@shared/schemas/api.schema'
-import type { Category } from '@shared/schemas/model.schema'
+import type { Category, Repo } from '@shared/schemas/model.schema'
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { CategorySidebar } from '../components/CategorySidebar'
 import { Icon } from '../components/Icon'
@@ -14,23 +14,36 @@ import { hrefs, navigate, rememberHomeCategory } from '../utils/router'
 
 const POLL_MS = 3000
 
-/** Clé du navigateur qui retient la position de l'interrupteur « Vulnérables seulement ». */
+/** Clés du navigateur qui retiennent la position des interrupteurs de l'accueil. */
 const ONLY_VULNERABLE_KEY = 'dependabot-tracker.only-vulnerable'
+const ONLY_PENDING_PR_KEY = 'dependabot-tracker.only-pending-pr'
 
-function readOnlyVulnerable(): boolean {
+function readFlag(key: string): boolean {
   try {
-    return localStorage.getItem(ONLY_VULNERABLE_KEY) === 'true'
+    return localStorage.getItem(key) === 'true'
   } catch {
     return false
   }
 }
 
-function writeOnlyVulnerable(value: boolean) {
+function writeFlag(key: string, value: boolean) {
   try {
-    localStorage.setItem(ONLY_VULNERABLE_KEY, String(value))
+    localStorage.setItem(key, String(value))
   } catch {
     // Stockage indisponible : la position vaut pour cette visite seulement.
   }
+}
+
+/** Interrupteur de l'accueil dont le navigateur retient la position. */
+function useStoredFlag(key: string): [boolean, (value: boolean) => void] {
+  const [value, setValue] = useState(() => readFlag(key))
+  return [
+    value,
+    (next: boolean) => {
+      setValue(next)
+      writeFlag(key, next)
+    },
+  ]
 }
 
 /**
@@ -39,6 +52,36 @@ function writeOnlyVulnerable(value: boolean) {
  */
 function isVulnerable(view: RepoView): boolean {
   return view.unfixable.length > 0 || (pendingAlerts(view.repo).length > 0 && view.cleanAuditAt === null)
+}
+
+/**
+ * Pull requests du tracker en attente sur un dépôt : un lien vers la pull
+ * request, ou vers la liste des pull requests du dépôt quand il y en a plusieurs.
+ */
+function PendingPullRequests({ repo }: { repo: Repo }) {
+  const pulls = repo.pullRequests
+  if (pulls.length === 0) return null
+  const single = pulls.length === 1
+  return (
+    <a
+      className="pr-note"
+      href={single ? pulls[0].url : pulls[0].url.replace(/\/pull\/\d+$/, '/pulls')}
+      target="_blank"
+      rel="noreferrer"
+      title={pulls.map((pull) => `#${pull.number} — ${pull.branch}`).join('\n')}
+    >
+      <Icon name="git-pull-request" size={14} />
+      {single ? `PR #${pulls[0].number} en attente` : `${pulls.length} PR en attente`}
+    </a>
+  )
+}
+
+/** Message de l'accueil quand les interrupteurs écartent tous les dépôts. */
+function filteredOutMessage(onlyVulnerable: boolean, onlyPendingPr: boolean, inCategory: boolean): string {
+  const where = inCategory ? 'dans cette catégorie' : 'parmi vos projets'
+  if (onlyVulnerable && onlyPendingPr) return `Aucun dépôt vulnérable avec une PR en attente ${where}.`
+  if (onlyPendingPr) return `Aucune PR en attente ${where}.`
+  return `Aucun dépôt vulnérable ${where}.`
 }
 
 /**
@@ -261,14 +304,10 @@ export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { category
   const categories = repos.data?.categories ?? []
   const category = categories.find((candidate) => candidate.id === categoryId) ?? null
   const unknownCategory = categoryId !== null && repos.data !== null && category === null
-  const [onlyVulnerable, setOnlyVulnerable] = useState(readOnlyVulnerable)
+  const [onlyVulnerable, setOnlyVulnerable] = useStoredFlag(ONLY_VULNERABLE_KEY)
+  const [onlyPendingPr, setOnlyPendingPr] = useStoredFlag(ONLY_PENDING_PR_KEY)
   const inCategory = (repos.data?.repos ?? []).filter((view) => categoryId === null || view.repo.categoryId === categoryId)
-  const views = onlyVulnerable ? inCategory.filter(isVulnerable) : inCategory
-
-  function toggleOnlyVulnerable(value: boolean) {
-    setOnlyVulnerable(value)
-    writeOnlyVulnerable(value)
-  }
+  const views = inCategory.filter((view) => (!onlyVulnerable || isVulnerable(view)) && (!onlyPendingPr || view.repo.pullRequests.length > 0))
 
   useEffect(() => {
     if (!unknownCategory) rememberHomeCategory(categoryId)
@@ -280,10 +319,16 @@ export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { category
       <div className="page">
         <div className="home-head">
           <h1 className="page-title">{category ? category.name : 'Tous mes projets'}</h1>
-          <label className="filter">
-            Vulnérables seulement
-            <Toggle checked={onlyVulnerable} onChange={toggleOnlyVulnerable} label="Vulnérables seulement" />
-          </label>
+          <div className="filters">
+            <label className="filter">
+              PR en attente
+              <Toggle checked={onlyPendingPr} onChange={setOnlyPendingPr} label="PR en attente" />
+            </label>
+            <label className="filter">
+              Vulnérables seulement
+              <Toggle checked={onlyVulnerable} onChange={setOnlyVulnerable} label="Vulnérables seulement" />
+            </label>
+          </div>
         </div>
         {config.data && !config.data.githubConfigured && (
           <p className="banner banner-error">
@@ -299,7 +344,7 @@ export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { category
         )}
         {repos.data && !unknownCategory && inCategory.length > 0 && views.length === 0 && (
           <div className="panel empty">
-            <p>Aucun dépôt vulnérable {categoryId === null ? 'parmi vos projets' : 'dans cette catégorie'}.</p>
+            <p>{filteredOutMessage(onlyVulnerable, onlyPendingPr, categoryId !== null)}</p>
           </div>
         )}
         {repos.data && !unknownCategory && inCategory.length === 0 && (
@@ -314,11 +359,14 @@ export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { category
         {views.length > 0 && (
           <div className="panel list">
             {views.map((view) => (
-              <a key={view.repo.id} className="row" href={hrefs.repo(view.repo.id)}>
-                <span className="row-title">{view.repo.id}</span>
+              <div key={view.repo.id} className="row row-linked">
+                <a className="row-title row-link" href={hrefs.repo(view.repo.id)}>
+                  {view.repo.id}
+                </a>
+                <PendingPullRequests repo={view.repo} />
                 <RepoStatus view={view} />
                 <Icon name="chevron-right" className="row-chevron" />
-              </a>
+              </div>
             ))}
           </div>
         )}

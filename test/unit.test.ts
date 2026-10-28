@@ -6,10 +6,10 @@ import test from "node:test";
 import { parseRepoRef } from "../src/core/repo-ref.js";
 import { nextPageUrl } from "../src/core/github.js";
 import { diffLockfiles, forceCandidates, parseAuditReport, parseLockfile, parseNpmJson } from "../src/core/npm-audit.js";
-import { branchName } from "../src/core/operations.js";
+import { branchName, isTrackerBranch } from "../src/core/operations.js";
 import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
-import { cleanAuditAt, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, unfixablePackages } from "../src/core/repos.js";
+import { cleanAuditAt, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
 import { describeOperation } from "../src/tools/format.js";
@@ -22,7 +22,7 @@ function alert(number: number, severity: Alert["severity"], pkg: string): Alert 
 
 function repo(id: string, alerts: Alert[] = [], syncedAt: string | null = null): Repo {
   const [owner, name] = id.split("/");
-  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, handledAlerts: [], syncedAt, syncError: null };
+  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, handledAlerts: [], pullRequests: [], syncedAt, syncError: null };
 }
 
 function operation(overrides: Partial<Operation> = {}): Operation {
@@ -146,6 +146,23 @@ test("branchName encodes the local date and time down to the second", () => {
   assert.equal(branchName(new Date(2026, 9, 28, 14, 32, 5)), "fix/npm-audit-2026-10-28-143205");
 });
 
+test("trackerPullRequests keeps the open pull requests of the tracker's own branches", () => {
+  const pull = (number: number, branch: string, headRepo: string | null = "Octo/Demo") => ({ number, url: `u${number}`, branch, headRepo, createdAt: "2026-01-01T00:00:00Z" });
+  assert.equal(isTrackerBranch("fix/npm-audit-2026-10-28-143205"), true);
+  assert.equal(isTrackerBranch("fix/npm-audit-manual"), false);
+  const kept = trackerPullRequests("octo/demo", [
+    pull(9, "fix/npm-audit-2026-10-28-143205"),
+    pull(3, "fix/npm-audit-2026-10-01-090000"),
+    pull(4, "feature/login"),
+    pull(5, "fix/npm-audit-2026-10-02-090000", "someone/demo"),
+    pull(6, "fix/npm-audit-2026-10-03-090000", null),
+  ]);
+  assert.deepEqual(kept, [
+    { number: 3, url: "u3", branch: "fix/npm-audit-2026-10-01-090000", createdAt: "2026-01-01T00:00:00Z" },
+    { number: 9, url: "u9", branch: "fix/npm-audit-2026-10-28-143205", createdAt: "2026-01-01T00:00:00Z" },
+  ]);
+});
+
 test("repositories sort by worst severity, then alert count; alerts by severity then package", () => {
   const views = [
     { repo: repo("o/clean") },
@@ -233,9 +250,11 @@ test("Store reads a repository saved without a chosen branch as analysing its de
   try {
     const saved = { ...repo("octo/demo"), defaultBranch: "master" } as Partial<Repo>;
     delete saved.branch;
+    delete saved.pullRequests;
     fs.writeFileSync(path.join(temp.dir, "repos.json"), JSON.stringify({ repos: [saved] }));
     const store = new Store(temp.dir);
     assert.equal(store.getRepo("octo/demo").branch, "master");
+    assert.deepEqual(store.getRepo("octo/demo").pullRequests, []);
   } finally {
     temp.cleanup();
   }

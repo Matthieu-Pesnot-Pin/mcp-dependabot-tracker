@@ -54,6 +54,16 @@ export const HandledAlertSchema = z.object({
 
 export type HandledAlert = z.infer<typeof HandledAlertSchema>;
 
+/** Pull request ouverte par le tracker, ni mergée ni fermée ; `branch` est sa branche `fix/npm-audit-…`. */
+export const PullRequestSchema = z.object({
+  number: z.number().int(),
+  url: z.string(),
+  branch: z.string(),
+  createdAt: z.string(),
+});
+
+export type PullRequest = z.infer<typeof PullRequestSchema>;
+
 /** Catégorie de dépôts, choisie par l'utilisateur ; un dépôt appartient à une catégorie au plus. */
 export const CategorySchema = z.object({
   id: z.string(),
@@ -66,7 +76,8 @@ export type Category = z.infer<typeof CategorySchema>;
  * Dépôt suivi. `id` est le nom complet GitHub, `propriétaire/nom` ; `branch` est
  * la branche que les opérations clonent et vers laquelle la pull request est ouverte ;
  * `categoryId` est sa catégorie, null s'il n'est rangé dans aucune ;
- * `handledAlerts` les alertes qu'il a marquées corrigées à la main.
+ * `handledAlerts` les alertes qu'il a marquées corrigées à la main ;
+ * `pullRequests` les pull requests du tracker encore ouvertes à la dernière lecture.
  */
 export const RepoSchema = z.object({
   id: z.string(),
@@ -79,6 +90,7 @@ export const RepoSchema = z.object({
   rights: RightsSchema,
   alerts: z.array(AlertSchema),
   handledAlerts: z.array(HandledAlertSchema),
+  pullRequests: z.array(PullRequestSchema),
   syncedAt: z.string().nullable(),
   syncError: z.string().nullable(),
 });

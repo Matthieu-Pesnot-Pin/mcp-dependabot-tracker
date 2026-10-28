@@ -124,6 +124,11 @@ test("the GUI flow waits for the --force decision, then pushes a branch and open
   assert.deepEqual({ head: pull.head, base: pull.base, title: pull.title }, { head: branch, base: "main", title: "fix(deps): bump vulnerable packages" });
   assert.match(pull.body, /Vulnerabilities before: 4/);
   assert.deepEqual(done.pullRequest, { number: pull.number, url: `https://github.com/${repoId}/pull/${pull.number}` });
+  assert.deepEqual(
+    ctx.store.getRepo(repoId).pullRequests.map((pending) => [pending.number, pending.branch]),
+    [[pull.number, branch]],
+    "the repository lists the pull request at once, before the next sync"
+  );
 });
 
 test("skipping --force keeps the major upgrade out, and cancelling a waiting operation deletes its clone", { skip }, async () => {

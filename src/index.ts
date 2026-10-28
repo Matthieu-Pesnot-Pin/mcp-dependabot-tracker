@@ -102,7 +102,7 @@ const operations: OperationContext = {
 const INSTRUCTIONS = `mcp-dependabot-tracker follows the Dependabot alerts of GitHub repositories and fixes their npm vulnerabilities. The user tracks repositories and decides what you may do on each of them in a web GUI; you act only through these tools, never with git or npm yourself.
 
 Concepts:
-- A **tracked repository** is a GitHub repository the user added in the GUI. Its open Dependabot alerts are read from GitHub and refreshed every 10 minutes.
+- A **tracked repository** is a GitHub repository the user added in the GUI. Its open Dependabot alerts, and the pull requests the tracker opened that are not merged or closed yet, are read from GitHub and refreshed every 10 minutes.
 - **Rights**: for each repository, the user allows you to run npm audit (audit), npm audit fix (fix), npm audit fix --force (force) and to push the fixes (push). A tool refuses an action you are not allowed to do; only the user can change the rights.
 - The **analysed branch** of a repository is chosen by the user in the GUI (the default branch unless changed). Dependabot alerts always describe the default branch; npm audit describes the analysed branch.
 - An **operation** runs in a temporary clone of the analysed branch, deleted at the end: npm audit in every directory that holds a package-lock.json, then npm audit fix with --package-lock-only and --ignore-scripts (lockfiles only, no install, no scripts), optionally --force, then a commit on a new branch fix/npm-audit-<date>-<time> and a pull request to the analysed branch.
@@ -372,7 +372,7 @@ const TOOLS = [
   {
     name: "list_repositories",
     description:
-      "List the tracked repositories with their category, their analysed branch, their open Dependabot alerts by severity, the time of the last sync, the rights the user gave you (audit, fix, force, push) and the operation in progress. Start here.",
+      "List the tracked repositories with their category, their analysed branch, their open Dependabot alerts by severity, the time of the last sync, the rights the user gave you (audit, fix, force, push), the pull requests the tracker opened that are still open, and the operation in progress. Start here.",
     inputSchema: {
       type: "object" as const,
       properties: { category: { type: "string", description: "Only list the repositories of this category, by name (case-insensitive). The user creates the categories in the GUI." } },

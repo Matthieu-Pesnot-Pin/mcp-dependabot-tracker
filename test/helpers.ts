@@ -136,12 +136,12 @@ interface FakeRepo {
 const FAKE_PAGE_SIZE = 2;
 
 /**
- * Fausse API GitHub : dépôts, alertes Dependabot paginées, utilisateur du token
- * et création de pull requests, qu'elle enregistre.
+ * Fausse API GitHub : dépôts, alertes Dependabot paginées, utilisateur du token,
+ * création de pull requests, qu'elle enregistre, et liste des pull requests ouvertes.
  */
 export class FakeGitHub {
   readonly repos = new Map<string, FakeRepo>();
-  readonly pulls: { repo: string; title: string; head: string; base: string; body: string; number: number }[] = [];
+  readonly pulls: { repo: string; title: string; head: string; base: string; body: string; number: number; state: "open" | "closed"; createdAt: string }[] = [];
   readonly token = "test-token";
   private server: http.Server | null = null;
   url = "";
@@ -205,13 +205,28 @@ export class FakeGitHub {
       const next: Record<string, string> = start + FAKE_PAGE_SIZE < repo.alerts.length ? { Link:`<${this.url}${url.pathname}?state=open&per_page=100&after=${start + FAKE_PAGE_SIZE}>; rel="next"` } : {};
       return this.send(res, 200, page, next);
     }
+    if (req.method === "GET" && parts[3] === "pulls") {
+      const id = `${repo.owner}/${repo.name}`;
+      const open = this.pulls.filter((pull) => pull.repo === id && pull.state === "open");
+      return this.send(
+        res,
+        200,
+        open.map((pull) => ({
+          number: pull.number,
+          html_url: `https://github.com/${id}/pull/${pull.number}`,
+          created_at: pull.createdAt,
+          head: { ref: pull.head, repo: { full_name: id } },
+        }))
+      );
+    }
     if (req.method === "POST" && parts[3] === "pulls") {
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(chunk as Buffer);
       const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
       const number = this.pulls.length + 1;
-      this.pulls.push({ repo: `${repo.owner}/${repo.name}`, number, ...body });
-      return this.send(res, 201, { number, html_url: `https://github.com/${repo.owner}/${repo.name}/pull/${number}` });
+      const createdAt = new Date().toISOString();
+      this.pulls.push({ repo: `${repo.owner}/${repo.name}`, number, state: "open", createdAt, ...body });
+      return this.send(res, 201, { number, html_url: `https://github.com/${repo.owner}/${repo.name}/pull/${number}`, created_at: createdAt });
     }
     return this.send(res, 404, { message: "Not Found" });
   }

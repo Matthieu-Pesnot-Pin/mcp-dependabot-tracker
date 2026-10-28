@@ -194,14 +194,21 @@ test("the GUI files repositories in categories, which the agent can list", async
   assert.equal((await call("DELETE", `categories/${created.json.id}`)).status, 200);
 });
 
-test("the GUI syncs every repository now", async () => {
+test("the GUI syncs every repository now, with the pull requests the tracker opened", async () => {
   github.repos.get("octo/demo")!.alerts.push({ number: 4, severity: "low", package: "debug", summary: "ReDoS in debug" });
+  const pull = { repo: "octo/demo", title: "t", base: "main", body: "", state: "open" as const, createdAt: "2026-10-01T09:00:00.000Z" };
+  github.pulls.push({ ...pull, number: 900, head: "fix/npm-audit-2026-10-01-090000" }, { ...pull, number: 901, head: "feature/login" });
   const synced = await call("POST", "sync");
   assert.equal(synced.status, 200, synced.json.error);
   const demo = synced.json.repos.find((view: { repo: { id: string } }) => view.repo.id === "octo/demo");
   assert.ok(demo.repo.alerts.some((alert: { number: number }) => alert.number === 4));
+  assert.deepEqual(demo.repo.pullRequests.map((pending: { number: number }) => pending.number), [900]);
+  assert.match((await client.callTool("list_repositories")).text, /Pull requests opened by the tracker, not merged yet: #900 https:\/\/github\.com\/octo\/demo\/pull\/900/);
+
   github.repos.get("octo/demo")!.alerts.pop();
-  await call("POST", "sync");
+  github.pulls.splice(github.pulls.findIndex((candidate) => candidate.number === 900), 2);
+  const after = await call("POST", "sync");
+  assert.deepEqual(after.json.repos.find((view: { repo: { id: string } }) => view.repo.id === "octo/demo").repo.pullRequests, []);
 });
 
 test("the agent fixes and pushes; the result links to the operation in the GUI", { skip }, async () => {

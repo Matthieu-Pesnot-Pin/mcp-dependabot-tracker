@@ -3,7 +3,7 @@ import type { Category } from '@shared/schemas/model.schema'
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { showError } from '../store/useNotice'
 import { api } from '../utils/api'
-import { alertTotals } from '../utils/format'
+import { alertTotals, plural, pullRequestCount } from '../utils/format'
 import { hrefs, navigate } from '../utils/router'
 import { Icon, type IconName } from './Icon'
 import { SeverityPill } from './Pill'
@@ -19,6 +19,18 @@ function CountPill({ views }: { views: RepoView[] }) {
     <SeverityPill severity={worst} small>
       {count}
     </SeverityPill>
+  )
+}
+
+/** Nombre de pull requests du tracker en attente dans un ensemble de dépôts ; rien sans pull request. */
+function PullRequestPill({ views }: { views: RepoView[] }) {
+  const count = pullRequestCount(views.map((view) => view.repo))
+  if (count === 0) return null
+  return (
+    <span className="pill pill-small pill-pr" title={`${plural(count, 'pull request')} en attente`}>
+      <Icon name="git-pull-request" size={10} />
+      {count}
+    </span>
   )
 }
 
@@ -129,6 +141,7 @@ function SideLink({ href, icon, label, views, active }: { href: string; icon: Ic
       <Icon name={icon} />
       <span className="side-name">{label}</span>
       <span className="side-count">
+        <PullRequestPill views={views} />
         <CountPill views={views} />
       </span>
     </a>
@@ -181,7 +194,8 @@ function CategoryItem({ category, views, active, onChanged }: { category: Catego
 
 /**
  * Barre latérale de l'accueil : tous les dépôts, puis chaque catégorie, avec
- * le nombre de vulnérabilités de leurs dépôts ; la création se fait en place.
+ * le nombre de pull requests en attente et de vulnérabilités de leurs dépôts ;
+ * la création se fait en place.
  */
 export function CategorySidebar({ categories, views, selected, onChanged }: { categories: Category[]; views: RepoView[]; selected: string | null; onChanged: () => void }) {
   const [creating, setCreating] = useState(false)

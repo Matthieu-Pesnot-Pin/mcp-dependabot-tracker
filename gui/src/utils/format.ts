@@ -43,6 +43,11 @@ export function alertTotals(repos: Repo[]): { count: number; worst: AlertSeverit
   return { count: alerts.length, worst: worstSeverity(alerts) }
 }
 
+/** Nombre de pull requests du tracker en attente dans un ensemble de dépôts. */
+export function pullRequestCount(repos: Repo[]): number {
+  return repos.reduce((total, repo) => total + repo.pullRequests.length, 0)
+}
+
 /** Préfixe d'un projet npm du dépôt : `""` pour la racine, `gui/` pour le dossier `gui`. */
 export function projectPrefix(project: string): string {
   return project === '' ? '' : `${project}/`

@@ -32,6 +32,9 @@ export function describeRepo(view: RepoView, category: Category | null): string 
     `  Open Dependabot alerts: ${alertsLabel(repo)}${repo.syncedAt ? ` · synced ${repo.syncedAt}` : " · not synced yet"}`,
   ];
   if (repo.syncError) lines.push(`  Last sync failed: ${repo.syncError}`);
+  if (repo.pullRequests.length > 0) {
+    lines.push(`  Pull requests opened by the tracker, not merged yet: ${repo.pullRequests.map((pull) => `#${pull.number} ${pull.url}`).join(", ")}`);
+  }
   if (view.unfixable.length > 0) lines.push(`  Last npm audit found no published fix for: ${view.unfixable.join(", ")}`);
   if (view.cleanAuditAt) {
     lines.push(`  npm audit of ${view.cleanAuditAt} found no vulnerability on the default branch: these Dependabot alerts are probably not refreshed yet.`);

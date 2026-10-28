@@ -7,6 +7,7 @@ import {
   type Operation,
   type OperationKind,
   type Origin,
+  type PullRequest,
   type Repo,
   type StepName,
   type StepState,
@@ -66,6 +67,11 @@ export function branchName(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   return `fix/npm-audit-${day}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+/** Vrai pour une branche nommée par `branchName`. */
+export function isTrackerBranch(branch: string): boolean {
+  return /^fix\/npm-audit-\d{4}-\d{2}-\d{2}-\d{6}$/.test(branch);
 }
 
 /** Variables qui authentifient git auprès de GitHub par un en-tête HTTP, sans écrire le token dans le clone. */
@@ -133,6 +139,14 @@ class Runner {
 
   update(fn: (operation: Operation) => Operation): Operation {
     return this.ctx.store.updateOperation(this.id, fn);
+  }
+
+  /** Ajoute une pull request ouverte à celles en attente du dépôt. */
+  addPullRequest(pullRequest: PullRequest): void {
+    this.ctx.store.updateRepo(this.operation.repoId, (repo) => ({
+      ...repo,
+      pullRequests: [...repo.pullRequests.filter((candidate) => candidate.number !== pullRequest.number), pullRequest],
+    }));
   }
 
   setStep(step: StepName, state: StepState): void {
@@ -323,7 +337,8 @@ async function pushStep(runner: Runner): Promise<void> {
     throw new TrackerError(`Branch ${branch} was pushed, but the pull request could not be opened: ${err?.message ?? err}`);
   }
   runner.log(`Pull request #${pullRequest.number}: ${pullRequest.url}`);
-  runner.update((current) => ({ ...current, pullRequest }));
+  runner.update((current) => ({ ...current, pullRequest: { number: pullRequest.number, url: pullRequest.url } }));
+  runner.addPullRequest({ number: pullRequest.number, url: pullRequest.url, branch, createdAt: pullRequest.createdAt });
   runner.setStep("push", "done");
 }
 
