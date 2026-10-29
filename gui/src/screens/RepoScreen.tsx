@@ -203,7 +203,7 @@ function HandledAlerts({ view, onChanged }: { view: RepoView; onChanged: () => v
   )
 }
 
-/** Écran d'un dépôt : ses alertes Dependabot ouvertes, la correction et les droits de l'agent. */
+/** Écran d'un dépôt : ses alertes Dependabot ouvertes, la correction et les droits de l'agent ; un dépôt déprécié ne se corrige pas. */
 export function RepoScreen({ repoId }: { repoId: string }) {
   const polled = usePolling(`repo:${repoId}`, () => api.getRepo(repoId), POLL_MS)
   const [drawer, setDrawer] = useState(false)
@@ -245,7 +245,9 @@ export function RepoScreen({ repoId }: { repoId: string }) {
           <div className="subtitle">
             {repo.owner} · <BranchSelector repo={repo} onChanged={polled.reload} /> ·{' '}
             <CategorySelector repo={repo} categoryName={view.category?.name ?? null} onChanged={polled.reload} /> ·{' '}
-            {repo.syncError ? (
+            {repo.deprecatedAt ? (
+              `déprécié le ${dayAndTime(repo.deprecatedAt)}`
+            ) : repo.syncError ? (
               <span className="error-text" title={repo.syncError}>
                 synchronisation impossible
               </span>
@@ -269,7 +271,13 @@ export function RepoScreen({ repoId }: { repoId: string }) {
             <Icon name="bot" />
             Agent
           </button>
-          <button type="button" className="button button-primary" onClick={() => void fix()} disabled={starting}>
+          <button
+            type="button"
+            className="button button-primary"
+            onClick={() => void fix()}
+            disabled={starting || repo.deprecatedAt !== null}
+            title={repo.deprecatedAt ? 'Dépôt déprécié : rétablissez-le depuis l’onglet « Dépréciés » pour le corriger.' : undefined}
+          >
             <Icon name="wrench" />
             {activeOperation ? (activeOperation.kind === 'audit' ? "Voir l'audit en cours" : 'Reprendre la correction') : 'Corriger'}
           </button>

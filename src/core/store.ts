@@ -53,7 +53,8 @@ export function processAlive(pid: number): boolean {
  * choisie analyse sa branche par défaut, un dépôt sans catégorie n'est rangé
  * dans aucune, un fichier sans catégories n'en a aucune, un dépôt sans alerte
  * corrigée à la main n'en a aucune, un dépôt sans pull request en attente n'en
- * a aucune jusqu'à sa lecture suivante. Une alerte sans date
+ * a aucune jusqu'à sa lecture suivante, un dépôt sans date de dépréciation
+ * n'est pas déprécié. Une alerte sans date
  * d'émission prend celle de la lecture qui l'a rapportée ; la lecture suivante
  * la remplace par la vraie.
  */
@@ -68,6 +69,7 @@ function normalizeReposFile(file: any): unknown {
       categoryId: repo?.categoryId ?? null,
       handledAlerts: repo?.handledAlerts ?? [],
       pullRequests: repo?.pullRequests ?? [],
+      deprecatedAt: repo?.deprecatedAt ?? null,
       alerts: Array.isArray(repo?.alerts)
         ? repo.alerts.map((alert: any) => ({ ...alert, createdAt: alert?.createdAt ?? repo.syncedAt ?? repo.addedAt }))
         : repo?.alerts,
@@ -102,6 +104,13 @@ function assertNameFree(file: ReposFile, name: string, exceptId: string | null):
 
 export function isActive(operation: Operation): boolean {
   return ACTIVE_STATUSES.includes(operation.status);
+}
+
+/** Refuse toute lecture GitHub ou opération sur un dépôt déprécié. */
+export function assertNotDeprecated(repo: Repo): void {
+  if (repo.deprecatedAt !== null) {
+    throw new ConflictError(`Repository ${repo.id} is deprecated: it is neither synced nor audited. Only the user can restore it, in the GUI.`);
+  }
 }
 
 /**

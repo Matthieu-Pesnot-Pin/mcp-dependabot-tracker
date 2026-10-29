@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent }
 import { showError } from '../store/useNotice'
 import { api } from '../utils/api'
 import { alertTotals, plural, pullRequestCount } from '../utils/format'
-import { hrefs, navigate } from '../utils/router'
+import { hrefs, navigate, type HomeTab } from '../utils/router'
 import { Icon, type IconName } from './Icon'
 import { SeverityPill } from './Pill'
 
@@ -192,13 +192,38 @@ function CategoryItem({ category, views, active, onChanged }: { category: Catego
   )
 }
 
+/** Onglet des dépôts dépréciés, avec leur nombre. */
+function DeprecatedLink({ count, active }: { count: number; active: boolean }) {
+  return (
+    <a className={`side-item${active ? ' is-active' : ''}`} href={hrefs.deprecated()} aria-current={active ? 'page' : undefined}>
+      <Icon name="archive" />
+      <span className="side-name">Dépréciés</span>
+      {count > 0 && <span className="pill pill-small pill-neutral">{count}</span>}
+    </a>
+  )
+}
+
 /**
  * Barre latérale de l'accueil : tous les dépôts, puis chaque catégorie, avec
  * le nombre de pull requests en attente et de vulnérabilités de leurs dépôts ;
- * la création se fait en place.
+ * la création se fait en place. L'onglet des dépôts dépréciés vient en dernier.
+ * `views` exclut les dépôts dépréciés.
  */
-export function CategorySidebar({ categories, views, selected, onChanged }: { categories: Category[]; views: RepoView[]; selected: string | null; onChanged: () => void }) {
+export function CategorySidebar({
+  categories,
+  views,
+  deprecatedCount,
+  tab,
+  onChanged,
+}: {
+  categories: Category[]
+  views: RepoView[]
+  deprecatedCount: number
+  tab: HomeTab
+  onChanged: () => void
+}) {
   const [creating, setCreating] = useState(false)
+  const selected = tab.kind === 'category' ? tab.categoryId : undefined
 
   async function create(name: string) {
     await api.createCategory(name)
@@ -227,6 +252,8 @@ export function CategorySidebar({ categories, views, selected, onChanged }: { ca
           Nouvelle catégorie
         </button>
       )}
+      <div className="side-divider" />
+      <DeprecatedLink count={deprecatedCount} active={tab.kind === 'deprecated'} />
     </nav>
   )
 }

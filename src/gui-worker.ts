@@ -250,6 +250,10 @@ app.get("/api/repos/:owner/:name",(c) => forward(c, "GET_REPO", { repoId: repoId
 
 app.delete("/api/repos/:owner/:name", (c) => forward(c, "REMOVE_REPO", { repoId: repoId(c) }));
 
+app.put("/api/repos/:owner/:name/deprecated", (c) => forward(c, "DEPRECATE_REPO", { repoId: repoId(c) }));
+
+app.delete("/api/repos/:owner/:name/deprecated", (c) => forward(c, "RESTORE_REPO", { repoId: repoId(c) }));
+
 app.put("/api/repos/:owner/:name/rights", async (c) => {
   const read = await readBody(c, SetRightsBodySchema);
   if ("response" in read) return read.response;

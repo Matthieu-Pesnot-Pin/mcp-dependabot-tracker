@@ -24,7 +24,7 @@ function alert(number: number, severity: Alert["severity"], pkg: string): Alert 
 
 function repo(id: string, alerts: Alert[] = [], syncedAt: string | null = null): Repo {
   const [owner, name] = id.split("/");
-  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, handledAlerts: [], pullRequests: [], syncedAt, syncError: null };
+  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, handledAlerts: [], pullRequests: [], syncedAt, syncError: null, deprecatedAt: null };
 }
 
 function operation(overrides: Partial<Operation> = {}): Operation {
@@ -401,7 +401,7 @@ test("Store keeps the 20 most recent operations of a repository", () => {
   }
 });
 
-test("staleRepos selects repositories never synced or synced too long ago", () => {
+test("staleRepos selects repositories never synced or synced too long ago, deprecated ones aside", () => {
   const temp = makeTempDir("tracker-stale-");
   try {
     const store = new Store(temp.dir);
@@ -409,6 +409,7 @@ test("staleRepos selects repositories never synced or synced too long ago", () =
     store.addRepo(repo("o/never"));
     store.addRepo(repo("o/old", [], "2026-01-01T00:40:00.000Z"));
     store.addRepo(repo("o/fresh", [], "2026-01-01T00:55:00.000Z"));
+    store.addRepo({ ...repo("o/deprecated", [], "2026-01-01T00:10:00.000Z"), deprecatedAt: "2026-01-01T00:20:00.000Z" });
     assert.deepEqual(staleRepos(store, 10 * 60_000, at).map((r) => r.id), ["o/never", "o/old"]);
   } finally {
     temp.cleanup();

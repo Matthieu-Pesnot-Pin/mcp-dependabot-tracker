@@ -22,12 +22,12 @@ function assertAllowed(repo: Repo, right: Right): void {
   }
 }
 
-/** Dépôts suivis, tous ou ceux d'une catégorie désignée par son nom, sans tenir compte de la casse. */
+/** Dépôts suivis non dépréciés, tous ou ceux d'une catégorie désignée par son nom, sans tenir compte de la casse. */
 export function listRepositories(store: Store, args: Args): ToolResult {
   rejectUnknownFields(args, ["category"]);
   const categories = store.listCategories();
   const categoryName = optionalString(args, "category");
-  let views = listRepoViews(store);
+  let views = listRepoViews(store).filter((view) => view.repo.deprecatedAt === null);
   let scope = "tracked";
   if (categoryName !== undefined) {
     const category = categories.find((candidate) => candidate.name.toLowerCase() === categoryName.trim().toLowerCase());

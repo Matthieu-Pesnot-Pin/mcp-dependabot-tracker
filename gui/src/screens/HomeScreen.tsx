@@ -8,9 +8,10 @@ import { Icon } from '../components/Icon'
 import { SeverityPill } from '../components/Pill'
 import { Toggle } from '../components/Toggle'
 import { usePolling } from '../hooks/usePolling'
+import { showError } from '../store/useNotice'
 import { api } from '../utils/api'
 import { dayAndTime, plural, worstSeverity } from '../utils/format'
-import { hrefs, navigate, rememberHomeCategory } from '../utils/router'
+import { hrefs, navigate, rememberHomeTab, type HomeTab } from '../utils/router'
 
 const POLL_MS = 3000
 
@@ -318,25 +319,128 @@ function AddRepoModal({ categories, initialCategory, onClose }: { categories: Ca
   )
 }
 
-/** Accueil : la barre des catégories et les dépôts de la catégorie choisie, du plus exposé au moins exposé. */
-export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { categoryId: string | null; adding: boolean; onCloseAdd: () => void; onAdd: () => void }) {
+/** Bouton de chaque ligne qui marque le dépôt déprécié ; il ne reste alors que dans l'onglet « Dépréciés ». */
+function DeprecateButton({ repoId, onDone }: { repoId: string; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+
+  async function deprecate() {
+    setBusy(true)
+    try {
+      await api.deprecateRepo(repoId)
+      onDone()
+    } catch (err) {
+      showError(err)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className="row-action"
+      onClick={() => void deprecate()}
+      disabled={busy}
+      title="Marquer comme déprécié"
+      aria-label={`Marquer ${repoId} comme déprécié`}
+    >
+      <Icon name="archive" size={14} />
+    </button>
+  )
+}
+
+/** Bouton « Rétablir » d'un dépôt déprécié : il retrouve sa catégorie, sa synchronisation et ses audits. */
+function RestoreButton({ repoId, onDone }: { repoId: string; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+
+  async function restore() {
+    setBusy(true)
+    try {
+      await api.restoreRepo(repoId)
+      onDone()
+    } catch (err) {
+      showError(err)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <button type="button" className="button button-secondary row-button" onClick={() => void restore()} disabled={busy}>
+      <Icon name="archive-restore" size={14} />
+      {busy ? 'Rétablissement…' : 'Rétablir'}
+    </button>
+  )
+}
+
+/** Onglet « Dépréciés » : les dépôts dépréciés, du plus récent au plus ancien, chacun avec « Rétablir ». */
+function DeprecatedList({ views, onChanged }: { views: RepoView[]; onChanged: () => void }) {
+  if (views.length === 0) {
+    return (
+      <div className="panel empty">
+        <p>Aucun dépôt déprécié.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="panel list">
+      {views.map((view) => (
+        <div key={view.repo.id} className="row row-linked">
+          <a className="row-title row-link deprecated-title" href={hrefs.repo(view.repo.id)}>
+            {view.repo.id}
+          </a>
+          <span className="status status-muted">Déprécié le {dayAndTime(view.repo.deprecatedAt!)}</span>
+          <RestoreButton repoId={view.repo.id} onDone={onChanged} />
+          <Icon name="chevron-right" className="row-chevron" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Accueil : la barre des catégories, et les dépôts de l'onglet choisi. Une
+ * catégorie, ou tous les projets, liste ses dépôts non dépréciés du plus exposé
+ * au moins exposé ; l'onglet « Dépréciés » liste les autres.
+ */
+export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; adding: boolean; onCloseAdd: () => void; onAdd: () => void }) {
   const repos = usePolling('repos', api.listRepos, POLL_MS)
   const config = usePolling('config', api.getConfig, null)
   const categories = repos.data?.categories ?? []
+  const categoryId = tab.kind === 'category' ? tab.categoryId : null
   const category = categories.find((candidate) => candidate.id === categoryId) ?? null
   const unknownCategory = categoryId !== null && repos.data !== null && category === null
   const [onlyVulnerable, setOnlyVulnerable] = useStoredFlag(ONLY_VULNERABLE_KEY)
   const [onlyPendingPr, setOnlyPendingPr] = useStoredFlag(ONLY_PENDING_PR_KEY)
-  const inCategory = (repos.data?.repos ?? []).filter((view) => categoryId === null || view.repo.categoryId === categoryId)
+  const allViews = repos.data?.repos ?? []
+  const tracked = allViews.filter((view) => view.repo.deprecatedAt === null)
+  const deprecated = allViews.filter((view) => view.repo.deprecatedAt !== null).sort((a, b) => b.repo.deprecatedAt!.localeCompare(a.repo.deprecatedAt!))
+  const inCategory = tracked.filter((view) => categoryId === null || view.repo.categoryId === categoryId)
   const views = inCategory.filter((view) => (!onlyVulnerable || isVulnerable(view)) && (!onlyPendingPr || view.repo.pullRequests.length > 0))
+  const showingDeprecated = tab.kind === 'deprecated'
 
   useEffect(() => {
-    if (!unknownCategory) rememberHomeCategory(categoryId)
-  }, [categoryId, unknownCategory])
+    if (showingDeprecated) rememberHomeTab({ kind: 'deprecated' })
+    else if (!unknownCategory) rememberHomeTab({ kind: 'category', categoryId })
+  }, [showingDeprecated, categoryId, unknownCategory])
+
+  if (showingDeprecated) {
+    return (
+      <div className="home">
+        {repos.data && <CategorySidebar categories={categories} views={tracked} deprecatedCount={deprecated.length} tab={tab} onChanged={repos.reload} />}
+        <div className="page">
+          <div className="home-head">
+            <h1 className="page-title">Dépréciés</h1>
+          </div>
+          {repos.error && !repos.data && <p className="banner banner-error">{repos.error}</p>}
+          {repos.data && <DeprecatedList views={deprecated} onChanged={repos.reload} />}
+        </div>
+        {adding && repos.data && <AddRepoModal categories={categories} initialCategory={null} onClose={onCloseAdd} />}
+      </div>
+    )
+  }
 
   return (
     <div className="home">
-      {repos.data && <CategorySidebar categories={categories} views={repos.data.repos} selected={categoryId} onChanged={repos.reload} />}
+      {repos.data && <CategorySidebar categories={categories} views={tracked} deprecatedCount={deprecated.length} tab={tab} onChanged={repos.reload} />}
       <div className="page">
         <div className="home-head">
           <h1 className="page-title">{category ? category.name : 'Tous mes projets'}</h1>
@@ -386,6 +490,7 @@ export function HomeScreen({ categoryId, adding, onCloseAdd, onAdd }: { category
                 </a>
                 <PendingPullRequests repo={view.repo} />
                 <RepoStatus view={view} />
+                <DeprecateButton repoId={view.repo.id} onDone={repos.reload} />
                 <Icon name="chevron-right" className="row-chevron" />
               </div>
             ))}

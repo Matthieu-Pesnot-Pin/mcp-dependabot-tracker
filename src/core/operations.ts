@@ -26,7 +26,7 @@ import {
   type AuditedVulnerability,
   type Lockfile,
 } from "./npm-audit.js";
-import { isActive, type Store } from "./store.js";
+import { assertNotDeprecated, isActive, type Store } from "./store.js";
 
 /** Accès aux données et à GitHub pour exécuter les opérations. */
 export interface OperationContext {
@@ -438,10 +438,12 @@ function inBackground(ctx: OperationContext, id: string, run: Promise<Operation>
 /**
  * Lance une correction depuis la GUI : clone, audit et `npm audit fix` s'exécutent
  * en arrière-plan, puis l'opération attend la décision sur `--force` ou le push.
+ * Refusé sur un dépôt déprécié.
  */
 export function startUserFix(ctx: OperationContext, repoId: string): Operation {
   ctx.githubConfig();
   const repo = ctx.store.getRepo(repoId);
+  assertNotDeprecated(repo);
   const operation = ctx.store.createOperation(newOperation(repo, "fix", "user"));
   inBackground(
     ctx,
@@ -465,11 +467,12 @@ export function startUserFix(ctx: OperationContext, repoId: string): Operation {
 /**
  * Audit de la branche par défaut, celle que Dependabot analyse, lancé par
  * l'utilisateur et attendu jusqu'à sa fin. Refusé si une opération est en
- * cours sur le dépôt.
+ * cours sur le dépôt, ou s'il est déprécié.
  */
 export async function runDefaultBranchAudit(ctx: OperationContext, repoId: string): Promise<Operation> {
   ctx.githubConfig();
   const repo = ctx.store.getRepo(repoId);
+  assertNotDeprecated(repo);
   const operation = ctx.store.createOperation({ ...newOperation(repo, "audit", "user"), baseBranch: repo.defaultBranch });
   return execute(ctx, operation.id, async (runner) => {
     await cloneStep(runner);
@@ -534,11 +537,12 @@ export function cancelOperation(ctx: OperationContext, id: string): Operation {
 /**
  * Opération menée par l'agent d'un bout à l'autre, attendue jusqu'à sa fin :
  * `audit` s'arrête après `npm audit` ; `fix` enchaîne `npm audit fix`, puis
- * `--force` et le push selon `plan`.
+ * `--force` et le push selon `plan`. Refusé sur un dépôt déprécié.
  */
 export async function runAgentOperation(ctx: OperationContext, repoId: string, kind: OperationKind, plan: AgentPlan): Promise<Operation> {
   ctx.githubConfig();
   const repo = ctx.store.getRepo(repoId);
+  assertNotDeprecated(repo);
   const operation = ctx.store.createOperation({ ...newOperation(repo, kind, "agent"), commitMessage: plan.commitMessage });
   return execute(ctx, operation.id, async (runner) => {
     await cloneStep(runner);

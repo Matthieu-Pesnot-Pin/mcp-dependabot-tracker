@@ -77,7 +77,9 @@ export type Category = z.infer<typeof CategorySchema>;
  * la branche que les opérations clonent et vers laquelle la pull request est ouverte ;
  * `categoryId` est sa catégorie, null s'il n'est rangé dans aucune ;
  * `handledAlerts` les alertes qu'il a marquées corrigées à la main ;
- * `pullRequests` les pull requests du tracker encore ouvertes à la dernière lecture.
+ * `pullRequests` les pull requests du tracker encore ouvertes à la dernière lecture ;
+ * `deprecatedAt` la date à laquelle il a été marqué déprécié, null sinon : un
+ * dépôt déprécié n'est plus synchronisé ni audité.
  */
 export const RepoSchema = z.object({
   id: z.string(),
@@ -93,6 +95,7 @@ export const RepoSchema = z.object({
   pullRequests: z.array(PullRequestSchema),
   syncedAt: z.string().nullable(),
   syncError: z.string().nullable(),
+  deprecatedAt: z.string().nullable(),
 });
 
 export type Repo = z.infer<typeof RepoSchema>;

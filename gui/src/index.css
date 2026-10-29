@@ -484,6 +484,46 @@ code {
   color: var(--faint);
 }
 
+/* Bouton discret d'une ligne liée, mis en relief au survol de la ligne. */
+.row-action {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-right: -8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--faint);
+}
+
+.row:hover .row-action {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--text-soft);
+}
+
+.row .row-action:hover {
+  border-color: var(--idle);
+  color: var(--text);
+}
+
+.row-button.button {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.deprecated-title {
+  color: var(--muted);
+}
+
 .status {
   display: inline-flex;
   align-items: center;
@@ -1289,6 +1329,18 @@ code {
 
 .side-item.is-active .pill-pr {
   background: #2a3160;
+}
+
+.pill-neutral {
+  min-width: 28px;
+  padding: 0 6px;
+  background: var(--surface-raised);
+  color: var(--muted);
+}
+
+.side-item.is-active .pill-neutral {
+  background: #2a3160;
+  color: var(--accent-soft);
 }
 
 .picker-menu-narrow {

@@ -17,7 +17,7 @@ import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
 import { cancelOperation, decideForce, pushOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "./core/operations.js";
 import { AuditAll } from "./core/audit-all.js";
-import { SYNC_INTERVAL_MS, addRepository, listAddableRepositories, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
+import { SYNC_INTERVAL_MS, activeRepos, addRepository, deprecateRepository, listAddableRepositories, restoreRepository, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
   AddRepoBodySchema,
@@ -111,6 +111,7 @@ const INSTRUCTIONS = `mcp-dependabot-tracker follows the Dependabot alerts of Gi
 
 Concepts:
 - A **tracked repository** is a GitHub repository the user added in the GUI. Its open Dependabot alerts, and the pull requests the tracker opened that are not merged or closed yet, are read from GitHub and refreshed every 10 minutes.
+- A **deprecated repository** is one the user set aside in the GUI: it is neither synced nor audited, list_repositories leaves it out, and every tool refuses it until the user restores it.
 - **Rights**: for each repository, the user allows you to run npm audit (audit), npm audit fix (fix), npm audit fix --force (force) and to push the fixes (push). A tool refuses an action you are not allowed to do; only the user can change the rights.
 - The **analysed branch** of a repository is chosen by the user in the GUI (the default branch unless changed). Dependabot alerts always describe the default branch; npm audit describes the analysed branch.
 - An **operation** runs in a temporary clone of the analysed branch, deleted at the end: npm audit in every directory that holds a package-lock.json, then npm audit fix with --package-lock-only and --ignore-scripts (lockfiles only, no install, no scripts), optionally --force, then a commit on a new branch fix/npm-audit-<date>-<time> and a pull request to the analysed branch.
@@ -183,7 +184,7 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
     case "START_AUDIT_ALL":
       readGitHubConfig();
       store.failOrphanedOperations();
-      return { auditAll: auditAll.start(store.listRepos().map((repo) => repo.id)) } satisfies AuditAllResponse;
+      return { auditAll: auditAll.start(activeRepos(store).map((repo) => repo.id)) } satisfies AuditAllResponse;
 
     case "LIST_ADDABLE_REPOS":
       return { repositories: await listAddableRepositories(store, readGitHubConfig()) } satisfies AddableReposResponse;
@@ -201,6 +202,12 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
     case "REMOVE_REPO":
       store.removeRepo(parseRequest(RepoRequestSchema, msg.data).repoId);
       return { removed: true };
+
+    case "DEPRECATE_REPO":
+      return repoView(store, deprecateRepository(store, parseRequest(RepoRequestSchema, msg.data).repoId));
+
+    case "RESTORE_REPO":
+      return repoView(store, await restoreRepository(store, readGitHubConfig(), parseRequest(RepoRequestSchema, msg.data).repoId));
 
     case "SET_RIGHTS": {
       const { repoId } = parseRequest(RepoRequestSchema, msg.data);
@@ -388,7 +395,7 @@ const TOOLS = [
   {
     name: "list_repositories",
     description:
-      "List the tracked repositories with their category, their analysed branch, their open Dependabot alerts by severity, the time of the last sync, the rights the user gave you (audit, fix, force, push), the pull requests the tracker opened that are still open, and the operation in progress. Start here.",
+      "List the tracked repositories that are not deprecated, with their category, their analysed branch, their open Dependabot alerts by severity, the time of the last sync, the rights the user gave you (audit, fix, force, push), the pull requests the tracker opened that are still open, and the operation in progress. Start here.",
     inputSchema: {
       type: "object" as const,
       properties: { category: { type: "string", description: "Only list the repositories of this category, by name (case-insensitive). The user creates the categories in the GUI." } },

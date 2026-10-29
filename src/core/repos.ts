@@ -6,7 +6,7 @@ import { ConflictError, NotFoundError } from "./errors.js";
 import { GitHubClient, type OpenPullRequest } from "./github.js";
 import { isTrackerBranch } from "./operations.js";
 import { parseRepoRef } from "./repo-ref.js";
-import { isActive, type Store } from "./store.js";
+import { assertNotDeprecated, isActive, type Store } from "./store.js";
 
 /** Ancienneté au-delà de laquelle les alertes d'un dépôt sont relues sur GitHub. */
 export const SYNC_INTERVAL_MS = 10 * 60_000;
@@ -133,10 +133,11 @@ export function listRepoViews(store: Store): RepoView[] {
 /**
  * Relit les alertes Dependabot ouvertes du dépôt et ses pull requests ouvertes
  * par le tracker ; un échec est enregistré dans `syncError`, données précédentes
- * conservées.
+ * conservées. Refusé sur un dépôt déprécié.
  */
 export async function syncRepository(store: Store, config: GitHubConfig, repoId: string): Promise<Repo> {
   const repo = store.getRepo(repoId);
+  assertNotDeprecated(repo);
   const github = new GitHubClient(config);
   try {
     const [alerts, pulls] = await Promise.all([github.listOpenAlerts(repo.owner, repo.name), github.listOpenPullRequests(repo.owner, repo.name)]);
@@ -154,9 +155,27 @@ export async function syncRepository(store: Store, config: GitHubConfig, repoId:
   }
 }
 
-/** Relit tout de suite, en parallèle, les alertes et les pull requests de chaque dépôt suivi. */
+/** Dépôts suivis qui ne sont pas dépréciés. */
+export function activeRepos(store: Store): Repo[] {
+  return store.listRepos().filter((repo) => repo.deprecatedAt === null);
+}
+
+/** Relit tout de suite, en parallèle, les alertes et les pull requests de chaque dépôt suivi non déprécié. */
 export async function syncAllRepositories(store: Store, config: GitHubConfig): Promise<void> {
-  await Promise.all(store.listRepos().map((repo) => syncRepository(store, config, repo.id)));
+  await Promise.all(activeRepos(store).map((repo) => syncRepository(store, config, repo.id)));
+}
+
+/** Marque le dépôt déprécié ; sans effet s'il l'est déjà, refusé pendant une opération en cours. */
+export function deprecateRepository(store: Store, repoId: string): Repo {
+  const repo = store.getRepo(repoId);
+  if (store.activeOperation(repo.id)) throw new ConflictError(`An operation is in progress on ${repo.id}: wait for it to finish or cancel it before deprecating the repository.`);
+  return store.updateRepo(repo.id, (current) => (current.deprecatedAt === null ? { ...current, deprecatedAt: new Date().toISOString() } : current));
+}
+
+/** Retire la marque « déprécié », puis relit aussitôt les alertes du dépôt ; il retrouve sa catégorie. */
+export async function restoreRepository(store: Store, config: GitHubConfig, repoId: string): Promise<Repo> {
+  const repo = store.updateRepo(repoId, (current) => ({ ...current, deprecatedAt: null }));
+  return syncRepository(store, config, repo.id);
 }
 
 /** Suit un nouveau dépôt, rangé dans `categoryId`, avec l'audit pour seul droit de l'agent, puis lit ses alertes. */
@@ -179,6 +198,7 @@ export async function addRepository(store: Store, config: GitHubConfig, input: s
     pullRequests: [],
     syncedAt: null,
     syncError: null,
+    deprecatedAt: null,
   });
   return syncRepository(store, config, remote.fullName);
 }
@@ -229,7 +249,7 @@ export function setRights(store: Store, repoId: string, rights: Rights): Repo {
   return store.updateRepo(repoId, (repo) => ({ ...repo, rights }));
 }
 
-/** Dépôts jamais synchronisés, ou synchronisés il y a plus de `maxAgeMs`. */
+/** Dépôts non dépréciés jamais synchronisés, ou synchronisés il y a plus de `maxAgeMs`. */
 export function staleRepos(store: Store, maxAgeMs: number, at = Date.now()): Repo[] {
-  return store.listRepos().filter((repo) => repo.syncedAt === null || at - Date.parse(repo.syncedAt) > maxAgeMs);
+  return activeRepos(store).filter((repo) => repo.syncedAt === null || at - Date.parse(repo.syncedAt) > maxAgeMs);
 }

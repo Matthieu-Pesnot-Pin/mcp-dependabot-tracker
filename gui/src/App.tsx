@@ -7,7 +7,7 @@ import { TopBar } from './components/TopBar'
 import { HomeScreen } from './screens/HomeScreen'
 import { OperationScreen } from './screens/OperationScreen'
 import { RepoScreen } from './screens/RepoScreen'
-import { hrefs, useRoute } from './utils/router'
+import { hrefs, useRoute, type HomeTab } from './utils/router'
 
 export default function App() {
   const route = useRoute()
@@ -16,8 +16,9 @@ export default function App() {
   const closeAdd = useCallback(() => setAdding(false), [])
 
   let screen: ReactNode
-  if (route.name === 'home') {
-    screen = <HomeScreen categoryId={route.categoryId} adding={adding} onAdd={openAdd} onCloseAdd={closeAdd} />
+  if (route.name === 'home' || route.name === 'deprecated') {
+    const tab: HomeTab = route.name === 'deprecated' ? { kind: 'deprecated' } : { kind: 'category', categoryId: route.categoryId }
+    screen = <HomeScreen tab={tab} adding={adding} onAdd={openAdd} onCloseAdd={closeAdd} />
   } else if (route.name === 'repo') {
     screen = <RepoScreen key={route.repoId} repoId={route.repoId} />
   } else if (route.name === 'operation') {
@@ -33,7 +34,7 @@ export default function App() {
   }
 
   const action =
-    route.name === 'home' ? (
+    route.name === 'home' || route.name === 'deprecated' ? (
       <>
         <SyncButton />
         <AuditAllButton />

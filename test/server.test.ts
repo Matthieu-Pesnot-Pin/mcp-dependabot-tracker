@@ -213,6 +213,31 @@ test("the GUI syncs every repository now, with the pull requests the tracker ope
   assert.deepEqual(after.json.repos.find((view: { repo: { id: string } }) => view.repo.id === "octo/demo").repo.pullRequests, []);
 });
 
+test("the GUI deprecates a repository: no sync, no audit, hidden from the agent, until restored", async () => {
+  assert.equal((await call("POST", "repos", { repository: "octo/extra-2" })).status, 200);
+  const deprecated = await call("PUT", "repos/octo/extra-2/deprecated");
+  assert.equal(deprecated.status, 200, deprecated.json.error);
+  assert.ok(deprecated.json.repo.deprecatedAt);
+  const syncedAt = deprecated.json.repo.syncedAt;
+  assert.equal((await call("PUT", "repos/octo/missing/deprecated")).status, 404);
+
+  assert.equal((await call("POST", "sync")).status, 200);
+  assert.equal((await call("GET", "repos/octo/extra-2")).json.repo.syncedAt, syncedAt);
+  assert.ok(!(await call("GET", "github/repos")).json.repositories.includes("octo/extra-2"));
+  assert.doesNotMatch((await client.callTool("list_repositories")).text, /octo\/extra-2/);
+  const refused = await client.callTool("get_alerts", { repository: "octo/extra-2" });
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /octo\/extra-2 is deprecated/);
+  assert.equal((await call("POST", "repos/octo/extra-2/operations")).status, 409);
+
+  const restored = await call("DELETE", "repos/octo/extra-2/deprecated");
+  assert.equal(restored.status, 200, restored.json.error);
+  assert.equal(restored.json.repo.deprecatedAt, null);
+  assert.notEqual(restored.json.repo.syncedAt, syncedAt);
+  assert.match((await client.callTool("list_repositories")).text, /octo\/extra-2/);
+  assert.equal((await call("DELETE", "repos/octo/extra-2")).status, 200);
+});
+
 test("the GUI audits every repository; the agent sees what Dependabot misses", { skip }, async () => {
   assert.equal((await call("POST", "repos", { repository: "octo/quiet" })).status, 200);
   assert.deepEqual((await call("GET", "audit-all")).json, { auditAll: null });
