@@ -86,7 +86,12 @@ function gitAuthEnv(config: GitHubConfig): Record<string, string> {
   };
 }
 
-const NPM_ENV = { npm_config_update_notifier: "false", npm_config_fund: "false" };
+/**
+ * Environnement des commandes npm. `allow_remote` autorise le téléchargement des
+ * archives de paquets à `bundleDependencies` (ex. `@tailwindcss/oxide-wasm32-wasi`),
+ * que npm 12 classe en dépendances distantes avec `--package-lock-only`.
+ */
+const NPM_ENV = { npm_config_update_notifier: "false", npm_config_fund: "false", npm_config_allow_remote: "all" };
 
 /** Sous-commande git d'une liste d'arguments, après les options `-c clé=valeur`. */
 function subcommand(args: string[]): string {
