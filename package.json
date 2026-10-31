@@ -1,6 +1,6 @@
 {
   "name": "@imenam/mcp-dependabot-tracker",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "MCP server and web GUI that track the Dependabot alerts of GitHub repositories and fix their npm vulnerabilities in a temporary clone: npm audit, audit fix, audit fix --force, then a branch and a pull request.",
   "main": "dist/src/index.js",
   "scripts": {
