@@ -1,5 +1,6 @@
 import type { AddableReposResponse, AppConfig, AuditAllResponse, BranchesResponse, CategoriesResponse, OperationResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
 import type { Category, Rights } from '@shared/schemas/model.schema'
+import type { SaveSettingsBody, SettingsView } from '@shared/schemas/settings.schema'
 
 /** Erreur HTTP de l'API ; `status` distingue un conflit (409) des autres échecs. */
 export class ApiError extends Error {
@@ -79,4 +80,7 @@ export const api = {
   decideForce: (id: string, apply: boolean) => send<OperationResponse>('POST', `${operationPath(id)}/force`, { apply }),
   push: (id: string, commitMessage: string) => send<OperationResponse>('POST', `${operationPath(id)}/push`, { commitMessage }),
   cancel: (id: string) => send<OperationResponse>('POST', `${operationPath(id)}/cancel`),
+  getSettings: () => request<SettingsView>('settings'),
+  saveSettings: (body: SaveSettingsBody) => send<SettingsView>('PUT', 'settings', body),
+  testOrganizer: () => send<SettingsView>('POST', 'settings/organizer/test'),
 }

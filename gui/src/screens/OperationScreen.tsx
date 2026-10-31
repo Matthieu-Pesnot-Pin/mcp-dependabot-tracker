@@ -1,4 +1,4 @@
-import type { Operation, StepName, StepState, Vulnerability } from '@shared/schemas/model.schema'
+import type { Analysis, AnalysisReport, Operation, StepName, StepState, Vulnerability } from '@shared/schemas/model.schema'
 import { ACTIVE_STATUSES } from '@shared/schemas/model.schema'
 import { useState, type ReactNode } from 'react'
 import { Icon, type IconName } from '../components/Icon'
@@ -15,6 +15,7 @@ const STEP_LABELS: Record<StepName, { text: string; mono: boolean }> = {
   clone: { text: 'Cloner le dépôt', mono: false },
   audit: { text: 'npm audit', mono: true },
   fix: { text: 'npm audit fix', mono: true },
+  analysis: { text: 'Analyse par Claude', mono: false },
   force: { text: 'npm audit fix --force', mono: true },
   push: { text: 'Commit et push', mono: false },
 }
@@ -64,9 +65,16 @@ function skippedReason(operation: Operation, step: StepName): string {
   return 'ignorée'
 }
 
+/** Durée d'une analyse en cours et tours écoulés : `2 min · 14 tours`. */
+function analysisProgress(analysis: Analysis): string {
+  const minutes = Math.floor((Date.now() - Date.parse(analysis.startedAt)) / 60_000)
+  return `${minutes < 1 ? "moins d'une minute" : `${minutes} min`} · ${plural(analysis.turns, 'tour')}`
+}
+
 /** Résumé d'une étape terminée, aligné à droite de sa ligne. */
 function stepResult(operation: Operation, step: StepName): ReactNode {
   const state = operation.steps[step]
+  if (step === 'analysis' && state === 'running' && operation.analysis) return analysisProgress(operation.analysis)
   if (state === 'skipped') return skippedReason(operation, step)
   if (state !== 'done') return null
   const { initial, afterFix, afterForce } = operation.counts
@@ -77,6 +85,13 @@ function stepResult(operation: Operation, step: StepName): ReactNode {
       return fixedText(initial, afterFix)
     case 'force':
       return fixedText(afterFix, afterForce)
+    case 'analysis':
+      return operation.analysis?.task ? (
+        <a className="link task-link" href={operation.analysis.task.url} target="_blank" rel="noreferrer">
+          Tâche « {operation.analysis.task.title} »
+          <Icon name="external-link" size={14} />
+        </a>
+      ) : null
     case 'push':
       return operation.pullRequest ? (
         <a className="link" href={operation.pullRequest.url} target="_blank" rel="noreferrer">
@@ -101,10 +116,50 @@ function ChangesList({ operation }: { operation: Operation }) {
   )
 }
 
-/** Décision sur `npm audit fix --force` : les montées majeures en jeu, appliquer ou passer. */
+/** Dernières actions de Claude pendant l'analyse, la plus récente en clair. */
+function AnalysisActivity({ analysis }: { analysis: Analysis }) {
+  return (
+    <div className="step-body">
+      <ul className="activity mono">
+        {analysis.activity.map((line, index) => (
+          <li key={`${index}-${line}`} className={index === analysis.activity.length - 1 ? 'activity-last' : undefined}>
+            {line}
+          </li>
+        ))}
+      </ul>
+      <p className="hint">Le rapport et la tâche Organizer arrivent à la fin de l'analyse.</p>
+    </div>
+  )
+}
+
+/** Avis de Claude sur `--force`, et ce qu'il juge urgent de corriger à la main. */
+function ClaudeVerdict({ report }: { report: AnalysisReport }) {
+  return (
+    <div className="verdict">
+      <p className="verdict-title">
+        <Icon name="sparkles" size={14} />
+        {report.force.recommended ? 'Claude recommande le --force' : 'Claude déconseille le --force'}
+      </p>
+      <p className="verdict-text">{report.force.reason}</p>
+      {report.urgent.length > 0 && (
+        <ul className="verdict-urgent">
+          {report.urgent.map((item) => (
+            <li key={item.package}>
+              <span className="mono">{item.package}</span> — {item.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** Décision sur `npm audit fix --force` : les montées majeures en jeu, l'avis de Claude s'il a analysé, appliquer ou passer. */
 function ForceDecision({ operation, onDone }: { operation: Operation; onDone: () => void }) {
   const [busy, setBusy] = useState(false)
   const count = operation.forceCandidates.reduce((total, candidate) => total + candidate.vulnerabilities, 0)
+  const report = operation.analysis?.report ?? null
+  const skipFirst = report !== null && !report.force.recommended
 
   async function decide(apply: boolean) {
     setBusy(true)
@@ -130,11 +185,12 @@ function ForceDecision({ operation, onDone }: { operation: Operation; onDone: ()
           </li>
         ))}
       </ul>
-      <div className="step-actions">
-        <button type="button" className="button button-primary" disabled={busy} onClick={() => void decide(true)}>
+      {report && <ClaudeVerdict report={report} />}
+      <div className={`step-actions${skipFirst ? ' step-actions-reversed' : ''}`}>
+        <button type="button" className={`button ${skipFirst ? 'button-secondary' : 'button-primary'}`} disabled={busy} onClick={() => void decide(true)}>
           Appliquer --force
         </button>
-        <button type="button" className="button button-secondary" disabled={busy} onClick={() => void decide(false)}>
+        <button type="button" className={`button ${skipFirst ? 'button-primary' : 'button-secondary'}`} disabled={busy} onClick={() => void decide(false)}>
           Passer
         </button>
       </div>
@@ -201,7 +257,8 @@ function StepRow({ operation, step, onDone }: { operation: Operation; step: Step
   const [showUnfixable, setShowUnfixable] = useState(false)
   const state = operation.steps[step]
   const waitingHere = (operation.status === 'waiting_force' && step === 'force') || (operation.status === 'waiting_push' && step === 'push')
-  const failedHere = state === 'failed' && operation.error
+  const failure = step === 'analysis' ? (operation.analysis?.error ?? null) : operation.error
+  const failedHere = state === 'failed' && failure
   const label = STEP_LABELS[step]
   const icon: IconName = waitingHere ? (step === 'force' ? 'circle-alert' : 'circle-dot') : STEP_ICONS[state]
   const withoutFix = lastAuditedStep(operation) === step ? unfixable(operation) : []
@@ -224,9 +281,11 @@ function StepRow({ operation, step, onDone }: { operation: Operation; step: Step
         </span>
       </div>
       {showUnfixable && withoutFix.length > 0 && <UnfixableList vulnerabilities={withoutFix} />}
+      {step === 'analysis' && state === 'running' && operation.analysis && <AnalysisActivity analysis={operation.analysis} />}
+      {step === 'analysis' && state === 'done' && operation.analysis?.report && <p className="step-body hint">{operation.analysis.report.summary}</p>}
       {operation.status === 'waiting_force' && step === 'force' && <ForceDecision operation={operation} onDone={onDone} />}
       {operation.status === 'waiting_push' && step === 'push' && <PushForm key={operation.id} operation={operation} onDone={onDone} />}
-      {failedHere && <p className="step-body error-text pre">{operation.error}</p>}
+      {failedHere && <p className="step-body error-text pre">{failure}</p>}
     </div>
   )
 }
@@ -250,7 +309,8 @@ export function OperationScreen({ repoId, operationId }: { repoId: string; opera
 
   const name = repoId.split('/')[1]
   const suffix = STATUS_SUFFIX[operation.status]
-  const steps: StepName[] = operation.kind === 'audit' ? ['clone', 'audit'] : ['clone', 'audit', 'fix', 'force', 'push']
+  const steps: StepName[] =
+    operation.kind === 'audit' ? ['clone', 'audit'] : ['clone', 'audit', 'fix', ...(operation.analysis ? (['analysis'] as const) : []), 'force', 'push']
 
   async function cancel() {
     try {

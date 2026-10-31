@@ -12,6 +12,9 @@ import {
   type StepName,
   type StepState,
 } from "../../shared/schemas/model.schema.js";
+import type { Settings } from "../../shared/schemas/settings.schema.js";
+import { analyseVulnerabilities, auditFacts } from "./analysis.js";
+import type { ClaudeRuntime } from "./claude.js";
 import { CommandAbortedError, runCommand, tail, type CommandResult } from "./commands.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, TrackerError } from "./errors.js";
@@ -37,6 +40,10 @@ export interface OperationContext {
   cloneDir: () => string;
   /** Journalise une erreur d'une exécution en arrière-plan qui n'a pas pu être enregistrée dans l'opération. */
   logError: (message: string) => void;
+  /** Réglages de l'analyse par Claude, relus à chaque correction. */
+  settings: () => Settings;
+  /** Commande et dossier de configuration de Claude Code. */
+  claude: ClaudeRuntime;
 }
 
 /** Choix de l'agent pour une opération qu'il mène d'un bout à l'autre. */
@@ -57,6 +64,9 @@ const CLONE_DIR = "repo";
 
 /** Paquets listés dans le corps de la pull request. */
 const MAX_PR_CHANGES = 60;
+
+/** Dernières actions de Claude gardées dans l'opération pendant l'analyse. */
+const ANALYSIS_ACTIVITY = 3;
 
 function now(): string {
   return new Date().toISOString();
@@ -114,7 +124,7 @@ function newOperation(repo: Repo, kind: OperationKind, origin: Origin): Operatio
     workDir: null,
     baseBranch: repo.branch,
     cancelRequested: false,
-    steps: { clone: "pending", audit: "pending", fix: "pending", force: "pending", push: "pending" },
+    steps: { clone: "pending", audit: "pending", fix: "pending", analysis: "pending", force: "pending", push: "pending" },
     projects: [],
     counts: { initial: null, afterFix: null, afterForce: null },
     found: [],
@@ -124,6 +134,7 @@ function newOperation(repo: Repo, kind: OperationKind, origin: Origin): Operatio
     commitMessage: DEFAULT_COMMIT_MESSAGE,
     branch: null,
     pullRequest: null,
+    analysis: null,
     error: null,
     log: [],
   };
@@ -131,6 +142,9 @@ function newOperation(repo: Repo, kind: OperationKind, origin: Origin): Operatio
 
 /** Exécution des étapes d'une opération, avec son signal d'annulation. */
 class Runner {
+  /** Dernier rapport `npm audit --json` de chaque projet, lu par l'analyse. */
+  readonly auditReports = new Map<string, any>();
+
   constructor(
     private readonly ctx: OperationContext,
     readonly id: string,
@@ -236,7 +250,9 @@ async function cloneStep(runner: Runner): Promise<void> {
 async function auditAll(runner: Runner, count: keyof Operation["counts"]): Promise<AuditedVulnerability[]> {
   const vulnerabilities: AuditedVulnerability[] = [];
   for (const project of runner.operation.projects) {
-    vulnerabilities.push(...parseAuditReport(await runner.npm(project, ["audit", "--json"]), project));
+    const report = await runner.npm(project, ["audit", "--json"]);
+    runner.auditReports.set(project, report);
+    vulnerabilities.push(...parseAuditReport(report, project));
   }
   runner.log(`${vulnerabilities.length} vulnerabilit${vulnerabilities.length === 1 ? "y" : "ies"}`);
   runner.update((operation) => ({
@@ -279,6 +295,55 @@ async function fixStep(runner: Runner, vulnerabilities: AuditedVulnerability[]):
   return remaining;
 }
 
+/**
+ * Analyse par Claude des vulnérabilités restantes, quand l'analyse automatique
+ * est activée ; passée sinon, ou s'il ne reste rien. Son échec est enregistré
+ * dans l'analyse et laisse l'opération se poursuivre ; seule une annulation
+ * l'interrompt.
+ */
+async function analysisStep(runner: Runner, ctx: OperationContext): Promise<void> {
+  const settings = ctx.settings();
+  if (!settings.analysis.auto || runner.operation.remaining.length === 0) {
+    runner.setStep("analysis", "skipped");
+    return;
+  }
+  runner.setStep("analysis", "running");
+  runner.update((operation) => ({
+    ...operation,
+    analysis: { startedAt: now(), endedAt: null, turns: 0, activity: [], report: null, task: null, error: null },
+  }));
+  const analysed = (fn: (analysis: NonNullable<Operation["analysis"]>) => NonNullable<Operation["analysis"]>) =>
+    runner.update((operation) => ({ ...operation, analysis: operation.analysis && fn(operation.analysis) }));
+
+  try {
+    const operation = runner.operation;
+    const { report, task } = await analyseVulnerabilities({
+      repoId: operation.repoId,
+      branch: operation.baseBranch,
+      cwd: runner.repoDir,
+      workDir: operation.workDir!,
+      facts: operation.projects.flatMap((project) => auditFacts(runner.auditReports.get(project), project)),
+      forceCandidates: operation.forceCandidates,
+      settings,
+      claude: ctx.claude,
+      signal: runner.signal,
+      onLine: (line, turns) => {
+        runner.log(`claude: ${line}`);
+        analysed((analysis) => ({ ...analysis, turns, activity: [...analysis.activity, line].slice(-ANALYSIS_ACTIVITY) }));
+      },
+    });
+    runner.log(`Organizer task ${task.key}: ${task.url}`);
+    analysed((analysis) => ({ ...analysis, endedAt: now(), report, task }));
+    runner.setStep("analysis", "done");
+  } catch (err: any) {
+    if (err instanceof CommandAbortedError || runner.signal.aborted) throw err;
+    const message = err?.message ?? String(err);
+    runner.log(`Analysis failed: ${message}`);
+    analysed((analysis) => ({ ...analysis, endedAt: now(), error: message }));
+    runner.setStep("analysis", "failed");
+  }
+}
+
 /** `npm audit fix --force` dans les projets qui ont une montée majeure à appliquer. */
 async function forceStep(runner: Runner): Promise<void> {
   runner.setStep("force", "running");
@@ -299,6 +364,7 @@ function pullRequestBody(operation: Operation): string {
     `- Vulnerabilities before: ${operation.counts.initial}`,
     `- Vulnerabilities after: ${after}`,
     `- \`npm audit fix --force\`: ${operation.steps.force === "done" ? "applied" : "not applied"}`,
+    ...(operation.analysis?.task ? [`- Remaining vulnerabilities analysed by Claude: organizer task ${operation.analysis.task.key}`] : []),
     "",
     `Updated packages (${operation.changes.length}):`,
     "",
@@ -436,9 +502,9 @@ function inBackground(ctx: OperationContext, id: string, run: Promise<Operation>
 // --- Entrées ---------------------------------------------------------------------
 
 /**
- * Lance une correction depuis la GUI : clone, audit et `npm audit fix` s'exécutent
- * en arrière-plan, puis l'opération attend la décision sur `--force` ou le push.
- * Refusé sur un dépôt déprécié.
+ * Lance une correction depuis la GUI : clone, audit, `npm audit fix` et
+ * l'analyse par Claude s'exécutent en arrière-plan, puis l'opération attend la
+ * décision sur `--force` ou le push. Refusé sur un dépôt déprécié.
  */
 export function startUserFix(ctx: OperationContext, repoId: string): Operation {
   ctx.githubConfig();
@@ -453,6 +519,7 @@ export function startUserFix(ctx: OperationContext, repoId: string): Operation {
       const vulnerabilities = await auditStep(runner);
       if (vulnerabilities.length === 0) return finish(runner);
       await fixStep(runner, vulnerabilities);
+      await analysisStep(runner, ctx);
       if (runner.operation.forceCandidates.length > 0) {
         runner.update((current) => ({ ...current, status: "waiting_force" }));
         return;
@@ -549,6 +616,7 @@ export async function runAgentOperation(ctx: OperationContext, repoId: string, k
     const vulnerabilities = await auditStep(runner);
     if (kind === "audit" || vulnerabilities.length === 0) return finish(runner);
     await fixStep(runner, vulnerabilities);
+    runner.setStep("analysis", "skipped");
     if (plan.force && runner.operation.forceCandidates.length > 0) {
       await forceStep(runner);
     } else {

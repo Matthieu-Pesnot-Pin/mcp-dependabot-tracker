@@ -37,6 +37,7 @@
     "README.md"
   ],
   "dependencies": {
+    "@anthropic-ai/claude-code": "^2.1.316",
     "@hono/node-server": "^2.1.5",
     "@imenam/mcp-gui-interface": "^1.0.14",
     "@modelcontextprotocol/sdk": "^1.32.2",

@@ -17,6 +17,11 @@ import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
 import { cancelOperation, decideForce, pushOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "./core/operations.js";
 import { AuditAll } from "./core/audit-all.js";
+import { refreshAnalysisTask } from "./core/analysis.js";
+import { checkClaudeToken, packagedClaudeCommand, type ClaudeRuntime } from "./core/claude.js";
+import { OrganizerClient } from "./core/organizer.js";
+import { readSettings, saveSettings, settingsView, testOrganizer, type SettingsChecks } from "./core/settings.js";
+import { SaveSettingsBodySchema } from "../shared/schemas/settings.schema.js";
 import { SYNC_INTERVAL_MS, activeRepos, addRepository, deprecateRepository, listAddableRepositories, restoreRepository, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
@@ -93,11 +98,21 @@ try {
 const dataDir = resolveDataDir();
 const store = new Store(dataDir);
 
+/** Claude Code du paquet, configuré dans `<données>/claude`. */
+const claude: ClaudeRuntime = { command: packagedClaudeCommand(), home: path.join(dataDir, "claude") };
+
+const settingsChecks: SettingsChecks = {
+  organizer: (connection) => new OrganizerClient(connection).space(),
+  claudeToken: (token) => checkClaudeToken(claude, token),
+};
+
 const operations: OperationContext = {
   store,
   githubConfig: readGitHubConfig,
   cloneDir: resolveCloneDir,
   logError: (message) => logger.error(message),
+  settings: () => readSettings(dataDir),
+  claude,
 };
 
 /** Série « Auditer tout » de la GUI servie par ce processus. */
@@ -278,6 +293,15 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
     case "CANCEL_OPERATION":
       return { operation: cancelOperation(operations, parseRequest(OperationRequestSchema, msg.data).operationId) };
 
+    case "GET_SETTINGS":
+      return settingsView(readSettings(dataDir));
+
+    case "SAVE_SETTINGS":
+      return saveSettings(dataDir, parseRequest(SaveSettingsBodySchema, msg.data?.body), settingsChecks);
+
+    case "TEST_ORGANIZER":
+      return testOrganizer(dataDir, settingsChecks);
+
     default:
       throw new Error(`GUI request ${msg.type} has no handler.`);
   }
@@ -370,7 +394,10 @@ async function reconnectGui(args: Record<string, unknown>): Promise<ToolResult> 
 const SYNC_CHECK_MS = 60_000;
 let syncing = false;
 
-/** Relit les alertes des dépôts dont la dernière lecture date de plus de 10 minutes. */
+/**
+ * Relit les alertes des dépôts dont la dernière lecture date de plus de 10
+ * minutes, et le statut de la tâche organizer de leur dernière analyse.
+ */
 async function syncStaleRepos() {
   if (syncing || !githubConfigured()) return;
   syncing = true;
@@ -379,6 +406,9 @@ async function syncStaleRepos() {
     for (const repo of staleRepos(store, SYNC_INTERVAL_MS)) {
       const synced = await syncRepository(store, config, repo.id);
       if (synced.syncError) logger.warn(`Dependabot alerts of ${repo.id} not synced: ${synced.syncError}`);
+      await refreshAnalysisTask(store, readSettings(dataDir), repo.id).catch((err: any) =>
+        logger.warn(`Organizer task of ${repo.id} not refreshed: ${err?.message ?? err}`)
+      );
     }
   } catch (err: any) {
     logger.error(`Alert sync failed: ${err?.stack ?? err}`);

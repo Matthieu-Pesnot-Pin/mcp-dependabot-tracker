@@ -232,6 +232,84 @@ export class FakeGitHub {
   }
 }
 
+/** Faux Claude Code des tests : son comportement dépend du token reçu (voir fake-claude.ts). */
+export const FAKE_CLAUDE = [process.execPath, path.resolve(__dirname, "fake-claude.js")];
+
+export interface FakeTask {
+  id: string;
+  key: string;
+  title: string;
+  description: string;
+  status: "todo" | "doing" | "review" | "done";
+  assigneeIds: string[];
+  tags: string[];
+}
+
+/**
+ * Faux site organizer : l'API agent en lecture (`context`, `tasks/<clé>`) avec
+ * l'enveloppe `{ text, data }`, et des écritures simplifiées (création, tags,
+ * assignations) qu'appelle le faux Claude.
+ */
+export class FakeOrganizer {
+  readonly token = "org-token";
+  readonly owner = { id: "u-owner", name: "Matthieu Pin", email: "owner@example.com" };
+  readonly tasks: FakeTask[] = [];
+  private server: http.Server | null = null;
+  url = "";
+
+  async start(): Promise<void> {
+    this.server = http.createServer((req, res) => void this.handle(req, res));
+    await new Promise<void>((resolve) => this.server!.listen(0, "127.0.0.1", resolve));
+    this.url = `http://127.0.0.1:${(this.server!.address() as net.AddressInfo).port}`;
+  }
+
+  async stop(): Promise<void> {
+    await new Promise<void>((resolve) => this.server?.close(() => resolve()) ?? resolve());
+  }
+
+  private send(res: http.ServerResponse, status: number, body: unknown) {
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(body));
+  }
+
+  private find(ref: string): FakeTask | undefined {
+    return this.tasks.find((task) => task.key === ref || task.id === ref);
+  }
+
+  private async handle(req: http.IncomingMessage, res: http.ServerResponse) {
+    if (req.headers.authorization !== `Bearer ${this.token}`) return this.send(res, 401, { error: "Invalid agent token." });
+    const parts = new URL(req.url ?? "/", this.url).pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    if (parts[0] !== "api" || parts[1] !== "agent") return this.send(res, 404, { error: "Not found." });
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    const body = chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString("utf-8")) : null;
+    const [, , resource, ref, sub] = parts;
+
+    if (req.method === "GET" && resource === "context") {
+      return this.send(res, 200, {
+        text: "context",
+        data: {
+          space: { id: "s-1", name: "Maintenance", kind: "shared", keyPrefix: "MNT" },
+          members: [{ ...this.owner, role: "owner" }, { id: "u-other", name: "Other", email: "other@example.com", role: "member" }],
+          tasks: [],
+          ideas: [],
+        },
+      });
+    }
+    if (resource !== "tasks") return this.send(res, 404, { error: "Not found." });
+    if (req.method === "POST" && ref === undefined) {
+      const task: FakeTask = { id: `t-${this.tasks.length + 1}`, key: `MNT-${this.tasks.length + 1}`, title: body.title, description: body.description ?? "", status: "todo", assigneeIds: [], tags: [] };
+      this.tasks.push(task);
+      return this.send(res, 200, { text: "created", data: { task } });
+    }
+    const task = this.find(ref);
+    if (!task) return this.send(res, 404, { error: `Task ${ref} not found.` });
+    if (req.method === "PUT" && sub === "assignees") task.assigneeIds = body.assignees;
+    if (req.method === "PUT" && sub === "tags") task.tags = body.tags;
+    return this.send(res, 200, { text: "task", data: { task } });
+  }
+}
+
 /**
  * Client JSON-RPC minimal sur stdio : lance le serveur MCP compilé avec
  * l'environnement fourni et associe chaque réponse à sa requête par `id`.

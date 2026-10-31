@@ -8,6 +8,7 @@ import { fileURLToPath } from "url";
 
 import { IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import { AddRepoBodySchema, CategoryBodySchema, ForceBodySchema, PushBodySchema, SetBranchBodySchema, SetCategoryBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
+import { SaveSettingsBodySchema } from "../shared/schemas/settings.schema.js";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { z } from "zod";
@@ -315,6 +316,16 @@ app.post("/api/operations/:id/push", async (c) => {
 });
 
 app.post("/api/operations/:id/cancel", (c) => forward(c, "CANCEL_OPERATION", { operationId: c.req.param("id") }));
+
+app.get("/api/settings", (c) => forward(c, "GET_SETTINGS"));
+
+app.put("/api/settings", async (c) => {
+  const read = await readBody(c, SaveSettingsBodySchema);
+  if ("response" in read) return read.response;
+  return forward(c, "SAVE_SETTINGS", { body: read.body });
+});
+
+app.post("/api/settings/organizer/test", (c) => forward(c, "TEST_ORGANIZER"));
 
 /** Route d'API inconnue : 404 explicite plutôt que la page de la SPA. */
 app.all("/api/*", (c) => c.json({ error: `Unknown API route: ${c.req.method} ${c.req.path}` }, 404));

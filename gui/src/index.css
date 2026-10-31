@@ -1392,3 +1392,200 @@ code {
   color: var(--faint);
   pointer-events: none;
 }
+
+/* Réglages */
+
+.button-icon {
+  width: 36px;
+  padding: 0;
+}
+
+.settings-card {
+  margin-bottom: 28px;
+  padding: 0 20px;
+}
+
+.settings-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 344px;
+  gap: 16px;
+  padding: 18px 0 20px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.token-saved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-soft);
+}
+
+.token-saved .link {
+  font-size: 12px;
+}
+
+.settings-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.settings-status-top {
+  min-height: 52px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.claude-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 18px 0 20px;
+  list-style: none;
+  border-top: 1px solid var(--divider);
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.claude-steps li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--divider);
+  font-size: 11px;
+}
+
+.code-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 10px 0 12px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.code-chip svg {
+  color: var(--muted);
+}
+
+.code-chip:hover svg {
+  color: var(--text);
+}
+
+.claude-token-input {
+  padding-left: 34px;
+}
+
+.claude-token-input .input {
+  max-width: 520px;
+}
+
+.limits {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.number-input.input {
+  width: 56px;
+  height: 32px;
+  padding: 0 6px;
+  text-align: center;
+}
+
+.limits .muted + .number-input {
+  margin-left: 8px;
+}
+
+@media (max-width: 720px) {
+  .settings-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Analyse par Claude */
+
+.activity {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--faint);
+}
+
+.activity-last {
+  color: var(--muted);
+}
+
+.task-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.verdict {
+  margin-top: 14px;
+  padding: 13px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.verdict-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.verdict-title svg {
+  color: var(--accent-soft);
+}
+
+.verdict-text,
+.verdict-urgent {
+  margin: 8px 0 0 22px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.verdict-urgent {
+  padding: 0;
+  list-style: none;
+}
+
+.step-actions-reversed {
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+}

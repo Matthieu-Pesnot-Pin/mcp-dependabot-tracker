@@ -80,11 +80,16 @@ function normalizeReposFile(file: any): unknown {
 /**
  * Complète une opération écrite par une version antérieure : sans `found`, les
  * vulnérabilités du premier audit sont `remaining` tant qu'aucune correction
- * n'a suivi, et inconnues sinon.
+ * n'a suivi, et inconnues sinon ; sans étape d'analyse, l'analyse est passée.
  */
 function normalizeOperation(operation: any): unknown {
-  if (operation === null || typeof operation !== "object" || operation.found !== undefined) return operation;
-  return { ...operation, found: operation.counts?.afterFix === null ? operation.remaining : [] };
+  if (operation === null || typeof operation !== "object") return operation;
+  return {
+    ...operation,
+    found: operation.found ?? (operation.counts?.afterFix === null ? operation.remaining : []),
+    steps: operation.steps && typeof operation.steps === "object" ? { analysis: "skipped", ...operation.steps } : operation.steps,
+    analysis: operation.analysis ?? null,
+  };
 }
 
 function sameName(a: string, b: string): boolean {

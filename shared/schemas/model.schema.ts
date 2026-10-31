@@ -124,7 +124,7 @@ export type OperationStatus = (typeof OPERATION_STATUSES)[number];
 
 export const ACTIVE_STATUSES: readonly OperationStatus[] = ["running", "waiting_force", "waiting_push"];
 
-export const STEP_NAMES = ["clone", "audit", "fix", "force", "push"] as const;
+export const STEP_NAMES = ["clone", "audit", "fix", "analysis", "force", "push"] as const;
 
 export type StepName = (typeof STEP_NAMES)[number];
 
@@ -172,11 +172,51 @@ export const LogEntrySchema = z.object({ at: z.string(), text: z.string() });
 
 export type LogEntry = z.infer<typeof LogEntrySchema>;
 
+/** Rapport rendu par Claude à la fin d'une analyse : résumé, corrections urgentes à la main, avis sur `--force`. */
+export const AnalysisReportSchema = z.object({
+  summary: z.string(),
+  urgent: z.array(z.object({ package: z.string(), reason: z.string() })),
+  force: z.object({ recommended: z.boolean(), reason: z.string() }),
+});
+
+export type AnalysisReport = z.infer<typeof AnalysisReportSchema>;
+
+/** Statuts d'une tâche de l'organizer. */
+export const TASK_STATUSES = ["todo", "doing", "review", "done"] as const;
+
+/** Tâche créée dans l'organizer par une analyse ; `url` ouvre la tâche sur le site, `status` est relu à chaque synchronisation. */
+export const AnalysisTaskSchema = z.object({
+  key: z.string(),
+  title: z.string(),
+  url: z.string(),
+  status: z.enum(TASK_STATUSES),
+});
+
+export type AnalysisTask = z.infer<typeof AnalysisTaskSchema>;
+
+/**
+ * Analyse par Claude des vulnérabilités restantes après `npm audit fix`.
+ * `turns` et `activity` (dernières actions de Claude) suivent la session en
+ * cours ; `report` et `task` sont remplis à la fin, `error` en cas d'échec.
+ */
+export const AnalysisSchema = z.object({
+  startedAt: z.string(),
+  endedAt: z.string().nullable(),
+  turns: z.number().int(),
+  activity: z.array(z.string()),
+  report: AnalysisReportSchema.nullable(),
+  task: AnalysisTaskSchema.nullable(),
+  error: z.string().nullable(),
+});
+
+export type Analysis = z.infer<typeof AnalysisSchema>;
+
 /**
  * Opération d'audit ou de correction sur un clone temporaire. `workDir` est le
  * clone, présent tant que l'opération n'est pas terminée ; `pid` est le processus
  * qui exécute l'étape en cours. `found` liste les vulnérabilités du premier
- * audit, `remaining` celles qui restent après la dernière étape.
+ * audit, `remaining` celles qui restent après la dernière étape. `analysis` est
+ * l'analyse par Claude, null quand elle n'a pas été lancée.
  */
 export const OperationSchema = z.object({
   id: z.string(),
@@ -194,6 +234,7 @@ export const OperationSchema = z.object({
     clone: z.enum(STEP_STATES),
     audit: z.enum(STEP_STATES),
     fix: z.enum(STEP_STATES),
+    analysis: z.enum(STEP_STATES),
     force: z.enum(STEP_STATES),
     push: z.enum(STEP_STATES),
   }),
@@ -210,6 +251,7 @@ export const OperationSchema = z.object({
   commitMessage: z.string(),
   branch: z.string().nullable(),
   pullRequest: z.object({ number: z.number().int(), url: z.string() }).nullable(),
+  analysis: AnalysisSchema.nullable(),
   error: z.string().nullable(),
   log: z.array(LogEntrySchema),
 });

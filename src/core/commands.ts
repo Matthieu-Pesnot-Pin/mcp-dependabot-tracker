@@ -25,7 +25,7 @@ export class CommandAbortedError extends Error {
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 
 /** Arrête le processus et ses enfants : sous Windows, `npm` tourne dans un `cmd.exe` qui ne transmet pas le signal. */
-function killTree(pid: number): void {
+export function killTree(pid: number): void {
   if (process.platform === "win32") {
     spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
     return;

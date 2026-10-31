@@ -1,6 +1,7 @@
 import { fromNpmSeverity, pendingAlerts, worstOf } from "../../shared/alerts.js";
-import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type HandledAlert, type Operation, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
+import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type AnalysisTask, type HandledAlert, type Operation, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
 import type { AuditFindings, RepoView } from "../../shared/schemas/api.schema.js";
+import { latestAnalysed } from "./analysis.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, NotFoundError } from "./errors.js";
 import { GitHubClient, type OpenPullRequest } from "./github.js";
@@ -122,7 +123,14 @@ export function repoView(store: Store, repo: Repo): RepoView {
     cleanAuditAt: cleanAuditAt(repo, operations),
     auditFindings: auditFindings(repo, operations),
     unfixable: unfixablePackages(repo, operations),
+    analysisTask: openAnalysisTask(operations),
   };
+}
+
+/** Tâche organizer de la dernière analyse, tant qu'elle n'est pas terminée. `operations` va de la plus récente à la plus ancienne. */
+export function openAnalysisTask(operations: Operation[]): AnalysisTask | null {
+  const task = latestAnalysed(operations)?.analysis?.task ?? null;
+  return task && task.status !== "done" ? task : null;
 }
 
 export function listRepoViews(store: Store): RepoView[] {

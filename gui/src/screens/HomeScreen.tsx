@@ -97,6 +97,19 @@ function filteredOutMessage(onlyVulnerable: boolean, onlyPendingPr: boolean, inC
   return `Aucun dépôt vulnérable ${where}.`
 }
 
+/** Tâche organizer de la dernière analyse par Claude, tant qu'elle n'est pas terminée ; s'ouvre sur le site de l'organizer. */
+function AnalysisTaskNote({ view }: { view: RepoView }) {
+  const task = view.analysisTask
+  if (!task) return null
+  return (
+    <a className="pr-note" href={task.url} target="_blank" rel="noreferrer" title={task.title}>
+      <Icon name="list-checks" size={14} />
+      Tâche {task.key}
+      <Icon name="external-link" size={12} />
+    </a>
+  )
+}
+
 /**
  * État d'un dépôt en bout de ligne : une seule information, la plus utile. Des
  * alertes toutes corrigées à la main, ou un audit sans vulnérabilité plus
@@ -107,10 +120,11 @@ function filteredOutMessage(onlyVulnerable: boolean, onlyPendingPr: boolean, inC
 function RepoStatus({ view }: { view: RepoView }) {
   const { repo, activeOperation, cleanAuditAt, auditFindings, unfixable } = view
   if (activeOperation) {
+    const analysing = activeOperation.steps.analysis === 'running'
     return (
       <span className="status status-busy">
         <Icon name="loader-circle" className="spin" />
-        {activeOperation.kind === 'audit' ? 'Audit en cours' : 'Correction en cours'}
+        {analysing ? 'Analyse par Claude…' : activeOperation.kind === 'audit' ? 'Audit en cours' : 'Correction en cours'}
       </span>
     )
   }
@@ -489,6 +503,7 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
                   {view.repo.id}
                 </a>
                 <PendingPullRequests repo={view.repo} />
+                <AnalysisTaskNote view={view} />
                 <RepoStatus view={view} />
                 <DeprecateButton repoId={view.repo.id} onDone={repos.reload} />
                 <Icon name="chevron-right" className="row-chevron" />

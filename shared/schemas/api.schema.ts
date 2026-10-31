@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RightsSchema, type AlertSeverity, type Category, type Operation, type Repo } from "./model.schema.js";
+import { RightsSchema, type AlertSeverity, type AnalysisTask, type Category, type Operation, type Repo } from "./model.schema.js";
 
 /** Corps de `POST /api/repos` : `propriétaire/nom` ou lien GitHub, et la catégorie où le ranger (aucune par défaut). */
 export const AddRepoBodySchema = z.object({
@@ -70,7 +70,9 @@ export interface AuditFindings {
  * signale encore des alertes émises avant lui ; `auditFindings` ce qu'a trouvé
  * le dernier audit de la branche par défaut alors que Dependabot ne signale
  * aucune alerte ; `unfixable` les paquets pour lesquels le dernier audit n'a
- * trouvé aucune version corrigée, hors ceux marqués corrigés à la main.
+ * trouvé aucune version corrigée, hors ceux marqués corrigés à la main ;
+ * `analysisTask` la tâche organizer de la dernière analyse par Claude, tant
+ * qu'elle n'est pas terminée.
  */
 export interface RepoView {
   repo: Repo;
@@ -80,6 +82,7 @@ export interface RepoView {
   cleanAuditAt: string | null;
   auditFindings: AuditFindings | null;
   unfixable: string[];
+  analysisTask: AnalysisTask | null;
 }
 
 /**

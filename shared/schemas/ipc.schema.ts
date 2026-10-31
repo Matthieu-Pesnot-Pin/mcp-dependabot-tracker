@@ -49,6 +49,9 @@ export const GUI_REQUEST_TYPES = [
   "DECIDE_FORCE",
   "PUSH_OPERATION",
   "CANCEL_OPERATION",
+  "GET_SETTINGS",
+  "SAVE_SETTINGS",
+  "TEST_ORGANIZER",
 ] as const;
 
 export type GuiRequestType = (typeof GUI_REQUEST_TYPES)[number];
