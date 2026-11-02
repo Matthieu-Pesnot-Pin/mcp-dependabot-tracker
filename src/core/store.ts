@@ -312,6 +312,11 @@ export class Store {
     return parsed.data;
   }
 
+  /** Opérations de tous les dépôts, de la plus récente à la plus ancienne. */
+  listAllOperations(): Operation[] {
+    return this.readAllOperations();
+  }
+
   private readAllOperations(): Operation[] {
     const operations: Operation[] = [];
     for (const entry of fs.readdirSync(this.operationsDir)) {

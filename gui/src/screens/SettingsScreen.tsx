@@ -237,7 +237,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
 
 /** Réglages de l'analyse par Claude : connexion à l'organizer, token d'abonnement Claude, déclenchement et limites. */
 export function SettingsScreen() {
-  const polled = usePolling('settings', () => api.getSettings(), null)
+  const polled = usePolling('settings', () => api.getSettings(), null, { remember: false })
   const [saved, setSaved] = useState<SettingsView | null>(null)
   const view = saved ?? polled.data
 

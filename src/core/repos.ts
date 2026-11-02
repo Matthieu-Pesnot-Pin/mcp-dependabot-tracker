@@ -1,5 +1,5 @@
 import { fromNpmSeverity, pendingAlerts, worstOf } from "../../shared/alerts.js";
-import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type AnalysisTask, type HandledAlert, type Operation, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
+import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type AnalysisTask, type Category, type HandledAlert, type Operation, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
 import type { AuditFindings, RepoView } from "../../shared/schemas/api.schema.js";
 import { latestAnalysed } from "./analysis.js";
 import type { GitHubConfig } from "./config.js";
@@ -114,10 +114,14 @@ export function trackerPullRequests(repoId: string, pulls: OpenPullRequest[]): P
 }
 
 export function repoView(store: Store, repo: Repo): RepoView {
-  const operations = store.listOperations(repo.id);
+  return buildRepoView(repo, store.listOperations(repo.id), repo.categoryId === null ? null : store.getCategory(repo.categoryId));
+}
+
+/** Vue d'un dépôt à partir de ses opérations, de la plus récente à la plus ancienne, et de sa catégorie. */
+function buildRepoView(repo: Repo, operations: Operation[], category: Category | null): RepoView {
   return {
     repo: { ...repo, alerts: sortAlerts(repo.alerts) },
-    category: repo.categoryId === null ? null : store.getCategory(repo.categoryId),
+    category,
     activeOperation: operations.find(isActive) ?? null,
     latestOperation: operations[0] ?? null,
     cleanAuditAt: cleanAuditAt(repo, operations),
@@ -133,9 +137,22 @@ export function openAnalysisTask(operations: Operation[]): AnalysisTask | null {
   return task && task.status !== "done" ? task : null;
 }
 
+/** Vues de tous les dépôts suivis ; les dépôts, les catégories et les opérations sont lus une seule fois. */
 export function listRepoViews(store: Store): RepoView[] {
   store.failOrphanedOperations();
-  return sortRepos(store.listRepos().map((repo) => repoView(store, repo)));
+  const categories = new Map(store.listCategories().map((category) => [category.id, category]));
+  const operationsByRepo = new Map<string, Operation[]>();
+  for (const operation of store.listAllOperations()) {
+    const key = operation.repoId.toLowerCase();
+    operationsByRepo.set(key, [...(operationsByRepo.get(key) ?? []), operation]);
+  }
+  return sortRepos(
+    store.listRepos().map((repo) => {
+      const category = repo.categoryId === null ? null : categories.get(repo.categoryId);
+      if (category === undefined) throw new NotFoundError(`Category "${repo.categoryId}" does not exist.`);
+      return buildRepoView(repo, operationsByRepo.get(repo.id.toLowerCase()) ?? [], category);
+    })
+  );
 }
 
 /**
