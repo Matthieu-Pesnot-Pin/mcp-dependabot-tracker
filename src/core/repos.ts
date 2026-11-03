@@ -1,6 +1,6 @@
 import { alertsInScope, fromNpmSeverity, pendingAlerts, worstOf } from "../../shared/alerts.js";
 import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type AnalysisTask, type Category, type HandledAlert, type Operation, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
-import type { AuditFindings, CleanAudit, RepoView } from "../../shared/schemas/api.schema.js";
+import type { AuditFindings, CleanAudit, OperationSummary, RepoView } from "../../shared/schemas/api.schema.js";
 import { latestAnalysed } from "./analysis.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, NotFoundError } from "./errors.js";
@@ -114,6 +114,26 @@ export function trackerPullRequests(repoId: string, pulls: OpenPullRequest[]): P
     .filter((pull) => isTrackerBranch(pull.branch) && pull.headRepo?.toLowerCase() === repoId.toLowerCase())
     .sort((a, b) => a.number - b.number)
     .map(({ number, url, branch, createdAt }) => ({ number, url, branch, createdAt }));
+}
+
+/** Ligne de l'historique d'une opération. */
+export function operationSummary(operation: Operation): OperationSummary {
+  const { initial, afterFix, afterForce, afterRepair } = operation.counts;
+  return {
+    id: operation.id,
+    kind: operation.kind,
+    origin: operation.origin,
+    scope: operation.scope,
+    status: operation.status,
+    baseBranch: operation.baseBranch,
+    createdAt: operation.createdAt,
+    before: initial,
+    after: afterRepair ?? afterForce ?? afterFix ?? (operation.kind === "audit" ? initial : null),
+    analysed: operation.analysis !== null,
+    claudeRuns: operation.repair?.runs ?? 0,
+    pullRequest: operation.pullRequest,
+    error: operation.error,
+  };
 }
 
 export function repoView(store: Store, repo: Repo): RepoView {

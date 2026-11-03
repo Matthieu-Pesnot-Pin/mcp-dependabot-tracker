@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AUDIT_SCOPES, RightsSchema, type AlertSeverity, type AnalysisTask, type AuditScope, type Category, type Operation, type Repo } from "./model.schema.js";
+import { AUDIT_SCOPES, RightsSchema, type AlertSeverity, type AnalysisTask, type AuditScope, type Category, type Operation, type Remark, type Repo } from "./model.schema.js";
 
 /** Corps de `POST /api/repos` : `propriétaire/nom` ou lien GitHub, et la catégorie où le ranger (aucune par défaut). */
 export const AddRepoBodySchema = z.object({
@@ -139,11 +139,31 @@ export interface OperationResponse {
   operation: Operation;
 }
 
-/** Commentaire d'une tâche organizer : son auteur, son texte et sa date. */
-export interface Remark {
-  author: string;
-  body: string;
+/**
+ * Ligne de l'historique d'un dépôt : une opération sans son journal ni le
+ * déroulé de ses sessions. `after` est le nombre de vulnérabilités après la
+ * dernière étape qui a audité ; `claudeRuns` le nombre de passages des
+ * corrections par Claude.
+ */
+export interface OperationSummary {
+  id: string;
+  kind: Operation["kind"];
+  origin: Operation["origin"];
+  scope: AuditScope;
+  status: Operation["status"];
+  baseBranch: string;
   createdAt: string;
+  before: number | null;
+  after: number | null;
+  analysed: boolean;
+  claudeRuns: number;
+  pullRequest: Operation["pullRequest"];
+  error: string | null;
+}
+
+/** Historique d'un dépôt, de l'opération la plus récente à la plus ancienne. */
+export interface OperationsResponse {
+  operations: OperationSummary[];
 }
 
 /** Tâche de l'analyse d'une opération et ses commentaires récents, du plus ancien au plus récent. */

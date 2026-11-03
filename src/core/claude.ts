@@ -2,6 +2,7 @@ import { spawn } from "child_process";
 import fs from "fs";
 import { createRequire } from "module";
 import path from "path";
+import type { SessionEvent } from "../../shared/schemas/model.schema.js";
 import { CommandAbortedError, killTree } from "./commands.js";
 import { TrackerError } from "./errors.js";
 
@@ -50,8 +51,8 @@ export interface ClaudeSessionOptions {
   maxTurns: number;
   maxMinutes: number;
   signal?: AbortSignal;
-  /** Reçoit chaque action lisible de Claude (texte ou appel d'outil) et le nombre de tours écoulés. */
-  onLine?: (line: string, turns: number) => void;
+  /** Reçoit chaque élément du déroulé (message de Claude ou appel d'outil) et le nombre de tours écoulés. */
+  onEvent?: (event: SessionEvent, turns: number) => void;
 }
 
 export interface ClaudeSessionResult {
@@ -65,6 +66,19 @@ const MAX_LINE = 240;
 function shorten(text: string): string {
   const first = text.trim().split(/\r?\n/)[0];
   return first.length > MAX_LINE ? `${first.slice(0, MAX_LINE)}…` : first;
+}
+
+/** Taille maximale d'un message de Claude gardé dans le déroulé d'une session. */
+const MAX_MESSAGE = 4000;
+
+/** Ligne d'activité en clair d'un élément du déroulé : sa première ligne, raccourcie. */
+export function activityLine(event: SessionEvent): string {
+  return shorten(event.text);
+}
+
+function message(text: string): SessionEvent {
+  const trimmed = text.trim();
+  return { kind: "text", text: trimmed.length > MAX_MESSAGE ? `${trimmed.slice(0, MAX_MESSAGE)}…` : trimmed };
 }
 
 /** Appel d'outil en clair : `Read src/app.ts`, `Grep mermaid`, `Edit src/app.ts`, `$ npm test`, `organizer create_task`. */
@@ -90,20 +104,20 @@ class StreamReader {
 
   constructor(private readonly cwd: string) {}
 
-  feed(source: "stdout" | "stderr", chunk: string): string[] {
+  feed(source: "stdout" | "stderr", chunk: string): SessionEvent[] {
     const text = (this.pending.get(source) ?? "") + chunk;
     const lines = text.split(/\r?\n/);
     this.pending.set(source, lines.pop() ?? "");
     return lines.flatMap((line) => this.line(line));
   }
 
-  flush(): string[] {
+  flush(): SessionEvent[] {
     const rest = [...this.pending.values()];
     this.pending.clear();
     return rest.flatMap((line) => this.line(line));
   }
 
-  private line(raw: string): string[] {
+  private line(raw: string): SessionEvent[] {
     const line = raw.trim();
     if (line === "") return [];
     let event: any;
@@ -111,7 +125,7 @@ class StreamReader {
       event = JSON.parse(line);
     } catch {
       this.lastText = shorten(line);
-      return [this.lastText];
+      return [message(line)];
     }
     if (event?.type === "assistant") return this.assistant(event.message ?? {});
     if (event?.type === "result") {
@@ -121,21 +135,21 @@ class StreamReader {
     return [];
   }
 
-  private assistant(message: any): string[] {
-    if (typeof message.id === "string" && !this.messages.has(message.id)) {
-      this.messages.add(message.id);
+  private assistant(content: any): SessionEvent[] {
+    if (typeof content.id === "string" && !this.messages.has(content.id)) {
+      this.messages.add(content.id);
       this.turns += 1;
     }
-    const lines: string[] = [];
-    for (const block of Array.isArray(message.content) ? message.content : []) {
+    const events: SessionEvent[] = [];
+    for (const block of Array.isArray(content.content) ? content.content : []) {
       if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
         this.lastText = shorten(block.text);
-        lines.push(this.lastText);
+        events.push(message(block.text));
       } else if (block?.type === "tool_use" && typeof block.name === "string") {
-        lines.push(describeTool(block.name, block.input, this.cwd));
+        events.push({ kind: "tool", text: describeTool(block.name, block.input, this.cwd) });
       }
     }
-    return lines;
+    return events;
   }
 }
 
@@ -184,8 +198,8 @@ export function runClaudeSession(runtime: ClaudeRuntime, options: ClaudeSessionO
       stop();
     }, options.maxMinutes * 60_000);
     options.signal?.addEventListener("abort", stop);
-    const emit = (lines: string[]) => {
-      for (const line of lines) options.onLine?.(line, reader.turns);
+    const emit = (events: SessionEvent[]) => {
+      for (const event of events) options.onEvent?.(event, reader.turns);
     };
     const finish = (fn: () => void) => {
       if (settled) return;

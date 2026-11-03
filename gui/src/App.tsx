@@ -23,7 +23,7 @@ export default function App() {
   } else if (route.name === 'settings') {
     screen = <SettingsScreen />
   } else if (route.name === 'repo') {
-    screen = <RepoScreen key={route.repoId} repoId={route.repoId} />
+    screen = <RepoScreen key={route.repoId} repoId={route.repoId} tab={route.tab} />
   } else if (route.name === 'operation') {
     screen = <OperationScreen key={route.operationId} repoId={route.repoId} operationId={route.operationId} />
   } else {

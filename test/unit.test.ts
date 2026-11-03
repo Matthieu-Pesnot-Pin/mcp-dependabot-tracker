@@ -11,7 +11,7 @@ import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
 import { AuditAll } from "../src/core/audit-all.js";
 import { ConflictError } from "../src/core/errors.js";
-import { auditFindings, cleanAudit, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
+import { auditFindings, cleanAudit, operationSummary, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
 import { describeOperation } from "../src/tools/format.js";
@@ -59,6 +59,7 @@ function operation(overrides: Partial<Operation> = {}): Operation {
     pullRequest: null,
     analysis: null,
     repair: null,
+    sessions: [],
     error: null,
     log: [],
     ...overrides,
@@ -422,7 +423,7 @@ test("Store reads an operation saved without scope as an audit of every dependen
   }
 });
 
-test("Store reads an operation saved before the analysis and repair steps as one whose analysis and repair were skipped", () => {
+test("Store reads an operation saved before the analysis and repair steps as one whose analysis and repair were skipped, without session", () => {
   const temp = makeTempDir("tracker-analysis-");
   try {
     const store = new Store(temp.dir);
@@ -432,6 +433,7 @@ test("Store reads an operation saved before the analysis and repair steps as one
     delete saved.counts.afterRepair;
     delete saved.analysis;
     delete saved.repair;
+    delete saved.sessions;
     fs.writeFileSync(path.join(temp.dir, "operations", "op-1.json"), JSON.stringify(saved));
     const read = store.getOperation("op-1");
     assert.equal(read.steps.analysis, "skipped");
@@ -439,6 +441,7 @@ test("Store reads an operation saved before the analysis and repair steps as one
     assert.equal(read.counts.afterRepair, null);
     assert.equal(read.analysis, null);
     assert.equal(read.repair, null);
+    assert.deepEqual(read.sessions, [], "an operation saved before the history has no session");
   } finally {
     temp.cleanup();
   }
@@ -581,6 +584,21 @@ test("the fixes by Claude check that bubblewrap can build a sandbox on Linux, an
   await assertSandboxAvailable("win32", "no-such-bwrap");
   await assert.rejects(assertSandboxAvailable("linux", "no-such-bwrap"), /need bubblewrap \(bwrap\).*not in the PATH of the MCP server\. Install it on the server: sudo apt-get install -y bubblewrap socat/);
   await assert.rejects(assertSandboxAvailable("linux", process.execPath), /bubblewrap \(bwrap\) is installed but cannot create a sandbox for the account of the MCP server: .*--ro-bind[\s\S]*apparmor_restrict_unprivileged_userns/);
+});
+
+test("operationSummary sums an operation up for the history of its repository", () => {
+  const fix = operationSummary(
+    operation({
+      status: "waiting_push",
+      counts: { initial: 4, afterFix: 2, afterForce: null, afterRepair: 0 },
+      analysis: { startedAt: "2026-01-01T00:00:00.000Z", endedAt: null, turns: 1, activity: [], report: null, task: null, error: null },
+      repair: { runs: 2, startedAt: "2026-01-01T00:00:00.000Z", endedAt: null, turns: 1, activity: [], base: "b", auditCommit: null, commit: null, report: null, task: null, error: null },
+    })
+  );
+  assert.deepEqual([fix.before, fix.after, fix.analysed, fix.claudeRuns], [4, 0, true, 2]);
+  const audit = operationSummary(operation({ kind: "audit", status: "done", counts: { initial: 6, afterFix: null, afterForce: null, afterRepair: null } }));
+  assert.deepEqual([audit.before, audit.after, audit.analysed, audit.claudeRuns], [6, 6, false, 0]);
+  assert.ok(!("log" in fix) && !("sessions" in fix), "the history leaves the log and the sessions out");
 });
 
 test("the npm tools of Claude run fixed npm commands, with names only as arguments", () => {

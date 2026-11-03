@@ -24,7 +24,7 @@ import { OrganizerClient } from "./core/organizer.js";
 import { readSettings, saveSettings, settingsView, testOrganizer, type SettingsChecks } from "./core/settings.js";
 import { SaveSettingsBodySchema } from "../shared/schemas/settings.schema.js";
 import { AUDIT_SCOPES } from "../shared/schemas/model.schema.js";
-import { SYNC_INTERVAL_MS, activeRepos, addRepository, deprecateRepository, listAddableRepositories, restoreRepository, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
+import { SYNC_INTERVAL_MS, activeRepos, addRepository, operationSummary, deprecateRepository, listAddableRepositories, restoreRepository, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
   AddRepoBodySchema,
@@ -44,6 +44,7 @@ import {
   type AuditAllResponse,
   type CategoriesResponse,
   type BranchesResponse,
+  type OperationsResponse,
   type ReposResponse,
   type AppConfig,
 } from "../shared/schemas/api.schema.js";
@@ -279,6 +280,12 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
 
     case "START_FIX":
       return { operation: startUserFix(operations, parseRequest(RepoRequestSchema, msg.data).repoId, parseRequest(ScopeBodySchema, msg.data?.body).scope) };
+
+    case "LIST_OPERATIONS": {
+      store.failOrphanedOperations();
+      const repo = store.getRepo(parseRequest(RepoRequestSchema, msg.data).repoId);
+      return { operations: store.listOperations(repo.id).map(operationSummary) } satisfies OperationsResponse;
+    }
 
     case "GET_OPERATION": {
       store.failOrphanedOperations();

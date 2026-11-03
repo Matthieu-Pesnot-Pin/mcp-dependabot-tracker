@@ -4,6 +4,7 @@ import path from "path";
 import {
   DEFAULT_COMMIT_MESSAGE,
   type AuditScope,
+  type ClaudeSession,
   type Change,
   type Operation,
   type OperationKind,
@@ -11,12 +12,14 @@ import {
   type PullRequest,
   type Repair,
   type Repo,
+  type SessionKind,
+  type SessionOutcome,
   type StepName,
   type StepState,
 } from "../../shared/schemas/model.schema.js";
 import type { Settings } from "../../shared/schemas/settings.schema.js";
 import { analyseVulnerabilities, auditFacts } from "./analysis.js";
-import type { ClaudeRuntime } from "./claude.js";
+import { activityLine, type ClaudeRuntime } from "./claude.js";
 import { CommandAbortedError, runCommand, tail, type CommandResult } from "./commands.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, TrackerError } from "./errors.js";
@@ -31,7 +34,7 @@ import {
   type AuditedVulnerability,
   type Lockfile,
 } from "./npm-audit.js";
-import { assertSandboxAvailable, repairVulnerabilities } from "./repair.js";
+import { analysisRemarks, assertSandboxAvailable, repairVulnerabilities } from "./repair.js";
 import { assertNotDeprecated, isActive, type Store } from "./store.js";
 
 /** Accès aux données et à GitHub pour exécuter les opérations. */
@@ -71,6 +74,38 @@ const MAX_PR_CHANGES = 60;
 
 /** Dernières actions de Claude gardées dans l'opération pendant l'analyse et les corrections. */
 const ANALYSIS_ACTIVITY = 3;
+
+/** Éléments du déroulé gardés par session de Claude, les plus récents. */
+const SESSION_EVENTS = 500;
+
+function newSession(kind: SessionKind, run: number, tasks: ClaudeSession["tasks"]): ClaudeSession {
+  return {
+    kind,
+    run,
+    startedAt: now(),
+    endedAt: null,
+    turns: 0,
+    outcome: "running",
+    error: null,
+    remarks: [],
+    tasks,
+    events: [],
+    analysisReport: null,
+    repairReport: null,
+    commit: null,
+    remaining: null,
+  };
+}
+
+/** Sessions de l'opération, la dernière transformée par `fn`. */
+function withLastSession(operation: Operation, fn: (session: ClaudeSession) => ClaudeSession): ClaudeSession[] {
+  return operation.sessions.map((session, index) => (index === operation.sessions.length - 1 ? fn(session) : session));
+}
+
+/** Termine la dernière session : réussie, échouée avec sa raison, ou annulée. */
+function endSession(runner: Runner, outcome: SessionOutcome, changes: Partial<ClaudeSession> = {}): void {
+  runner.update((operation) => ({ ...operation, sessions: withLastSession(operation, (session) => ({ ...session, ...changes, outcome, endedAt: now() })) }));
+}
 
 /** Fichiers suivis par les commits du tracker : tout le clone, sauf les node_modules qu'installe Claude. */
 const STAGED_PATHS = ["--", ".", ":(exclude,glob)**/node_modules/**"];
@@ -152,6 +187,7 @@ function newOperation(repo: Repo, kind: OperationKind, origin: Origin, scope: Au
     pullRequest: null,
     analysis: null,
     repair: null,
+    sessions: [],
     error: null,
     log: [],
   };
@@ -348,6 +384,7 @@ async function analysisStep(runner: Runner, ctx: OperationContext): Promise<void
   runner.update((operation) => ({
     ...operation,
     analysis: { startedAt: now(), endedAt: null, turns: 0, activity: [], report: null, task: null, error: null },
+    sessions: [...operation.sessions, newSession("analysis", 1, [])],
   }));
   const analysed = (fn: (analysis: NonNullable<Operation["analysis"]>) => NonNullable<Operation["analysis"]>) =>
     runner.update((operation) => ({ ...operation, analysis: operation.analysis && fn(operation.analysis) }));
@@ -365,19 +402,29 @@ async function analysisStep(runner: Runner, ctx: OperationContext): Promise<void
       settings,
       claude: ctx.claude,
       signal: runner.signal,
-      onLine: (line, turns) => {
+      onEvent: (event, turns) => {
+        const line = activityLine(event);
         runner.log(`claude: ${line}`);
-        analysed((analysis) => ({ ...analysis, turns, activity: [...analysis.activity, line].slice(-ANALYSIS_ACTIVITY) }));
+        runner.update((current) => ({
+          ...current,
+          analysis: current.analysis && { ...current.analysis, turns, activity: [...current.analysis.activity, line].slice(-ANALYSIS_ACTIVITY) },
+          sessions: withLastSession(current, (session) => ({ ...session, turns, events: [...session.events, event].slice(-SESSION_EVENTS) })),
+        }));
       },
     });
     runner.log(`Organizer task ${task.key}: ${task.url}`);
     analysed((analysis) => ({ ...analysis, endedAt: now(), report, task }));
+    endSession(runner, "done", { tasks: [{ task, role: "created" }], analysisReport: report });
     runner.setStep("analysis", "done");
   } catch (err: any) {
-    if (err instanceof CommandAbortedError || runner.signal.aborted) throw err;
+    if (err instanceof CommandAbortedError || runner.signal.aborted) {
+      endSession(runner, "cancelled");
+      throw err;
+    }
     const message = err?.message ?? String(err);
     runner.log(`Analysis failed: ${message}`);
     analysed((analysis) => ({ ...analysis, endedAt: now(), error: message }));
+    endSession(runner, "failed", { error: message });
     runner.setStep("analysis", "failed");
   }
 }
@@ -458,13 +505,19 @@ async function repairStep(runner: Runner, ctx: OperationContext): Promise<void> 
     task: previous?.task ?? null,
     error: null,
   };
-  runner.update((operation) => ({ ...operation, repair }));
+  const analysisTask = runner.operation.analysis?.task ?? null;
+  runner.update((operation) => ({
+    ...operation,
+    repair,
+    sessions: [...operation.sessions, newSession("repair", repair.runs, analysisTask ? [{ task: analysisTask, role: "read" }] : [])],
+  }));
   const repaired = (fn: (current: Repair) => Repair) => runner.update((operation) => ({ ...operation, repair: operation.repair && fn(operation.repair) }));
 
   try {
-    const operation = runner.operation;
-    const analysisTask = operation.analysis?.task;
     if (!analysisTask) throw new TrackerError("The fixes by Claude need the organizer task of the analysis.");
+    const { remarks } = await analysisRemarks(ctx.settings(), runner.operation);
+    runner.update((current) => ({ ...current, sessions: withLastSession(current, (session) => ({ ...session, remarks })) }));
+    const operation = runner.operation;
     const { report, task } = await repairVulnerabilities({
       repoId: operation.repoId,
       branch: operation.baseBranch,
@@ -478,9 +531,14 @@ async function repairStep(runner: Runner, ctx: OperationContext): Promise<void> 
       settings: ctx.settings(),
       claude: ctx.claude,
       signal: runner.signal,
-      onLine: (line, turns) => {
+      onEvent: (event, turns) => {
+        const line = activityLine(event);
         runner.log(`claude: ${line}`);
-        repaired((current) => ({ ...current, turns, activity: [...current.activity, line].slice(-ANALYSIS_ACTIVITY) }));
+        runner.update((current) => ({
+          ...current,
+          repair: current.repair && { ...current.repair, turns, activity: [...current.repair.activity, line].slice(-ANALYSIS_ACTIVITY) },
+          sessions: withLastSession(current, (session) => ({ ...session, turns, events: [...session.events, event].slice(-SESSION_EVENTS) })),
+        }));
       },
     });
     const commit = await commitRepair(runner, base, report.commitMessage);
@@ -488,14 +546,24 @@ async function repairStep(runner: Runner, ctx: OperationContext): Promise<void> 
     await auditAll(runner, "afterRepair");
     await refreshChanges(runner);
     repaired((current) => ({ ...current, endedAt: now(), commit, report, task }));
+    endSession(runner, "done", {
+      tasks: [{ task: analysisTask, role: "read" }, { task, role: previous?.task ? "updated" : "created" }],
+      repairReport: report,
+      commit,
+      remaining: runner.operation.counts.afterRepair,
+    });
     runner.setStep("repair", "done");
   } catch (err: any) {
-    if (err instanceof CommandAbortedError || runner.signal.aborted) throw err;
+    if (err instanceof CommandAbortedError || runner.signal.aborted) {
+      endSession(runner, "cancelled");
+      throw err;
+    }
     const message = err?.message ?? String(err);
     runner.log(`Fixes by Claude failed: ${message}`);
     await runner.git(["reset", "--hard", "HEAD"]);
     await runner.git(["clean", "-fd", "-e", "node_modules"]);
     repaired((current) => ({ ...current, endedAt: now(), error: message }));
+    endSession(runner, "failed", { error: message });
     runner.setStep("repair", previous?.report ? "done" : "failed");
   }
 }

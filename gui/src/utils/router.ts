@@ -6,14 +6,15 @@ import { useSyncExternalStore } from 'react'
  *   `#/c/<catégorie>`                   accueil, dépôts d'une catégorie ;
  *   `#/deprecated`                      accueil, dépôts dépréciés ;
  *   `#/settings`                        réglages de l'analyse par Claude ;
- *   `#/r/<propriétaire>/<nom>`          écran du dépôt ;
+ *   `#/r/<propriétaire>/<nom>`          écran du dépôt, ses alertes ;
+ *   `#/r/<propriétaire>/<nom>/history`  écran du dépôt, son historique ;
  *   `#/r/<propriétaire>/<nom>/op/<id>`  écran d'une opération.
  */
 export type Route =
   | { name: 'home'; categoryId: string | null }
   | { name: 'deprecated' }
   | { name: 'settings' }
-  | { name: 'repo'; repoId: string }
+  | { name: 'repo'; repoId: string; tab: RepoTab }
   | { name: 'operation'; repoId: string; operationId: string }
   | { name: 'not_found'; hash: string }
 
@@ -39,7 +40,8 @@ export function parseHash(hash: string): Route {
   const [section, owner, name, sub, operationId] = segments as string[]
   if (section !== 'r' || !owner || !name) return { name: 'not_found', hash }
   const repoId = `${owner}/${name}`
-  if (segments.length === 3) return { name: 'repo', repoId }
+  if (segments.length === 3) return { name: 'repo', repoId, tab: 'alerts' }
+  if (segments.length === 4 && sub === 'history') return { name: 'repo', repoId, tab: 'history' }
   if (segments.length === 5 && sub === 'op') return { name: 'operation', repoId, operationId }
   return { name: 'not_found', hash }
 }
@@ -58,6 +60,9 @@ function repoHash(repoId: string): string {
   return `#/r/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
 }
 
+/** Onglet de l'écran d'un dépôt. */
+export type RepoTab = 'alerts' | 'history'
+
 /** Onglet de l'accueil : une catégorie, tous les projets (`categoryId` null), ou les dépôts dépréciés. */
 export type HomeTab = { kind: 'category'; categoryId: string | null } | { kind: 'deprecated' }
 
@@ -74,6 +79,7 @@ export const hrefs = {
   settings: () => inPage('#/settings'),
   lastHome: () => (lastHomeTab.kind === 'deprecated' ? hrefs.deprecated() : hrefs.home(lastHomeTab.categoryId)),
   repo: (repoId: string) => inPage(repoHash(repoId)),
+  repoHistory: (repoId: string) => inPage(`${repoHash(repoId)}/history`),
   operation: (repoId: string, operationId: string) => inPage(`${repoHash(repoId)}/op/${encodeURIComponent(operationId)}`),
 }
 

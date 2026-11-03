@@ -93,6 +93,7 @@ function normalizeOperation(operation: any): unknown {
     counts: operation.counts && typeof operation.counts === "object" ? { afterRepair: null, ...operation.counts } : operation.counts,
     analysis: operation.analysis ?? null,
     repair: operation.repair ?? null,
+    sessions: operation.sessions ?? [],
     scope: operation.scope ?? "all",
   };
 }

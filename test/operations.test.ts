@@ -205,6 +205,16 @@ test("the automatic analysis has Claude read the clone, create the organizer tas
     assert.deepEqual(waiting.analysis?.report?.force, { recommended: true, reason: "La v3 garde l'API utilisée." });
     assert.equal(waiting.analysis?.turns, 3);
     assert.deepEqual(waiting.analysis?.activity, ["Read package.json", "nth-check sert à css-select ; la montée majeure est sans risque.", "organizer create_task"]);
+    const [session] = waiting.sessions;
+    assert.deepEqual([waiting.sessions.length, session.kind, session.run, session.outcome, session.turns], [1, "analysis", 1, "done", 3]);
+    assert.deepEqual(session.events, [
+      { kind: "tool", text: "Read package.json" },
+      { kind: "text", text: "nth-check sert à css-select ; la montée majeure est sans risque." },
+      { kind: "tool", text: "organizer create_task" },
+    ]);
+    assert.deepEqual(session.tasks, [{ task: waiting.analysis?.task, role: "created" }]);
+    assert.deepEqual(session.analysisReport, waiting.analysis?.report);
+    assert.ok(session.endedAt);
 
     const call = claudeCalls().at(-1)!;
     assert.equal(fs.realpathSync(call.cwd), fs.realpathSync(path.join(waiting.workDir!, "repo")));
@@ -298,6 +308,12 @@ test("Claude fixes by hand after the user's remarks, in a commit of its own afte
     assert.equal(report.parentKey, analysisTask);
     assert.deepEqual([report.tags, report.assigneeIds], [[repoId.split("/")[1]], [organizer.owner.id]]);
     assert.equal(first.counts.afterRepair, first.counts.afterFix, "the fake fixes nothing that npm audit sees");
+    const firstPass = first.sessions.at(-1)!;
+    assert.deepEqual(first.sessions.map((session) => [session.kind, session.run, session.outcome]), [["analysis", 1, "done"], ["repair", 1, "done"]]);
+    assert.deepEqual(firstPass.remarks.map((remark) => remark.body), ["Garde le thème sombre."], "the session keeps the remarks Claude was given");
+    assert.deepEqual(firstPass.tasks.map(({ task, role }) => [task.key, role]), [[analysisTask, "read"], [repair.task?.key, "created"]]);
+    assert.deepEqual([firstPass.commit, firstPass.remaining, firstPass.repairReport], [repair.commit, first.counts.afterRepair, repair.report]);
+    assert.ok(firstPass.events.some((event) => event.kind === "tool" && event.text === "organizer get_task"));
 
     const call = claudeCalls().at(-1)!;
     const option = (name: string) => call.args[call.args.indexOf(name) + 1];
@@ -318,6 +334,10 @@ test("Claude fixes by hand after the user's remarks, in a commit of its own afte
     assert.equal(second.status, "waiting_push", second.repair?.error ?? second.error ?? "");
     assert.equal(second.repair?.error, null);
     assert.equal(second.repair?.runs, 2);
+    const secondPass = second.sessions.at(-1)!;
+    assert.deepEqual([second.sessions.length, secondPass.run, secondPass.remarks.length], [3, 2, 2], "every pass keeps its own session");
+    assert.equal(secondPass.tasks[1].role, "updated");
+    assert.equal(second.sessions[1].commit, repair.commit, "the first pass keeps its own commit");
     assert.equal(second.repair?.task?.key, repair.task?.key, "a second pass updates the same report");
     assert.equal(second.repair?.base, repair.base);
     assert.notEqual(second.repair?.commit, repair.commit, "the second pass replaces the commit of the first one");
@@ -366,6 +386,9 @@ test("fixes by Claude that fail leave the clone as it was, and the operation wai
     assert.equal(failed.status, "waiting_repair", failed.error ?? "");
     assert.equal(failed.steps.repair, "failed");
     assert.match(failed.repair?.error ?? "", /The tests could not start/);
+    const session = failed.sessions.at(-1)!;
+    assert.deepEqual([session.kind, session.outcome], ["repair", "failed"]);
+    assert.match(session.error ?? "", /The tests could not start/);
     assert.ok(!fs.existsSync(path.join(failed.workDir!, "repo", "src", "fixed.js")), "the changes of the failed pass are dropped");
     await decideRepair(ctx, id, false);
     const skipped = await waitStatus(id, ["waiting_push", "done", "failed"]);

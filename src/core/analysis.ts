@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { z } from "zod";
-import { AnalysisReportSchema, type AnalysisReport, type AnalysisTask, type AuditScope, type ForceCandidate, type Operation } from "../../shared/schemas/model.schema.js";
+import { AnalysisReportSchema, type AnalysisReport, type AnalysisTask, type AuditScope, type ForceCandidate, type Operation, type SessionEvent } from "../../shared/schemas/model.schema.js";
 import type { Settings } from "../../shared/schemas/settings.schema.js";
 import { runClaudeSession, type ClaudeRuntime } from "./claude.js";
 import { TrackerError } from "./errors.js";
@@ -102,7 +102,7 @@ export interface AnalysisInput {
   settings: Settings;
   claude: ClaudeRuntime;
   signal: AbortSignal;
-  onLine: (line: string, turns: number) => void;
+  onEvent: (event: SessionEvent, turns: number) => void;
 }
 
 function prompt(input: AnalysisInput, space: string, owner: { id: string; name: string }, tag: string): string {
@@ -173,7 +173,7 @@ export async function analyseVulnerabilities(input: AnalysisInput): Promise<{ re
       maxTurns: input.settings.analysis.maxTurns,
       maxMinutes: input.settings.analysis.maxMinutes,
       signal: input.signal,
-      onLine: input.onLine,
+      onEvent: input.onEvent,
     }));
   } finally {
     fs.rmSync(configFile, { force: true });

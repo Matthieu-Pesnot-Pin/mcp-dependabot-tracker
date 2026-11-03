@@ -309,6 +309,8 @@ app.post("/api/repos/:owner/:name/operations", async (c) => {
   return forward(c, "START_FIX", { repoId: repoId(c), body: read.body });
 });
 
+app.get("/api/repos/:owner/:name/operations", (c) => forward(c, "LIST_OPERATIONS", { repoId: repoId(c) }));
+
 app.get("/api/operations/:id", (c) => forward(c, "GET_OPERATION", { operationId: c.req.param("id") }));
 
 app.post("/api/operations/:id/force", async (c) => {

@@ -274,6 +274,53 @@ export const RepairSchema = z.object({
 
 export type Repair = z.infer<typeof RepairSchema>;
 
+/** Commentaire d'une tâche organizer : son auteur, son texte et sa date. */
+export const RemarkSchema = z.object({ author: z.string(), body: z.string(), createdAt: z.string() });
+
+export type Remark = z.infer<typeof RemarkSchema>;
+
+export const SESSION_KINDS = ["analysis", "repair"] as const;
+export type SessionKind = (typeof SESSION_KINDS)[number];
+
+export const SESSION_OUTCOMES = ["running", "done", "failed", "cancelled"] as const;
+export type SessionOutcome = (typeof SESSION_OUTCOMES)[number];
+
+/** Ce qu'une session a fait d'une tâche organizer : relue, créée ou mise à jour. */
+export const SESSION_TASK_ROLES = ["read", "created", "updated"] as const;
+export type SessionTaskRole = (typeof SESSION_TASK_ROLES)[number];
+
+/** Élément du déroulé d'une session : message de Claude (`text`) ou appel d'outil en clair (`tool`). */
+export const SessionEventSchema = z.object({ kind: z.enum(["text", "tool"]), text: z.string() });
+
+export type SessionEvent = z.infer<typeof SessionEventSchema>;
+
+/**
+ * Session de Claude d'une opération, gardée pour l'historique : l'analyse, ou
+ * un passage des corrections (`run`, 1 pour l'analyse). `remarks` sont les
+ * commentaires de la tâche de l'analyse au lancement des corrections, `tasks`
+ * les tâches organizer relues, créées ou mises à jour, `events` le déroulé de
+ * la session. Le résultat est le rapport de l'analyse, ou celui des
+ * corrections avec leur commit et les vulnérabilités restantes.
+ */
+export const ClaudeSessionSchema = z.object({
+  kind: z.enum(SESSION_KINDS),
+  run: z.number().int(),
+  startedAt: z.string(),
+  endedAt: z.string().nullable(),
+  turns: z.number().int(),
+  outcome: z.enum(SESSION_OUTCOMES),
+  error: z.string().nullable(),
+  remarks: z.array(RemarkSchema),
+  tasks: z.array(z.object({ task: AnalysisTaskSchema, role: z.enum(SESSION_TASK_ROLES) })),
+  events: z.array(SessionEventSchema),
+  analysisReport: AnalysisReportSchema.nullable(),
+  repairReport: RepairReportSchema.nullable(),
+  commit: z.string().nullable(),
+  remaining: z.number().int().nullable(),
+});
+
+export type ClaudeSession = z.infer<typeof ClaudeSessionSchema>;
+
 /**
  * Opération d'audit ou de correction sur un clone temporaire, limitée aux
  * dépendances de `scope`. `workDir` est le
@@ -281,7 +328,8 @@ export type Repair = z.infer<typeof RepairSchema>;
  * qui exécute l'étape en cours. `found` liste les vulnérabilités du premier
  * audit, `remaining` celles qui restent après la dernière étape. `analysis` est
  * l'analyse par Claude, null quand elle n'a pas été lancée ; `repair` ses
- * corrections, null tant qu'elles n'ont pas été lancées.
+ * corrections, null tant qu'elles n'ont pas été lancées ; `sessions` chaque
+ * session de Claude, dans l'ordre.
  */
 export const OperationSchema = z.object({
   id: z.string(),
@@ -321,6 +369,7 @@ export const OperationSchema = z.object({
   pullRequest: z.object({ number: z.number().int(), url: z.string() }).nullable(),
   analysis: AnalysisSchema.nullable(),
   repair: RepairSchema.nullable(),
+  sessions: z.array(ClaudeSessionSchema),
   error: z.string().nullable(),
   log: z.array(LogEntrySchema),
 });

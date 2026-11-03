@@ -5,14 +5,15 @@ import { useEffect, useState } from 'react'
 import { BranchSelector } from '../components/BranchSelector'
 import { CategorySelector } from '../components/CategorySelector'
 import { Icon } from '../components/Icon'
+import { OperationHistory } from '../components/OperationHistory'
 import { ScopeButton } from '../components/ScopeButton'
 import { SeverityPill } from '../components/Pill'
 import { Toggle } from '../components/Toggle'
 import { usePolling } from '../hooks/usePolling'
 import { showError } from '../store/useNotice'
 import { api } from '../utils/api'
-import { dayAndTime, plural, relativeTime, SEVERITY_LABELS } from '../utils/format'
-import { hrefs, navigate } from '../utils/router'
+import { dayAndTime, relativeTime, SEVERITY_LABELS } from '../utils/format'
+import { hrefs, navigate, type RepoTab } from '../utils/router'
 
 const POLL_MS = 3000
 
@@ -133,7 +134,6 @@ function PendingAlerts({ view, onChanged }: { view: RepoView; onChanged: () => v
   }
   return (
     <>
-      <p className="section-label">{plural(alerts.length, 'alerte ouverte', 'alertes ouvertes')}</p>
       <div className="panel list">
         {alerts.map((alert) => (
           <div key={alert.number} className="alert-line">
@@ -210,9 +210,14 @@ function HandledAlerts({ view, onChanged }: { view: RepoView; onChanged: () => v
   )
 }
 
-/** Écran d'un dépôt : ses alertes Dependabot ouvertes, la correction et les droits de l'agent ; un dépôt déprécié ne se corrige pas. */
-export function RepoScreen({ repoId }: { repoId: string }) {
+/**
+ * Écran d'un dépôt : ses alertes Dependabot ouvertes et son historique en deux
+ * onglets, la correction et les droits de l'agent ; un dépôt déprécié ne se
+ * corrige pas.
+ */
+export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
   const polled = usePolling(`repo:${repoId}`, () => api.getRepo(repoId), POLL_MS)
+  const history = usePolling(`history:${repoId}`, () => api.listOperations(repoId), POLL_MS)
   const [drawer, setDrawer] = useState(false)
   const [starting, setStarting] = useState(false)
   const view = polled.data
@@ -224,7 +229,9 @@ export function RepoScreen({ repoId }: { repoId: string }) {
       </div>
     )
   }
-  const { repo, activeOperation, latestOperation } = view
+  const { repo, activeOperation } = view
+  const pending = pendingAlerts(repo).length
+  const operations = history.data?.operations ?? []
 
   async function fix(scope: AuditScope) {
     setStarting(true)
@@ -259,14 +266,6 @@ export function RepoScreen({ repoId }: { repoId: string }) {
             ) : (
               'synchronisation…'
             )}
-            {latestOperation && !activeOperation && (
-              <>
-                {' · '}
-                <a className="link" href={hrefs.operation(repo.id, latestOperation.id)}>
-                  {latestOperation.kind === 'audit' ? 'dernier audit' : 'dernière correction'}
-                </a>
-              </>
-            )}
           </div>
         </div>
         <div className="page-actions">
@@ -297,8 +296,27 @@ export function RepoScreen({ repoId }: { repoId: string }) {
 
       {repo.syncError && <p className="banner banner-error">{repo.syncError}</p>}
 
-      <PendingAlerts view={view} onChanged={polled.reload} />
-      <HandledAlerts view={view} onChanged={polled.reload} />
+      <nav className="tabs">
+        <a className={`tab${tab === 'alerts' ? ' is-active' : ''}`} href={hrefs.repo(repo.id)}>
+          Alertes ouvertes
+          {pending > 0 && <span className="tab-count tab-count-alert">{pending}</span>}
+        </a>
+        <a className={`tab${tab === 'history' ? ' is-active' : ''}`} href={hrefs.repoHistory(repo.id)}>
+          Historique
+          {operations.length > 0 && <span className="tab-count">{operations.length}</span>}
+        </a>
+      </nav>
+
+      {tab === 'alerts' ? (
+        <>
+          <PendingAlerts view={view} onChanged={polled.reload} />
+          <HandledAlerts view={view} onChanged={polled.reload} />
+        </>
+      ) : history.data ? (
+        <OperationHistory repoId={repo.id} operations={operations} />
+      ) : (
+        <p className={history.error ? 'error-text' : 'muted'}>{history.error ?? "Chargement de l'historique…"}</p>
+      )}
 
       {drawer && <AgentDrawer view={view} onClose={() => setDrawer(false)} onChanged={polled.reload} />}
     </div>

@@ -1767,3 +1767,322 @@ code {
   flex-direction: row-reverse;
   justify-content: flex-end;
 }
+
+/* Onglets */
+
+.text-accent {
+  color: var(--accent-soft);
+}
+
+.tabs {
+  display: flex;
+  gap: 32px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: -1px;
+  padding: 0 0 12px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+}
+
+.tab:hover {
+  color: var(--text-soft);
+}
+
+.tab.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.tab-count {
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.tab-count-alert {
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--critical-bg);
+  color: var(--danger);
+  text-align: center;
+}
+
+/* Historique d'un dépôt */
+
+.history-row {
+  gap: 16px;
+  min-height: 60px;
+}
+
+.history-icon {
+  flex-shrink: 0;
+}
+
+.history-title {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.history-meta {
+  font-size: 12px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-date {
+  width: 110px;
+  flex-shrink: 0;
+  color: var(--text-soft);
+}
+
+.history-counts {
+  width: 150px;
+  flex-shrink: 0;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-claude {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 150px;
+  flex-shrink: 0;
+  color: var(--accent-soft);
+  white-space: nowrap;
+}
+
+.history-claude svg {
+  flex-shrink: 0;
+}
+
+.history-outcome {
+  width: 110px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.history-outcome .pr-note {
+  justify-content: flex-end;
+}
+
+.history-note {
+  margin-top: 14px;
+}
+
+@media (max-width: 900px) {
+  .history-claude,
+  .history-date {
+    display: none;
+  }
+}
+
+/* Passage d'une opération à l'autre */
+
+.pager {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.pager-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 100%;
+  color: var(--muted);
+}
+
+.pager-arrow:hover {
+  color: var(--text);
+}
+
+.pager-arrow.is-disabled {
+  color: var(--idle);
+  pointer-events: none;
+}
+
+.pager-position {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Sessions de Claude */
+
+.sessions {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.session-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: left;
+}
+
+.session-card:hover {
+  background: var(--surface-raised);
+}
+
+.session-card.is-active {
+  background: var(--surface-current);
+  border-color: var(--accent);
+}
+
+.session-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.session-card-meta {
+  margin-left: 22px;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.session-detail {
+  padding: 22px 24px;
+}
+
+.session-title {
+  margin-bottom: 6px;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.session-section {
+  margin-top: 22px;
+}
+
+.session-section-title {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.session-tasks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-tasks li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 24px;
+}
+
+.session-task-title {
+  color: var(--text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-task-role {
+  flex: 1;
+  font-size: 12px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.icon-link {
+  display: inline-flex;
+  color: var(--faint);
+}
+
+.icon-link:hover {
+  color: var(--text);
+}
+
+.session-remarks {
+  margin: 0;
+  padding: 0 0 0 14px;
+  list-style: none;
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-soft);
+  line-height: 1.7;
+}
+
+.session-events {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.session-message {
+  margin: 6px 0 2px;
+  color: var(--text-soft);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.session-tool {
+  margin: 0 0 0 12px;
+  font-size: 12px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-text {
+  color: var(--text-soft);
+  line-height: 1.6;
+}
+
+.session-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.session-detail .repair-changes {
+  margin-left: 0;
+}
+
+@media (max-width: 900px) {
+  .sessions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

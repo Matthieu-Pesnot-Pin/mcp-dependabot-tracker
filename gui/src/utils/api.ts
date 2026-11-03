@@ -1,4 +1,4 @@
-import type { AddableReposResponse, AppConfig, AuditAllResponse, BranchesResponse, CategoriesResponse, OperationResponse, RemarksResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
+import type { AddableReposResponse, AppConfig, AuditAllResponse, BranchesResponse, CategoriesResponse, OperationResponse, OperationsResponse, RemarksResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
 import type { AuditScope, Category, Rights } from '@shared/schemas/model.schema'
 import type { SaveSettingsBody, SettingsView } from '@shared/schemas/settings.schema'
 
@@ -77,6 +77,7 @@ export const api = {
   setRights: (repoId: string, rights: Rights) => send<RepoView>('PUT', `${repoPath(repoId)}/rights`, { rights }),
   startFix: (repoId: string, scope: AuditScope) => send<OperationResponse>('POST', `${repoPath(repoId)}/operations`, { scope }),
   getOperation: (id: string) => request<OperationResponse>(operationPath(id)),
+  listOperations: (repoId: string) => request<OperationsResponse>(`${repoPath(repoId)}/operations`),
   decideForce: (id: string, apply: boolean) => send<OperationResponse>('POST', `${operationPath(id)}/force`, { apply }),
   decideRepair: (id: string, run: boolean) => send<OperationResponse>('POST', `${operationPath(id)}/repair`, { run }),
   getRemarks: (id: string) => request<RemarksResponse>(`${operationPath(id)}/remarks`),

@@ -1,6 +1,7 @@
 import type { AnalysisReport, Operation, Repair, StepName, StepState, Vulnerability } from '@shared/schemas/model.schema'
 import { ACTIVE_STATUSES } from '@shared/schemas/model.schema'
 import { useState, type ReactNode } from 'react'
+import { ClaudeSessions } from '../components/ClaudeSessions'
 import { Icon, type IconName } from '../components/Icon'
 import { usePolling } from '../hooks/usePolling'
 import { showError } from '../store/useNotice'
@@ -10,6 +11,12 @@ import { hrefs } from '../utils/router'
 
 /** Relecture rapide pendant l'opération ; plus aucune une fois terminée. */
 const ACTIVE_POLL_MS = 1000
+
+/** Relecture de l'historique du dépôt, pour passer d'une opération à l'autre. */
+const HISTORY_POLL_MS = 10_000
+
+/** Onglets de l'écran d'une opération. */
+type OperationTab = 'steps' | 'claude' | 'log'
 
 /** Relecture des remarques de la tâche pendant que les corrections par Claude attendent. */
 const REMARKS_POLL_MS = 10_000
@@ -484,11 +491,38 @@ function StepRow({ operation, step, onDone }: { operation: Operation; step: Step
   )
 }
 
-/** Écran d'une opération : ses étapes, la seule étape en cours dépliée, et le journal à la demande. */
+/** Passage d'une opération du dépôt à l'autre : position dans l'historique, la plus récente à gauche. */
+function OperationPager({ repoId, operationId }: { repoId: string; operationId: string }) {
+  const history = usePolling(`history:${repoId}`, () => api.listOperations(repoId), HISTORY_POLL_MS)
+  const operations = history.data?.operations ?? []
+  const index = operations.findIndex((candidate) => candidate.id === operationId)
+  if (index === -1) return null
+  const newer = operations[index - 1]
+  const older = operations[index + 1]
+  return (
+    <div className="pager">
+      <a className={`pager-arrow${newer ? '' : ' is-disabled'}`} href={newer ? hrefs.operation(repoId, newer.id) : undefined} aria-label="Opération plus récente" title="Opération plus récente">
+        <Icon name="chevron-left" size={16} />
+      </a>
+      <span className="pager-position">
+        {index + 1} / {operations.length}
+      </span>
+      <a className={`pager-arrow${older ? '' : ' is-disabled'}`} href={older ? hrefs.operation(repoId, older.id) : undefined} aria-label="Opération plus ancienne" title="Opération plus ancienne">
+        <Icon name="chevron-right" size={16} />
+      </a>
+    </div>
+  )
+}
+
+/**
+ * Écran d'une opération en trois onglets : ses étapes, la seule étape en cours
+ * dépliée ; les sessions de Claude ; le journal. Les flèches passent aux autres
+ * opérations du dépôt.
+ */
 export function OperationScreen({ repoId, operationId }: { repoId: string; operationId: string }) {
   const [interval, setIntervalMs] = useState<number | null>(ACTIVE_POLL_MS)
   const polled = usePolling(`operation:${operationId}`, () => api.getOperation(operationId), interval)
-  const [showLog, setShowLog] = useState(false)
+  const [tab, setTab] = useState<OperationTab>('steps')
   const operation = polled.data?.operation ?? null
 
   if (operation && !isActive(operation) && interval !== null) setIntervalMs(null)
@@ -520,7 +554,7 @@ export function OperationScreen({ repoId, operationId }: { repoId: string; opera
   return (
     <div className="page">
       <div className="page-head">
-        <a className="back" href={hrefs.repo(repoId)} aria-label="Retour au dépôt">
+        <a className="back" href={hrefs.repoHistory(repoId)} aria-label="Retour à l'historique du dépôt">
           <Icon name="arrow-left" size={20} />
         </a>
         <div className="page-head-text">
@@ -533,10 +567,7 @@ export function OperationScreen({ repoId, operationId }: { repoId: string; opera
           </p>
         </div>
         <div className="page-actions">
-          <button type="button" className={`button button-ghost${showLog ? ' is-active' : ''}`} onClick={() => setShowLog(!showLog)}>
-            <Icon name="square-terminal" />
-            Journal
-          </button>
+          <OperationPager repoId={repoId} operationId={operationId} />
           {isActive(operation) && (
             <button type="button" className="button button-secondary" onClick={() => void cancel()} disabled={operation.cancelRequested}>
               {operation.cancelRequested ? 'Annulation…' : 'Annuler'}
@@ -545,15 +576,35 @@ export function OperationScreen({ repoId, operationId }: { repoId: string; opera
         </div>
       </div>
 
-      <div className="panel steps">
-        {steps.map((step) => (
-          <StepRow key={step} operation={operation} step={step} onDone={polled.reload} />
-        ))}
-      </div>
+      <nav className="tabs">
+        <button type="button" className={`tab${tab === 'steps' ? ' is-active' : ''}`} onClick={() => setTab('steps')}>
+          Étapes
+        </button>
+        {operation.sessions.length > 0 && (
+          <button type="button" className={`tab${tab === 'claude' ? ' is-active' : ''}`} onClick={() => setTab('claude')}>
+            Claude
+            <span className="tab-count">{operation.sessions.length}</span>
+          </button>
+        )}
+        <button type="button" className={`tab${tab === 'log' ? ' is-active' : ''}`} onClick={() => setTab('log')}>
+          Journal
+        </button>
+      </nav>
 
-      {operation.error && !Object.values(operation.steps).includes('failed') && <p className="banner banner-error pre">{operation.error}</p>}
+      {tab === 'steps' && (
+        <>
+          <div className="panel steps">
+            {steps.map((step) => (
+              <StepRow key={step} operation={operation} step={step} onDone={polled.reload} />
+            ))}
+          </div>
+          {operation.error && !Object.values(operation.steps).includes('failed') && <p className="banner banner-error pre">{operation.error}</p>}
+        </>
+      )}
 
-      {showLog && (
+      {tab === 'claude' && operation.sessions.length > 0 && <ClaudeSessions sessions={operation.sessions} active={isActive(operation)} />}
+
+      {tab === 'log' && (
         <pre className="log mono">
           {operation.log.map((entry, index) => (
             <div key={index}>

@@ -310,6 +310,13 @@ test("the GUI runs a fix through the --force decision to the pull request", { sk
   assert.equal(done.pullRequest.number, pull.number);
   assert.equal((await call("POST", `operations/${id}/cancel`)).status, 409);
   assert.equal((await call("GET", "operations/op-unknown")).status, 404);
+
+  const history = await call("GET", "repos/octo/demo/operations");
+  assert.equal(history.status, 200, history.json.error);
+  const latest = history.json.operations[0];
+  assert.deepEqual([latest.id, latest.status, latest.before, latest.after, latest.pullRequest.number], [id, "done", done.counts.initial, 0, pull.number]);
+  assert.ok(!("log" in latest), "the history leaves the log out");
+  assert.equal((await call("GET", "repos/octo/unknown/operations")).status, 404);
 });
 
 test("the server creates CLONE_DIR at launch and refuses to start without it", async () => {

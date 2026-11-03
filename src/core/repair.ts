@@ -4,7 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { z } from "zod";
 import type { RemarksResponse } from "../../shared/schemas/api.schema.js";
-import { RepairReportSchema, TEST_OUTCOMES, type AnalysisTask, type AuditScope, type Operation, type RepairReport } from "../../shared/schemas/model.schema.js";
+import { RepairReportSchema, TEST_OUTCOMES, type AnalysisTask, type AuditScope, type Operation, type RepairReport, type SessionEvent } from "../../shared/schemas/model.schema.js";
 import type { Settings } from "../../shared/schemas/settings.schema.js";
 import { ORGANIZER_SERVER, factsJson, organizerServer } from "./analysis.js";
 import { runClaudeSession, type ClaudeRuntime } from "./claude.js";
@@ -131,7 +131,7 @@ export interface RepairInput {
   settings: Settings;
   claude: ClaudeRuntime;
   signal: AbortSignal;
-  onLine: (line: string, turns: number) => void;
+  onEvent: (event: SessionEvent, turns: number) => void;
 }
 
 function prompt(input: RepairInput, space: string, owner: { id: string; name: string }, tag: string): string {
@@ -210,7 +210,7 @@ export async function repairVulnerabilities(input: RepairInput): Promise<{ repor
       maxTurns: input.settings.analysis.maxTurns,
       maxMinutes: input.settings.analysis.maxMinutes,
       signal: input.signal,
-      onLine: input.onLine,
+      onEvent: input.onEvent,
     }));
   } finally {
     fs.rmSync(configFile, { force: true });
