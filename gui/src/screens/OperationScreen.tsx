@@ -1,15 +1,18 @@
-import type { Analysis, AnalysisReport, Operation, StepName, StepState, Vulnerability } from '@shared/schemas/model.schema'
+import type { AnalysisReport, Operation, Repair, StepName, StepState, Vulnerability } from '@shared/schemas/model.schema'
 import { ACTIVE_STATUSES } from '@shared/schemas/model.schema'
 import { useState, type ReactNode } from 'react'
 import { Icon, type IconName } from '../components/Icon'
 import { usePolling } from '../hooks/usePolling'
 import { showError } from '../store/useNotice'
 import { api } from '../utils/api'
-import { clockTime, fromNpmSeverity, plural, projectPrefix, SCOPE_LABELS, SEVERITY_LABELS } from '../utils/format'
+import { clockTime, fromNpmSeverity, plural, projectPrefix, relativeTime, SCOPE_LABELS, SEVERITY_LABELS } from '../utils/format'
 import { hrefs } from '../utils/router'
 
 /** Relecture rapide pendant l'opération ; plus aucune une fois terminée. */
 const ACTIVE_POLL_MS = 1000
+
+/** Relecture des remarques de la tâche pendant que les corrections par Claude attendent. */
+const REMARKS_POLL_MS = 10_000
 
 const STEP_LABELS: Record<StepName, { text: string; mono: boolean }> = {
   clone: { text: 'Cloner le dépôt', mono: false },
@@ -17,6 +20,7 @@ const STEP_LABELS: Record<StepName, { text: string; mono: boolean }> = {
   fix: { text: 'npm audit fix', mono: true },
   analysis: { text: 'Analyse par Claude', mono: false },
   force: { text: 'npm audit fix --force', mono: true },
+  repair: { text: 'Corrections par Claude', mono: false },
   push: { text: 'Commit et push', mono: false },
 }
 
@@ -61,20 +65,32 @@ function skippedReason(operation: Operation, step: StepName): string {
   if (step === 'force' && operation.forceCandidates.length === 0) {
     return operation.counts.afterFix === 0 ? 'rien à corriger' : 'aucune correction possible'
   }
-  if (step === 'push' && operation.changes.length === 0) return 'rien à pousser'
+  if (step === 'force' && operation.analysis?.report && !operation.analysis.report.force.recommended) return 'passé · déconseillé par Claude'
+  if (step === 'force') return 'passé'
+  if (step === 'repair' && (operation.counts.afterForce ?? operation.counts.afterFix) === 0) return 'rien à corriger'
+  if (step === 'push' && operation.changes.length === 0 && !operation.repair?.commit) return 'rien à pousser'
   return 'ignorée'
 }
 
-/** Durée d'une analyse en cours et tours écoulés : `2 min · 14 tours`. */
-function analysisProgress(analysis: Analysis): string {
-  const minutes = Math.floor((Date.now() - Date.parse(analysis.startedAt)) / 60_000)
-  return `${minutes < 1 ? "moins d'une minute" : `${minutes} min`} · ${plural(analysis.turns, 'tour')}`
+/** Durée d'une session de Claude en cours et tours écoulés : `2 min · 14 tours`. */
+function sessionProgress(session: { startedAt: string; turns: number }): string {
+  const minutes = Math.floor((Date.now() - Date.parse(session.startedAt)) / 60_000)
+  return `${minutes < 1 ? "moins d'une minute" : `${minutes} min`} · ${plural(session.turns, 'tour')}`
+}
+
+/** Résultat des corrections par Claude : vulnérabilités corrigées et fichiers modifiés. */
+function repairResult(operation: Operation, repair: Repair): string | null {
+  if (!repair.report) return null
+  const fixed = fixedText(operation.counts.afterForce ?? operation.counts.afterFix, operation.counts.afterRepair)
+  const files = repair.report.changes.length
+  return [fixed, files > 0 ? plural(files, 'fichier modifié', 'fichiers modifiés') : 'aucun fichier modifié'].filter(Boolean).join(' · ')
 }
 
 /** Résumé d'une étape terminée, aligné à droite de sa ligne. */
 function stepResult(operation: Operation, step: StepName): ReactNode {
   const state = operation.steps[step]
-  if (step === 'analysis' && state === 'running' && operation.analysis) return analysisProgress(operation.analysis)
+  if (step === 'analysis' && state === 'running' && operation.analysis) return sessionProgress(operation.analysis)
+  if (step === 'repair' && state === 'running' && operation.repair) return sessionProgress(operation.repair)
   if (state === 'skipped') return skippedReason(operation, step)
   if (state !== 'done') return null
   const { initial, afterFix, afterForce } = operation.counts
@@ -85,6 +101,8 @@ function stepResult(operation: Operation, step: StepName): ReactNode {
       return fixedText(initial, afterFix)
     case 'force':
       return fixedText(afterFix, afterForce)
+    case 'repair':
+      return operation.repair ? repairResult(operation, operation.repair) : null
     case 'analysis':
       return operation.analysis?.task ? (
         <a className="link task-link" href={operation.analysis.task.url} target="_blank" rel="noreferrer">
@@ -116,18 +134,18 @@ function ChangesList({ operation }: { operation: Operation }) {
   )
 }
 
-/** Dernières actions de Claude pendant l'analyse, la plus récente en clair. */
-function AnalysisActivity({ analysis }: { analysis: Analysis }) {
+/** Dernières actions de Claude pendant une session, la plus récente en clair. */
+function ClaudeActivity({ activity, hint }: { activity: string[]; hint: string }) {
   return (
     <div className="step-body">
       <ul className="activity mono">
-        {analysis.activity.map((line, index) => (
-          <li key={`${index}-${line}`} className={index === analysis.activity.length - 1 ? 'activity-last' : undefined}>
+        {activity.map((line, index) => (
+          <li key={`${index}-${line}`} className={index === activity.length - 1 ? 'activity-last' : undefined}>
             {line}
           </li>
         ))}
       </ul>
-      <p className="hint">Le rapport et la tâche Organizer arrivent à la fin de l'analyse.</p>
+      <p className="hint">{hint}</p>
     </div>
   )
 }
@@ -198,11 +216,148 @@ function ForceDecision({ operation, onDone }: { operation: Operation; onDone: ()
   )
 }
 
-/** Push : message de commit, branche, changements repliés et bouton principal. */
+/**
+ * Corrections par Claude en attente : les remarques laissées sur la tâche de
+ * l'analyse, relues régulièrement, puis lancer les corrections ou passer.
+ */
+function RepairLauncher({ operation, onDone }: { operation: Operation; onDone: () => void }) {
+  const remarks = usePolling(`remarks:${operation.id}`, () => api.getRemarks(operation.id), REMARKS_POLL_MS)
+  const [busy, setBusy] = useState(false)
+  const task = operation.analysis?.task ?? null
+  const comments = remarks.data?.remarks ?? []
+
+  async function decide(run: boolean) {
+    setBusy(true)
+    try {
+      await api.decideRepair(operation.id, run)
+      onDone()
+    } catch (err) {
+      showError(err)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="step-body">
+      <p className="muted">Claude relit la tâche et vos remarques, corrige le code ou force des versions dans le clone, lance les tests, puis fait un commit.</p>
+      <div className="verdict remarks">
+        <p className="remarks-head">
+          <Icon name="message-square" size={14} />
+          <span className="remarks-count">
+            {remarks.error ? 'Remarques illisibles' : !remarks.data ? 'Lecture des remarques…' : comments.length === 0 ? 'Aucune remarque sur la tâche' : plural(comments.length, 'remarque sur la tâche', 'remarques sur la tâche')}
+          </span>
+          {task && (
+            <a className="link task-link" href={task.url} target="_blank" rel="noreferrer">
+              Commenter la tâche
+              <Icon name="external-link" size={12} />
+            </a>
+          )}
+        </p>
+        {remarks.error && <p className="error-text remarks-note">{remarks.error}</p>}
+        {remarks.data && comments.length === 0 && <p className="remarks-note">Sans remarque, Claude suit son analyse.</p>}
+        {comments.length > 0 && (
+          <ul className="remarks-list">
+            {comments.map((comment, index) => (
+              <li key={`${comment.createdAt}-${index}`}>
+                <p className="remarks-body">{comment.body}</p>
+                <p className="remarks-meta">
+                  {comment.author} · {relativeTime(comment.createdAt)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div className="step-actions">
+        <button type="button" className="button button-primary" disabled={busy} onClick={() => void decide(true)}>
+          <Icon name="sparkles" />
+          Lancer les corrections
+        </button>
+        <button type="button" className="button button-secondary" disabled={busy} onClick={() => void decide(false)}>
+          {operation.changes.length > 0 ? 'Passer au push' : 'Passer'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+const TEST_ICONS: Record<'passed' | 'failed' | 'not_run', { icon: IconName; className: string }> = {
+  passed: { icon: 'circle-check', className: 'text-ok' },
+  failed: { icon: 'circle-x', className: 'error-text' },
+  not_run: { icon: 'circle-minus', className: 'muted' },
+}
+
+/** Ce que Claude a changé : résumé, fichiers, tests, audit et lien vers la sous-tâche du rapport détaillé. */
+function RepairSummary({ operation, repair }: { operation: Operation; repair: Repair }) {
+  const report = repair.report!
+  const tests = TEST_ICONS[report.tests.outcome]
+  const remaining = operation.counts.afterRepair
+  return (
+    <div className="verdict repair-summary">
+      <p className="verdict-title">
+        <Icon name="sparkles" size={14} />
+        Ce que Claude a changé
+      </p>
+      <p className="verdict-text">{report.summary}</p>
+      {report.changes.length > 0 && (
+        <ul className="repair-changes">
+          {report.changes.map((change) => (
+            <li key={change.file}>
+              <span className="mono">{change.file}</span>
+              <span className="muted">{change.change}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="repair-line">
+        <Icon name={tests.icon} size={12} className={tests.className} />
+        {report.tests.outcome === 'not_run' ? 'Tests non lancés' : report.tests.outcome === 'passed' ? 'Tests réussis' : 'Tests en échec'} — {report.tests.detail}
+      </p>
+      <p className="repair-line">
+        <Icon name={remaining === 0 ? 'circle-check' : 'circle-alert'} size={12} className={remaining === 0 ? 'text-ok' : 'text-warning'} />
+        npm audit après corrections : {remaining === null ? 'non relancé' : remaining === 0 ? 'aucune vulnérabilité' : plural(remaining, 'vulnérabilité')}
+        {repair.task && (
+          <>
+            {' · '}
+            <a className="link task-link" href={repair.task.url} target="_blank" rel="noreferrer">
+              rapport détaillé {repair.task.key}
+              <Icon name="external-link" size={12} />
+            </a>
+          </>
+        )}
+      </p>
+    </div>
+  )
+}
+
+/** Commits de la branche, en clair : `2 commits, dont celui de Claude`. */
+function commitsText(repair: Repair): string {
+  const count = (repair.auditCommit ? 1 : 0) + (repair.commit ? 1 : 0)
+  if (!repair.commit) return plural(count, 'commit')
+  return count === 1 ? 'le commit de Claude' : `${plural(count, 'commit')}, dont celui de Claude`
+}
+
+/**
+ * Push : le rapport de Claude s'il a corrigé, le message de commit (titre de
+ * la pull request quand les commits sont déjà faits), la branche, les
+ * changements repliés et le bouton principal ; après Claude, le relancer.
+ */
 function PushForm({ operation, onDone }: { operation: Operation; onDone: () => void }) {
   const [message, setMessage] = useState(operation.commitMessage)
   const [showChanges, setShowChanges] = useState(false)
   const [busy, setBusy] = useState(false)
+  const repair = operation.repair?.report ? operation.repair : null
+
+  async function rerun() {
+    setBusy(true)
+    try {
+      await api.decideRepair(operation.id, true)
+      onDone()
+    } catch (err) {
+      showError(err)
+      setBusy(false)
+    }
+  }
 
   async function push() {
     if (message.trim() === '') return
@@ -218,9 +373,17 @@ function PushForm({ operation, onDone }: { operation: Operation; onDone: () => v
 
   return (
     <div className="step-body">
-      <input className="input mono commit-input" value={message} onChange={(event) => setMessage(event.target.value)} aria-label="Message de commit" spellCheck={false} />
+      {repair && <RepairSummary operation={operation} repair={repair} />}
+      <input
+        className={`input mono commit-input${repair ? ' commit-input-spaced' : ''}`}
+        value={message}
+        onChange={(event) => setMessage(event.target.value)}
+        aria-label={operation.repair ? 'Titre de la pull request' : 'Message de commit'}
+        spellCheck={false}
+      />
       <p className="hint">
-        Nouvelle branche {operation.branch} ·{' '}
+        Nouvelle branche {operation.branch}
+        {operation.repair && ` · ${commitsText(operation.repair)}`} ·{' '}
         <button type="button" className="link" onClick={() => setShowChanges(!showChanges)}>
           {showChanges ? 'masquer les changements' : 'voir les changements'}
         </button>
@@ -231,6 +394,12 @@ function PushForm({ operation, onDone }: { operation: Operation; onDone: () => v
           <Icon name="upload" />
           Pousser et ouvrir la PR
         </button>
+        {repair && (
+          <button type="button" className="button button-secondary" disabled={busy} onClick={() => void rerun()}>
+            <Icon name="rotate-cw" />
+            Relancer avec mes remarques
+          </button>
+        )}
       </div>
     </div>
   )
@@ -256,9 +425,12 @@ function UnfixableList({ vulnerabilities }: { vulnerabilities: Vulnerability[] }
 function StepRow({ operation, step, onDone }: { operation: Operation; step: StepName; onDone: () => void }) {
   const [showUnfixable, setShowUnfixable] = useState(false)
   const state = operation.steps[step]
-  const waitingHere = (operation.status === 'waiting_force' && step === 'force') || (operation.status === 'waiting_push' && step === 'push')
-  const failure = step === 'analysis' ? (operation.analysis?.error ?? null) : operation.error
-  const failedHere = state === 'failed' && failure
+  const waitingHere =
+    (operation.status === 'waiting_force' && step === 'force') ||
+    (operation.status === 'waiting_repair' && step === 'repair') ||
+    (operation.status === 'waiting_push' && step === 'push')
+  const failure = step === 'analysis' ? (operation.analysis?.error ?? null) : step === 'repair' ? (operation.repair?.error ?? null) : operation.error
+  const failedHere = (state === 'failed' || step === 'repair') && failure
   const label = STEP_LABELS[step]
   const icon: IconName = waitingHere ? (step === 'force' ? 'circle-alert' : 'circle-dot') : STEP_ICONS[state]
   const withoutFix = lastAuditedStep(operation) === step ? unfixable(operation) : []
@@ -281,9 +453,15 @@ function StepRow({ operation, step, onDone }: { operation: Operation; step: Step
         </span>
       </div>
       {showUnfixable && withoutFix.length > 0 && <UnfixableList vulnerabilities={withoutFix} />}
-      {step === 'analysis' && state === 'running' && operation.analysis && <AnalysisActivity analysis={operation.analysis} />}
+      {step === 'analysis' && state === 'running' && operation.analysis && (
+        <ClaudeActivity activity={operation.analysis.activity} hint="Le rapport et la tâche Organizer arrivent à la fin de l'analyse." />
+      )}
+      {step === 'repair' && state === 'running' && operation.repair && (
+        <ClaudeActivity activity={operation.repair.activity} hint="Le commit et le rapport arrivent à la fin des corrections." />
+      )}
       {step === 'analysis' && state === 'done' && operation.analysis?.report && <p className="step-body hint">{operation.analysis.report.summary}</p>}
       {operation.status === 'waiting_force' && step === 'force' && <ForceDecision operation={operation} onDone={onDone} />}
+      {operation.status === 'waiting_repair' && step === 'repair' && <RepairLauncher operation={operation} onDone={onDone} />}
       {operation.status === 'waiting_push' && step === 'push' && <PushForm key={operation.id} operation={operation} onDone={onDone} />}
       {failedHere && <p className="step-body error-text pre">{failure}</p>}
     </div>
@@ -310,7 +488,9 @@ export function OperationScreen({ repoId, operationId }: { repoId: string; opera
   const name = repoId.split('/')[1]
   const suffix = STATUS_SUFFIX[operation.status]
   const steps: StepName[] =
-    operation.kind === 'audit' ? ['clone', 'audit'] : ['clone', 'audit', 'fix', ...(operation.analysis ? (['analysis'] as const) : []), 'force', 'push']
+    operation.kind === 'audit'
+      ? ['clone', 'audit']
+      : ['clone', 'audit', 'fix', ...(operation.analysis ? (['analysis'] as const) : []), 'force', ...(operation.analysis?.task ? (['repair'] as const) : []), 'push']
 
   async function cancel() {
     try {

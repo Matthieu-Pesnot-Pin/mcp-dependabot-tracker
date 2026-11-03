@@ -1,4 +1,4 @@
-import type { AddableReposResponse, AppConfig, AuditAllResponse, BranchesResponse, CategoriesResponse, OperationResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
+import type { AddableReposResponse, AppConfig, AuditAllResponse, BranchesResponse, CategoriesResponse, OperationResponse, RemarksResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
 import type { AuditScope, Category, Rights } from '@shared/schemas/model.schema'
 import type { SaveSettingsBody, SettingsView } from '@shared/schemas/settings.schema'
 
@@ -78,6 +78,8 @@ export const api = {
   startFix: (repoId: string, scope: AuditScope) => send<OperationResponse>('POST', `${repoPath(repoId)}/operations`, { scope }),
   getOperation: (id: string) => request<OperationResponse>(operationPath(id)),
   decideForce: (id: string, apply: boolean) => send<OperationResponse>('POST', `${operationPath(id)}/force`, { apply }),
+  decideRepair: (id: string, run: boolean) => send<OperationResponse>('POST', `${operationPath(id)}/repair`, { run }),
+  getRemarks: (id: string) => request<RemarksResponse>(`${operationPath(id)}/remarks`),
   push: (id: string, commitMessage: string) => send<OperationResponse>('POST', `${operationPath(id)}/push`, { commitMessage }),
   cancel: (id: string) => send<OperationResponse>('POST', `${operationPath(id)}/cancel`),
   getSettings: () => request<SettingsView>('settings'),

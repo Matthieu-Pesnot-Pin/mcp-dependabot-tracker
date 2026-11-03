@@ -23,13 +23,22 @@ export interface OrganizerSpace {
   owner: { id: string; name: string; email: string };
 }
 
+/** Tâche de l'espace ; `parentKey` est la clé de sa tâche parente, null pour une tâche de premier niveau. */
 export interface OrganizerTask {
   id: string;
   key: string;
   title: string;
   status: (typeof TASK_STATUSES)[number];
+  parentKey: string | null;
   assigneeIds: string[];
   tags: string[];
+}
+
+/** Commentaire d'une tâche ; `author` est le nom de son auteur. */
+export interface OrganizerComment {
+  author: string;
+  body: string;
+  createdAt: string;
 }
 
 /**
@@ -73,18 +82,35 @@ export class OrganizerClient {
 
   /** Tâche de l'espace, par sa clé (ex. `ORG-42`) ou son identifiant. */
   async task(ref: string): Promise<OrganizerTask> {
-    const task = (await this.get(`tasks/${encodeURIComponent(ref)}`))?.task;
+    return this.parseTask((await this.get(`tasks/${encodeURIComponent(ref)}`))?.task, ref);
+  }
+
+  /** Tâche de l'espace et ses commentaires récents, du plus ancien au plus récent. */
+  async taskWithComments(ref: string): Promise<{ task: OrganizerTask; comments: OrganizerComment[] }> {
+    const data = await this.get(`tasks/${encodeURIComponent(ref)}`);
+    const comments = data?.comments;
+    if (!Array.isArray(comments) || !comments.every((comment) => typeof comment?.authorName === "string" && typeof comment.body === "string" && typeof comment.createdAt === "string")) {
+      throw new TrackerError(`The organizer at ${this.connection.url} sent an unexpected answer for the comments of task ${ref}: check that it is up to date.`);
+    }
+    return {
+      task: this.parseTask(data.task, ref),
+      comments: comments.map((comment) => ({ author: comment.authorName, body: comment.body, createdAt: comment.createdAt })),
+    };
+  }
+
+  private parseTask(task: any, ref: string): OrganizerTask {
     if (
       typeof task?.id !== "string" ||
       typeof task.key !== "string" ||
       typeof task.title !== "string" ||
       !TASK_STATUSES.includes(task.status) ||
+      (task.parentKey !== null && typeof task.parentKey !== "string") ||
       !Array.isArray(task.assigneeIds) ||
       !Array.isArray(task.tags)
     ) {
       throw new TrackerError(`The organizer at ${this.connection.url} sent an unexpected answer for task ${ref}: check that it is up to date.`);
     }
-    return { id: task.id, key: task.key, title: task.title, status: task.status, assigneeIds: task.assigneeIds, tags: task.tags };
+    return { id: task.id, key: task.key, title: task.title, status: task.status, parentKey: task.parentKey, assigneeIds: task.assigneeIds, tags: task.tags };
   }
 
   /** Données d'une lecture de l'API agent. Une redirection n'est jamais suivie : le token ne part que vers l'adresse réglée. */

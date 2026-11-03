@@ -49,6 +49,11 @@ export const ForceBodySchema = z.object({ apply: z.boolean() });
 
 export type ForceBody = z.infer<typeof ForceBodySchema>;
 
+/** `run` : lancer ou relancer les corrections par Claude ; sinon l'étape est passée. */
+export const RepairBodySchema = z.object({ run: z.boolean() });
+
+export type RepairBody = z.infer<typeof RepairBodySchema>;
+
 export const PushBodySchema = z.object({ commitMessage: z.string().trim().min(1) });
 
 export type PushBody = z.infer<typeof PushBodySchema>;
@@ -132,6 +137,19 @@ export interface AddableReposResponse {
 
 export interface OperationResponse {
   operation: Operation;
+}
+
+/** Commentaire d'une tâche organizer : son auteur, son texte et sa date. */
+export interface Remark {
+  author: string;
+  body: string;
+  createdAt: string;
+}
+
+/** Tâche de l'analyse d'une opération et ses commentaires récents, du plus ancien au plus récent. */
+export interface RemarksResponse {
+  task: AnalysisTask;
+  remarks: Remark[];
 }
 
 export interface AppConfig {

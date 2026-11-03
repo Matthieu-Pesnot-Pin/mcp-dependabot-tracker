@@ -15,9 +15,10 @@ import { resolveLogDir } from "./core/log-dir.js";
 import { githubConfigured, readGitHubConfig } from "./core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
-import { cancelOperation, decideForce, pushOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "./core/operations.js";
+import { cancelOperation, decideForce, decideRepair, pushOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "./core/operations.js";
 import { AuditAll } from "./core/audit-all.js";
 import { refreshAnalysisTask } from "./core/analysis.js";
+import { analysisRemarks } from "./core/repair.js";
 import { checkClaudeToken, packagedClaudeCommand, type ClaudeRuntime } from "./core/claude.js";
 import { OrganizerClient } from "./core/organizer.js";
 import { readSettings, saveSettings, settingsView, testOrganizer, type SettingsChecks } from "./core/settings.js";
@@ -33,6 +34,7 @@ import {
   ForceBodySchema,
   OperationRequestSchema,
   PushBodySchema,
+  RepairBodySchema,
   RepoRequestSchema,
   ScopeBodySchema,
   SetBranchBodySchema,
@@ -287,6 +289,14 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
       const { operationId } = parseRequest(OperationRequestSchema, msg.data);
       return { operation: decideForce(operations, operationId, parseRequest(ForceBodySchema, msg.data?.body).apply) };
     }
+
+    case "DECIDE_REPAIR": {
+      const { operationId } = parseRequest(OperationRequestSchema, msg.data);
+      return { operation: decideRepair(operations, operationId, parseRequest(RepairBodySchema, msg.data?.body).run) };
+    }
+
+    case "GET_REMARKS":
+      return await analysisRemarks(readSettings(dataDir), store.getOperation(parseRequest(OperationRequestSchema, msg.data).operationId));
 
     case "PUSH_OPERATION": {
       const { operationId } = parseRequest(OperationRequestSchema, msg.data);

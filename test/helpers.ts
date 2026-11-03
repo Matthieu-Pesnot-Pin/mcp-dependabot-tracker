@@ -245,19 +245,28 @@ export interface FakeTask {
   title: string;
   description: string;
   status: "todo" | "doing" | "review" | "done";
+  parentKey: string | null;
   assigneeIds: string[];
   tags: string[];
 }
 
+export interface FakeComment {
+  authorName: string;
+  body: string;
+  createdAt: string;
+}
+
 /**
- * Faux site organizer : l'API agent en lecture (`context`, `tasks/<clé>`) avec
- * l'enveloppe `{ text, data }`, et des écritures simplifiées (création, tags,
- * assignations) qu'appelle le faux Claude.
+ * Faux site organizer : l'API agent en lecture (`context`, `tasks/<clé>` avec
+ * ses commentaires) avec l'enveloppe `{ text, data }`, et des écritures
+ * simplifiées (création, sous-tâche, tags, assignations) qu'appelle le faux
+ * Claude. Les commentaires de l'utilisateur s'ajoutent par `addComment`.
  */
 export class FakeOrganizer {
   readonly token = "org-token";
   readonly owner = { id: "u-owner", name: "Matthieu Pin", email: "owner@example.com" };
   readonly tasks: FakeTask[] = [];
+  readonly comments = new Map<string, FakeComment[]>();
   private server: http.Server | null = null;
   url = "";
 
@@ -274,6 +283,11 @@ export class FakeOrganizer {
   private send(res: http.ServerResponse, status: number, body: unknown) {
     res.writeHead(status, { "Content-Type": "application/json" });
     res.end(JSON.stringify(body));
+  }
+
+  /** Commentaire de l'utilisateur sur une tâche. */
+  addComment(key: string, body: string): void {
+    this.comments.set(key, [...(this.comments.get(key) ?? []), { authorName: this.owner.name, body, createdAt: new Date().toISOString() }]);
   }
 
   private find(ref: string): FakeTask | undefined {
@@ -302,7 +316,16 @@ export class FakeOrganizer {
     }
     if (resource !== "tasks") return this.send(res, 404, { error: "Not found." });
     if (req.method === "POST" && ref === undefined) {
-      const task: FakeTask = { id: `t-${this.tasks.length + 1}`, key: `MNT-${this.tasks.length + 1}`, title: body.title, description: body.description ?? "", status: "todo", assigneeIds: [], tags: [] };
+      const task: FakeTask = {
+        id: `t-${this.tasks.length + 1}`,
+        key: `MNT-${this.tasks.length + 1}`,
+        title: body.title,
+        description: body.description ?? "",
+        status: "todo",
+        parentKey: body.parent ?? null,
+        assigneeIds: [],
+        tags: [],
+      };
       this.tasks.push(task);
       return this.send(res, 200, { text: "created", data: { task } });
     }
@@ -310,7 +333,7 @@ export class FakeOrganizer {
     if (!task) return this.send(res, 404, { error: `Task ${ref} not found.` });
     if (req.method === "PUT" && sub === "assignees") task.assigneeIds = body.assignees;
     if (req.method === "PUT" && sub === "tags") task.tags = body.tags;
-    return this.send(res, 200, { text: "task", data: { task } });
+    return this.send(res, 200, { text: "task", data: { task, comments: this.comments.get(task.key) ?? [] } });
   }
 }
 

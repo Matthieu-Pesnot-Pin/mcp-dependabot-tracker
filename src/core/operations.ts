@@ -9,6 +9,7 @@ import {
   type OperationKind,
   type Origin,
   type PullRequest,
+  type Repair,
   type Repo,
   type StepName,
   type StepState,
@@ -30,6 +31,7 @@ import {
   type AuditedVulnerability,
   type Lockfile,
 } from "./npm-audit.js";
+import { repairVulnerabilities } from "./repair.js";
 import { assertNotDeprecated, isActive, type Store } from "./store.js";
 
 /** Accès aux données et à GitHub pour exécuter les opérations. */
@@ -67,8 +69,14 @@ const CLONE_DIR = "repo";
 /** Paquets listés dans le corps de la pull request. */
 const MAX_PR_CHANGES = 60;
 
-/** Dernières actions de Claude gardées dans l'opération pendant l'analyse. */
+/** Dernières actions de Claude gardées dans l'opération pendant l'analyse et les corrections. */
 const ANALYSIS_ACTIVITY = 3;
+
+/** Fichiers suivis par les commits du tracker : tout le clone, sauf les node_modules qu'installe Claude. */
+const STAGED_PATHS = ["--", ".", ":(exclude,glob)**/node_modules/**"];
+
+/** Co-auteur du commit des corrections par Claude. */
+const CLAUDE_TRAILER = "Co-Authored-By: Claude <noreply@anthropic.com>";
 
 function now(): string {
   return new Date().toISOString();
@@ -132,9 +140,9 @@ function newOperation(repo: Repo, kind: OperationKind, origin: Origin, scope: Au
     workDir: null,
     baseBranch: repo.branch,
     cancelRequested: false,
-    steps: { clone: "pending", audit: "pending", fix: "pending", analysis: "pending", force: "pending", push: "pending" },
+    steps: { clone: "pending", audit: "pending", fix: "pending", analysis: "pending", force: "pending", repair: "pending", push: "pending" },
     projects: [],
-    counts: { initial: null, afterFix: null, afterForce: null },
+    counts: { initial: null, afterFix: null, afterForce: null, afterRepair: null },
     found: [],
     remaining: [],
     forceCandidates: [],
@@ -143,6 +151,7 @@ function newOperation(repo: Repo, kind: OperationKind, origin: Origin, scope: Au
     branch: null,
     pullRequest: null,
     analysis: null,
+    repair: null,
     error: null,
     log: [],
   };
@@ -271,6 +280,15 @@ async function auditAll(runner: Runner, count: keyof Operation["counts"]): Promi
   return vulnerabilities;
 }
 
+/** Vulnérabilités restantes de chaque projet, d'après un nouvel `npm audit`, sans toucher aux comptes de l'opération. */
+async function currentAuditFacts(runner: Runner): Promise<unknown[]> {
+  const facts: unknown[] = [];
+  for (const project of runner.operation.projects) {
+    facts.push(...auditFacts(await runner.npm(project, ["audit", ...scopeArgs(runner.operation.scope), "--json"]), project));
+  }
+  return facts;
+}
+
 /** Paquets modifiés depuis le commit cloné, dans tous les projets. */
 async function refreshChanges(runner: Runner): Promise<void> {
   const changes: Change[] = [];
@@ -353,6 +371,45 @@ async function analysisStep(runner: Runner, ctx: OperationContext): Promise<void
   }
 }
 
+/** Options git qui signent un commit au nom de l'utilisateur du token GitHub. */
+async function commitIdentity(runner: Runner): Promise<string[]> {
+  const user = await new GitHubClient(runner.config).getAuthenticatedUser();
+  return ["-c", `user.name=${user.name ?? user.login}`, "-c", `user.email=${user.id}+${user.login}@users.noreply.github.com`];
+}
+
+/** Vrai si l'index contient des changements à commiter. */
+async function hasStagedChanges(runner: Runner): Promise<boolean> {
+  return (await runner.git(["diff", "--cached", "--name-only"])).trim() !== "";
+}
+
+/**
+ * Crée la branche de la correction et y commite les lockfiles modifiés par
+ * `npm audit fix`, s'ils ont changé ; rend le commit sur lequel reposeront les
+ * corrections par Claude, et celui de `npm audit fix`, null sans changement.
+ */
+async function commitAuditFixes(runner: Runner): Promise<{ base: string; auditCommit: string | null }> {
+  const branch = runner.operation.branch ?? branchName(new Date());
+  runner.update((operation) => ({ ...operation, branch }));
+  await runner.git(["checkout", "-b", branch]);
+  await runner.git(["add", "-A", ...STAGED_PATHS]);
+  const committed = await hasStagedChanges(runner);
+  if (committed) await runner.git([...(await commitIdentity(runner)), "commit", "-m", runner.operation.commitMessage]);
+  const base = (await runner.git(["rev-parse", "HEAD"])).trim();
+  return { base, auditCommit: committed ? base : null };
+}
+
+/**
+ * Remplace le commit des corrections par Claude par un seul commit de tout ce
+ * qui a changé depuis `base` ; rend ce commit, ou null quand rien n'a changé.
+ */
+async function commitRepair(runner: Runner, base: string, message: string): Promise<string | null> {
+  await runner.git(["reset", "--soft", base]);
+  await runner.git(["add", "-A", ...STAGED_PATHS]);
+  if (!(await hasStagedChanges(runner))) return null;
+  await runner.git([...(await commitIdentity(runner)), "commit", "-m", message, "-m", CLAUDE_TRAILER]);
+  return (await runner.git(["rev-parse", "HEAD"])).trim();
+}
+
 /** `npm audit fix --force` dans les projets qui ont une montée majeure à appliquer. */
 async function forceStep(runner: Runner): Promise<void> {
   runner.setStep("force", "running");
@@ -365,8 +422,76 @@ async function forceStep(runner: Runner): Promise<void> {
   runner.setStep("force", "done");
 }
 
+/**
+ * Corrections par Claude, d'après la tâche de l'analyse et les remarques de
+ * l'utilisateur : la première fois, la branche est créée et `npm audit fix`
+ * y est commité ; les corrections de Claude font ensuite un seul commit, qui
+ * remplace celui d'un passage précédent. Un échec remet le clone dans l'état
+ * du passage précédent et garde ses résultats ; seule une annulation
+ * interrompt l'opération.
+ */
+async function repairStep(runner: Runner, ctx: OperationContext): Promise<void> {
+  runner.setStep("repair", "running");
+  const previous = runner.operation.repair;
+  const { base, auditCommit } = previous ?? (await commitAuditFixes(runner));
+  const repair: Repair = {
+    runs: (previous?.runs ?? 0) + 1,
+    startedAt: now(),
+    endedAt: null,
+    turns: 0,
+    activity: [],
+    base,
+    auditCommit,
+    commit: previous?.commit ?? null,
+    report: previous?.report ?? null,
+    task: previous?.task ?? null,
+    error: null,
+  };
+  runner.update((operation) => ({ ...operation, repair }));
+  const repaired = (fn: (current: Repair) => Repair) => runner.update((operation) => ({ ...operation, repair: operation.repair && fn(operation.repair) }));
+
+  try {
+    const operation = runner.operation;
+    const analysisTask = operation.analysis?.task;
+    if (!analysisTask) throw new TrackerError("The fixes by Claude need the organizer task of the analysis.");
+    const { report, task } = await repairVulnerabilities({
+      repoId: operation.repoId,
+      branch: operation.baseBranch,
+      scope: operation.scope,
+      cwd: runner.repoDir,
+      workDir: operation.workDir!,
+      facts: await currentAuditFacts(runner),
+      forceApplied: operation.steps.force === "done",
+      analysisTask: analysisTask.key,
+      reportTask: previous?.task?.key ?? null,
+      settings: ctx.settings(),
+      claude: ctx.claude,
+      signal: runner.signal,
+      onLine: (line, turns) => {
+        runner.log(`claude: ${line}`);
+        repaired((current) => ({ ...current, turns, activity: [...current.activity, line].slice(-ANALYSIS_ACTIVITY) }));
+      },
+    });
+    const commit = await commitRepair(runner, base, report.commitMessage);
+    runner.log(`Development report ${task.key}: ${task.url}`);
+    await auditAll(runner, "afterRepair");
+    await refreshChanges(runner);
+    repaired((current) => ({ ...current, endedAt: now(), commit, report, task }));
+    runner.setStep("repair", "done");
+  } catch (err: any) {
+    if (err instanceof CommandAbortedError || runner.signal.aborted) throw err;
+    const message = err?.message ?? String(err);
+    runner.log(`Fixes by Claude failed: ${message}`);
+    await runner.git(["reset", "--hard", "HEAD"]);
+    await runner.git(["clean", "-fd", "-e", "node_modules"]);
+    repaired((current) => ({ ...current, endedAt: now(), error: message }));
+    runner.setStep("repair", previous?.report ? "done" : "failed");
+  }
+}
+
 function pullRequestBody(operation: Operation): string {
-  const after = operation.counts.afterForce ?? operation.counts.afterFix;
+  const after = operation.counts.afterRepair ?? operation.counts.afterForce ?? operation.counts.afterFix;
+  const repair = operation.repair?.report ? operation.repair : null;
   const command = ["npm audit fix", ...scopeArgs(operation.scope), "--package-lock-only --ignore-scripts"].join(" ");
   const lines = [
     `Automated \`npm audit\` fixes, made by mcp-dependabot-tracker in a temporary clone (\`${command}\`).`,
@@ -386,33 +511,34 @@ function pullRequestBody(operation: Operation): string {
     lines.push(`- \`${projectLabel(change.project)}${change.name}\` ${change.from ?? "(added)"} → ${change.to ?? "(removed)"}`);
   }
   if (operation.changes.length > MAX_PR_CHANGES) lines.push(`- … and ${operation.changes.length - MAX_PR_CHANGES} more`);
+  if (repair?.report) {
+    lines.push("", `Fixes by Claude Code${repair.task ? `, detailed in organizer task ${repair.task.key}` : ""}:`, "", repair.report.summary, "");
+    for (const change of repair.report.changes) lines.push(`- \`${change.file}\`: ${change.change}`);
+    lines.push(`- Tests: ${repair.report.tests.outcome.replace("_", " ")} — ${repair.report.tests.detail}`);
+  }
   return lines.join("\n");
 }
 
-/** Commit des lockfiles modifiés sur une nouvelle branche, push, puis pull request vers la branche par défaut. */
+/**
+ * Commit des lockfiles modifiés sur une nouvelle branche, push, puis pull
+ * request vers la branche analysée. Après des corrections par Claude, la
+ * branche et ses commits existent déjà : seuls le push et la pull request
+ * restent à faire.
+ */
 async function pushStep(runner: Runner): Promise<void> {
   runner.setStep("push", "running");
   const operation = runner.operation;
   const [owner, name] = operation.repoId.split("/");
   const github = new GitHubClient(runner.config);
-  const user = await github.getAuthenticatedUser();
   const branch = operation.branch ?? branchName(new Date());
   runner.update((current) => ({ ...current, branch }));
 
-  await runner.git(["checkout", "-b", branch]);
-  await runner.git(["add", "-A"]);
-  if ((await runner.git(["status", "--porcelain"])).trim() === "") {
-    throw new TrackerError("Nothing to commit: the fixes left the files unchanged.");
+  if (!operation.repair) {
+    await runner.git(["checkout", "-b", branch]);
+    await runner.git(["add", "-A", ...STAGED_PATHS]);
+    if (!(await hasStagedChanges(runner))) throw new TrackerError("Nothing to commit: the fixes left the files unchanged.");
+    await runner.git([...(await commitIdentity(runner)), "commit", "-m", operation.commitMessage]);
   }
-  await runner.git([
-    "-c",
-    `user.name=${user.name ?? user.login}`,
-    "-c",
-    `user.email=${user.id}+${user.login}@users.noreply.github.com`,
-    "commit",
-    "-m",
-    operation.commitMessage,
-  ]);
   await runner.git(["push", "origin", `HEAD:refs/heads/${branch}`], { auth: true });
 
   const title = operation.commitMessage.split(/\r?\n/)[0];
@@ -445,10 +571,35 @@ function finish(runner: Runner): void {
  * branche qui sera poussée, ou l'opération se termine s'il n'y a rien à pousser.
  */
 function settleForPush(runner: Runner): void {
-  if (runner.operation.changes.length > 0) {
-    runner.update((operation) => ({ ...operation, status: "waiting_push", branch: branchName(new Date()) }));
+  const operation = runner.operation;
+  if (operation.changes.length > 0 || operation.repair?.commit) {
+    runner.update((current) => ({ ...current, status: "waiting_push", branch: current.branch ?? branchName(new Date()) }));
   } else {
     finish(runner);
+  }
+}
+
+/** Vrai quand Claude peut corriger : son analyse a créé une tâche et des vulnérabilités restent. */
+function canRepair(operation: Operation): boolean {
+  return operation.analysis?.task != null && operation.remaining.length > 0;
+}
+
+/** Après `npm audit fix` et la décision sur `--force` : les corrections par Claude attendent l'utilisateur quand elles sont possibles, sinon le push. */
+function settleAfterFixes(runner: Runner): void {
+  if (canRepair(runner.operation)) {
+    runner.update((operation) => ({ ...operation, status: "waiting_repair" }));
+    return;
+  }
+  runner.setStep("repair", "skipped");
+  settleForPush(runner);
+}
+
+/** Après un passage de Claude : le push attend quand un passage a abouti, sinon les corrections attendent de nouveau. */
+function settleAfterRepair(runner: Runner): void {
+  if (runner.operation.repair?.report) {
+    settleForPush(runner);
+  } else {
+    runner.update((operation) => ({ ...operation, status: "waiting_repair" }));
   }
 }
 
@@ -517,8 +668,8 @@ function inBackground(ctx: OperationContext, id: string, run: Promise<Operation>
 /**
  * Lance une correction depuis la GUI, sur le périmètre `scope` : clone, audit,
  * `npm audit fix` et l'analyse par Claude s'exécutent en arrière-plan, puis
- * l'opération attend la décision sur `--force` ou le push. Refusé sur un dépôt
- * déprécié.
+ * l'opération attend la décision sur `--force`, les corrections par Claude ou
+ * le push. Refusé sur un dépôt déprécié.
  */
 export function startUserFix(ctx: OperationContext, repoId: string, scope: AuditScope): Operation {
   ctx.githubConfig();
@@ -539,7 +690,7 @@ export function startUserFix(ctx: OperationContext, repoId: string, scope: Audit
         return;
       }
       runner.setStep("force", "skipped");
-      settleForPush(runner);
+      settleAfterFixes(runner);
     })
   );
   return operation;
@@ -574,7 +725,34 @@ export function decideForce(ctx: OperationContext, id: string, apply: boolean): 
       } else {
         runner.setStep("force", "skipped");
       }
-      settleForPush(runner);
+      settleAfterFixes(runner);
+    })
+  );
+  return operation;
+}
+
+/**
+ * Lance ou passe les corrections par Claude d'une opération qui les attend ;
+ * `run` sur une opération qui attend le push après un passage relance Claude
+ * avec les remarques de l'utilisateur.
+ */
+export function decideRepair(ctx: OperationContext, id: string, run: boolean): Operation {
+  const relaunch = run && ctx.store.getOperation(id).status === "waiting_push";
+  const operation = resume(ctx, id, relaunch ? "waiting_push" : "waiting_repair", (current) => {
+    if (relaunch && !current.repair?.report) throw new ConflictError(`Operation ${id} has no fixes by Claude to run again.`);
+    return current;
+  });
+  inBackground(
+    ctx,
+    id,
+    execute(ctx, id, async (runner) => {
+      if (!run) {
+        runner.setStep("repair", "skipped");
+        settleForPush(runner);
+        return;
+      }
+      await repairStep(runner, ctx);
+      settleAfterRepair(runner);
     })
   );
   return operation;

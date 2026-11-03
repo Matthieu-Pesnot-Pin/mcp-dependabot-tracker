@@ -30,8 +30,8 @@ export function packagedClaudeCommand(): string[] {
 /** Variables du serveur transmises à Claude Code : chemins système et langue, aucun secret. */
 const PASSED_ENV = ["PATH", "LANG", "TMPDIR", "TEMP", "TMP", "SystemRoot", "SYSTEMROOT", "APPDATA", "LOCALAPPDATA"];
 
-function sessionEnv(runtime: ClaudeRuntime, token: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { HOME: runtime.home, CLAUDE_CONFIG_DIR: runtime.home, CLAUDE_CODE_OAUTH_TOKEN: token };
+function sessionEnv(runtime: ClaudeRuntime, token: string, extra: Record<string, string>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...extra, HOME: runtime.home, CLAUDE_CONFIG_DIR: runtime.home, CLAUDE_CODE_OAUTH_TOKEN: token };
   for (const name of PASSED_ENV) {
     if (process.env[name] !== undefined) env[name] = process.env[name];
   }
@@ -44,6 +44,8 @@ export interface ClaudeSessionOptions {
   prompt: string;
   /** Options propres à la session : outils, configuration MCP, schéma du résultat. */
   args: string[];
+  /** Variables propres à la session, en plus de celles du système. */
+  env?: Record<string, string>;
   token: string;
   maxTurns: number;
   maxMinutes: number;
@@ -65,12 +67,14 @@ function shorten(text: string): string {
   return first.length > MAX_LINE ? `${first.slice(0, MAX_LINE)}…` : first;
 }
 
-/** Appel d'outil en clair : `Read src/app.ts`, `Grep mermaid`, `organizer create_task`. */
+/** Appel d'outil en clair : `Read src/app.ts`, `Grep mermaid`, `Edit src/app.ts`, `$ npm test`, `organizer create_task`. */
 function describeTool(name: string, input: any, cwd: string): string {
   const relative = (file: unknown) => (typeof file === "string" && path.isAbsolute(file) ? path.relative(cwd, file) || "." : String(file ?? ""));
   if (name === "Read") return `Read ${relative(input?.file_path)}`;
   if (name === "Grep") return `Grep ${input?.pattern ?? ""}${input?.path ? ` in ${relative(input.path)}` : ""}`;
   if (name === "Glob") return `Glob ${input?.pattern ?? ""}`;
+  if (name === "Edit" || name === "Write") return `${name} ${relative(input?.file_path)}`;
+  if (name === "Bash") return shorten(`$ ${input?.command ?? ""}`);
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
   if (mcp) return `${mcp[1]} ${mcp[2]}`;
   return name;
@@ -165,7 +169,7 @@ export function runClaudeSession(runtime: ClaudeRuntime, options: ClaudeSessionO
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: sessionEnv(runtime, options.token),
+      env: sessionEnv(runtime, options.token, options.env ?? {}),
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
       windowsHide: true,

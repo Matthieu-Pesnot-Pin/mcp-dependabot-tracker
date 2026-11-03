@@ -3,11 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import test, { after, before } from "node:test";
 
-import { cancelOperation, decideForce, pushOperation, runAgentOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "../src/core/operations.js";
+import { cancelOperation, decideForce, decideRepair, pushOperation, runAgentOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "../src/core/operations.js";
 import { addRepository, listRepoBranches, repoView, setBranch } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import type { GitHubConfig } from "../src/core/config.js";
 import { refreshAnalysisTask } from "../src/core/analysis.js";
+import { analysisRemarks } from "../src/core/repair.js";
 import type { Operation } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS, type Settings } from "../shared/schemas/settings.schema.js";
 import { FAKE_CLAUDE, FakeGitHub, FakeOrganizer, LocalRemotes, VULNERABLE_DEV_FIXTURE, VULNERABLE_FIXTURE, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
@@ -100,7 +101,7 @@ test("an agent audit reports the vulnerabilities of every npm project and delete
   assert.equal(operation.origin, "agent");
   assert.deepEqual(operation.projects, ["", "tools"]);
   assert.equal(operation.counts.initial, 4);
-  assert.deepEqual(operation.steps, { clone: "done", audit: "done", fix: "skipped", analysis: "skipped", force: "skipped", push: "skipped" });
+  assert.deepEqual(operation.steps, { clone: "done", audit: "done", fix: "skipped", analysis: "skipped", force: "skipped", repair: "skipped", push: "skipped" });
   assert.deepEqual(
     operation.remaining.map((v) => `${v.project}:${v.name}:${v.fix}`).sort(),
     [":lodash:available", ":nth-check:major", "tools:lodash:available", "tools:nth-check:major"]
@@ -264,11 +265,101 @@ test("cancelling an operation during the analysis stops Claude Code", { skip }, 
   }
 });
 
+/** Correction lancée depuis la GUI, analysée par Claude, `--force` passé : elle attend les corrections par Claude. */
+async function waitingRepair(token: string): Promise<{ repoId: string; id: string; analysisTask: string }> {
+  settings = analysisSettings(token);
+  const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
+  const started = startUserFix(ctx, repoId, "production");
+  const waitingForce = await waitStatus(started.id, ["waiting_force", "failed"]);
+  assert.equal(waitingForce.status, "waiting_force", waitingForce.error ?? "");
+  decideForce(ctx, started.id, false);
+  const waiting = await waitStatus(started.id, ["waiting_repair", "waiting_push", "failed"]);
+  assert.equal(waiting.status, "waiting_repair", waiting.error ?? "");
+  return { repoId, id: started.id, analysisTask: waiting.analysis!.task!.key };
+}
+
+test("Claude fixes by hand after the user's remarks, in a commit of its own after npm audit fix, and runs again in place", { skip }, async () => {
+  try {
+    const { repoId, id, analysisTask } = await waitingRepair("good-token");
+    organizer.addComment(analysisTask, "Garde le thème sombre.");
+    const remarks = await analysisRemarks(settings, ctx.store.getOperation(id));
+    assert.deepEqual(remarks.remarks.map((remark) => [remark.author, remark.body]), [[organizer.owner.name, "Garde le thème sombre."]]);
+    assert.equal(remarks.task.key, analysisTask);
+
+    decideRepair(ctx, id, true);
+    const first = await waitStatus(id, ["waiting_push", "waiting_repair", "failed"]);
+    assert.equal(first.status, "waiting_push", first.repair?.error ?? first.error ?? "");
+    assert.equal(first.steps.repair, "done");
+    const repair = first.repair!;
+    assert.equal(repair.report?.summary, "1 remarque(s) prise(s) en compte.");
+    assert.deepEqual(repair.report?.tests, { outcome: "passed", detail: "Les tests passent." });
+    assert.ok(repair.auditCommit && repair.commit && repair.base === repair.auditCommit);
+    const report = organizer.tasks.find((task) => task.key === repair.task?.key)!;
+    assert.equal(report.parentKey, analysisTask);
+    assert.deepEqual([report.tags, report.assigneeIds], [[repoId.split("/")[1]], [organizer.owner.id]]);
+    assert.equal(first.counts.afterRepair, first.counts.afterFix, "the fake fixes nothing that npm audit sees");
+
+    const call = claudeCalls().at(-1)!;
+    const option = (name: string) => call.args[call.args.indexOf(name) + 1];
+    assert.equal(option("--tools"), "Read,Grep,Glob,Edit,Write,Bash");
+    assert.ok(option("--allowedTools").split(",").includes("Bash(npm test *)"));
+    assert.ok(!option("--allowedTools").includes("git"), "Claude never runs git");
+    assert.deepEqual(JSON.parse(option("--settings")), { permissions: { blockWritesOutsideWorkingDirectories: true } });
+    assert.ok(call.env.includes("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"), "the commands of Claude do not receive its token");
+    assert.ok(!call.env.includes("GITHUB_TOKEN"));
+    assert.ok(!fs.existsSync(option("--mcp-config")));
+
+    organizer.addComment(analysisTask, "Ajoute un commentaire d'en-tête.");
+    decideRepair(ctx, id, true);
+    const second = await waitStatus(id, ["waiting_push", "waiting_repair", "failed"]);
+    assert.equal(second.status, "waiting_push", second.repair?.error ?? second.error ?? "");
+    assert.equal(second.repair?.error, null);
+    assert.equal(second.repair?.runs, 2);
+    assert.equal(second.repair?.task?.key, repair.task?.key, "a second pass updates the same report");
+    assert.equal(second.repair?.base, repair.base);
+    assert.notEqual(second.repair?.commit, repair.commit, "the second pass replaces the commit of the first one");
+    assert.match(claudeCalls().at(-1)!.args[claudeCalls().at(-1)!.args.indexOf("-p") + 1], new RegExp(`your previous report, task ${repair.task?.key}, with update_task`));
+
+    pushOperation(ctx, id, "fix(deps): resolve npm audit vulnerabilities");
+    const done = await waitStatus(id, ["done", "failed"]);
+    assert.equal(done.status, "done", done.error ?? "");
+    const [owner, name] = repoId.split("/");
+    const subjects = remotes.log(owner, name, done.branch!).split("\n").filter(Boolean).map((line) => line.split("|")[1]);
+    assert.deepEqual(subjects, ["fix(deps): apply the fixes by Claude", "fix(deps): resolve npm audit vulnerabilities", "initial"]);
+    assert.equal(remotes.show(owner, name, done.branch!, "src/fixed.js"), "// Garde le thème sombre. / Ajoute un commentaire d'en-tête.\n");
+    assert.throws(() => remotes.show(owner, name, done.branch!, "node_modules/installed.txt"), "node_modules is never committed");
+    const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
+    assert.match(pull.body, new RegExp(`Fixes by Claude Code, detailed in organizer task ${repair.task?.key}:`));
+    assert.match(pull.body, /- `src\/fixed\.js`: correctif appliqué/);
+  } finally {
+    settings = DEFAULT_SETTINGS;
+  }
+});
+
+test("fixes by Claude that fail leave the clone as it was, and the operation waits for them again", { skip }, async () => {
+  try {
+    const { id } = await waitingRepair("broken");
+    decideRepair(ctx, id, true);
+    const failed = await waitStatus(id, ["waiting_repair", "waiting_push", "failed"]);
+    assert.equal(failed.status, "waiting_repair", failed.error ?? "");
+    assert.equal(failed.steps.repair, "failed");
+    assert.match(failed.repair?.error ?? "", /The tests could not start/);
+    assert.ok(!fs.existsSync(path.join(failed.workDir!, "repo", "src", "fixed.js")), "the changes of the failed pass are dropped");
+    decideRepair(ctx, id, false);
+    const skipped = await waitStatus(id, ["waiting_push", "done", "failed"]);
+    assert.equal(skipped.status, "waiting_push", skipped.error ?? "");
+    assert.equal(skipped.steps.repair, "skipped");
+    cancelOperation(ctx, id);
+  } finally {
+    settings = DEFAULT_SETTINGS;
+  }
+});
+
 test("an agent fix without push reports the changes and pushes nothing", { skip }, async () => {
   const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
   const operation = await runAgentOperation(ctx, repoId, "fix", { scope: "production", force: false, push: false, commitMessage: "x" });
   assert.equal(operation.status, "done", operation.error ?? "");
-  assert.deepEqual(operation.steps, { clone: "done", audit: "done", fix: "done", analysis: "skipped", force: "skipped", push: "skipped" });
+  assert.deepEqual(operation.steps, { clone: "done", audit: "done", fix: "done", analysis: "skipped", force: "skipped", repair: "skipped", push: "skipped" });
   assert.equal(operation.forceCandidates.length, 1);
   assert.deepEqual(operation.changes.map((c) => c.name), ["lodash"]);
   assert.equal(operation.pullRequest, null);

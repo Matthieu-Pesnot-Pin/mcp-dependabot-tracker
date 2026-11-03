@@ -135,16 +135,17 @@ export const ORIGINS = ["user", "agent"] as const;
 export type Origin = (typeof ORIGINS)[number];
 
 /**
- * `running` : une étape s'exécute ; `waiting_force` et `waiting_push` : l'utilisateur
- * doit décider de la suite ; les trois derniers états sont terminaux.
+ * `running` : une étape s'exécute ; `waiting_force`, `waiting_repair` et
+ * `waiting_push` : l'utilisateur doit décider de la suite ; les trois derniers
+ * états sont terminaux.
  */
-export const OPERATION_STATUSES = ["running", "waiting_force", "waiting_push", "done", "failed", "cancelled"] as const;
+export const OPERATION_STATUSES = ["running", "waiting_force", "waiting_repair", "waiting_push", "done", "failed", "cancelled"] as const;
 
 export type OperationStatus = (typeof OPERATION_STATUSES)[number];
 
-export const ACTIVE_STATUSES: readonly OperationStatus[] = ["running", "waiting_force", "waiting_push"];
+export const ACTIVE_STATUSES: readonly OperationStatus[] = ["running", "waiting_force", "waiting_repair", "waiting_push"];
 
-export const STEP_NAMES = ["clone", "audit", "fix", "analysis", "force", "push"] as const;
+export const STEP_NAMES = ["clone", "audit", "fix", "analysis", "force", "repair", "push"] as const;
 
 export type StepName = (typeof STEP_NAMES)[number];
 
@@ -201,6 +202,22 @@ export const AnalysisReportSchema = z.object({
 
 export type AnalysisReport = z.infer<typeof AnalysisReportSchema>;
 
+/** Résultat des tests lancés par Claude après ses corrections. */
+export const TEST_OUTCOMES = ["passed", "failed", "not_run"] as const;
+
+/**
+ * Rapport rendu par Claude à la fin de ses corrections : résumé, changement de
+ * chaque fichier, message du commit et résultat des tests.
+ */
+export const RepairReportSchema = z.object({
+  summary: z.string(),
+  changes: z.array(z.object({ file: z.string(), change: z.string() })),
+  commitMessage: z.string(),
+  tests: z.object({ outcome: z.enum(TEST_OUTCOMES), detail: z.string() }),
+});
+
+export type RepairReport = z.infer<typeof RepairReportSchema>;
+
 /** Statuts d'une tâche de l'organizer. */
 export const TASK_STATUSES = ["todo", "doing", "review", "done"] as const;
 
@@ -232,12 +249,39 @@ export const AnalysisSchema = z.object({
 export type Analysis = z.infer<typeof AnalysisSchema>;
 
 /**
+ * Corrections par Claude, d'après la tâche de l'analyse et les commentaires de
+ * l'utilisateur. `base` est le commit sur lequel repose celui de Claude : le
+ * commit de `npm audit fix` (`auditCommit`), ou le commit cloné quand
+ * `npm audit fix` n'a rien changé et que `auditCommit` est null.
+ * `commit` est le commit de Claude, null tant qu'il n'a rien modifié ; `task`
+ * la sous-tâche « rapport de développement ». `turns` et `activity` suivent la
+ * session en cours ; `error` est la raison de l'échec du dernier passage, les
+ * résultats du passage précédent restant valables.
+ */
+export const RepairSchema = z.object({
+  runs: z.number().int(),
+  startedAt: z.string(),
+  endedAt: z.string().nullable(),
+  turns: z.number().int(),
+  activity: z.array(z.string()),
+  base: z.string(),
+  auditCommit: z.string().nullable(),
+  commit: z.string().nullable(),
+  report: RepairReportSchema.nullable(),
+  task: AnalysisTaskSchema.nullable(),
+  error: z.string().nullable(),
+});
+
+export type Repair = z.infer<typeof RepairSchema>;
+
+/**
  * Opération d'audit ou de correction sur un clone temporaire, limitée aux
  * dépendances de `scope`. `workDir` est le
  * clone, présent tant que l'opération n'est pas terminée ; `pid` est le processus
  * qui exécute l'étape en cours. `found` liste les vulnérabilités du premier
  * audit, `remaining` celles qui restent après la dernière étape. `analysis` est
- * l'analyse par Claude, null quand elle n'a pas été lancée.
+ * l'analyse par Claude, null quand elle n'a pas été lancée ; `repair` ses
+ * corrections, null tant qu'elles n'ont pas été lancées.
  */
 export const OperationSchema = z.object({
   id: z.string(),
@@ -258,6 +302,7 @@ export const OperationSchema = z.object({
     fix: z.enum(STEP_STATES),
     analysis: z.enum(STEP_STATES),
     force: z.enum(STEP_STATES),
+    repair: z.enum(STEP_STATES),
     push: z.enum(STEP_STATES),
   }),
   projects: z.array(z.string()),
@@ -265,6 +310,7 @@ export const OperationSchema = z.object({
     initial: z.number().int().nullable(),
     afterFix: z.number().int().nullable(),
     afterForce: z.number().int().nullable(),
+    afterRepair: z.number().int().nullable(),
   }),
   found: z.array(VulnerabilitySchema),
   remaining: z.array(VulnerabilitySchema),
@@ -274,6 +320,7 @@ export const OperationSchema = z.object({
   branch: z.string().nullable(),
   pullRequest: z.object({ number: z.number().int(), url: z.string() }).nullable(),
   analysis: AnalysisSchema.nullable(),
+  repair: RepairSchema.nullable(),
   error: z.string().nullable(),
   log: z.array(LogEntrySchema),
 });

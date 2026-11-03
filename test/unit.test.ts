@@ -44,9 +44,9 @@ function operation(overrides: Partial<Operation> = {}): Operation {
     workDir: null,
     baseBranch: "main",
     cancelRequested: false,
-    steps: { clone: "pending", audit: "pending", fix: "pending", analysis: "pending", force: "pending", push: "pending" },
+    steps: { clone: "pending", audit: "pending", fix: "pending", analysis: "pending", force: "pending", repair: "pending", push: "pending" },
     projects: [],
-    counts: { initial: null, afterFix: null, afterForce: null },
+    counts: { initial: null, afterFix: null, afterForce: null, afterRepair: null },
     remaining: [],
     found: [],
     forceCandidates: [],
@@ -55,6 +55,7 @@ function operation(overrides: Partial<Operation> = {}): Operation {
     branch: null,
     pullRequest: null,
     analysis: null,
+    repair: null,
     error: null,
     log: [],
     ...overrides,
@@ -185,18 +186,18 @@ test("repositories sort by worst severity, then alert count; alerts by severity 
 test("cleanAudit reports an audit without vulnerability on the default branch, newer than every alert in its scope", () => {
   const alerted = repo("octo/demo", [alert(1, "high", "lodash")]);
   const clean = (overrides: Partial<Operation> = {}) =>
-    operation({ status: "done", createdAt: "2026-03-01T10:00:00.000Z", steps: { clone: "done", audit: "done", fix: "skipped", analysis: "skipped", force: "skipped", push: "skipped" }, counts: { initial: 0, afterFix: null, afterForce: null }, ...overrides });
+    operation({ status: "done", createdAt: "2026-03-01T10:00:00.000Z", steps: { clone: "done", audit: "done", fix: "skipped", analysis: "skipped", force: "skipped", repair: "skipped", push: "skipped" }, counts: { initial: 0, afterFix: null, afterForce: null, afterRepair: null }, ...overrides });
   const stamp = { at: "2026-03-01T10:00:00.000Z", scope: "production" };
 
   assert.deepEqual(cleanAudit(alerted, [clean()]), stamp);
   assert.equal(cleanAudit(repo("octo/demo"), [clean()]), null, "no alert, nothing to explain");
-  assert.equal(cleanAudit(alerted, [clean({ counts: { initial: 2, afterFix: 0, afterForce: null } })]), null, "the audit found vulnerabilities");
+  assert.equal(cleanAudit(alerted, [clean({ counts: { initial: 2, afterFix: 0, afterForce: null, afterRepair: null } })]), null, "the audit found vulnerabilities");
   assert.equal(cleanAudit(alerted, [clean({ baseBranch: "develop" })]), null, "Dependabot only covers the default branch");
   const newer = repo("octo/demo", [alert(1, "high", "lodash"), { ...alert(2, "critical", "tar"), createdAt: "2026-03-02T08:00:00.000Z" }]);
   assert.equal(cleanAudit(newer, [clean()]), null, "an alert emitted after the audit");
-  const running = operation({ id: "op-2", createdAt: "2026-03-03T10:00:00.000Z", steps: { clone: "running", audit: "pending", fix: "pending", analysis: "pending", force: "pending", push: "pending" } });
+  const running = operation({ id: "op-2", createdAt: "2026-03-03T10:00:00.000Z", steps: { clone: "running", audit: "pending", fix: "pending", analysis: "pending", force: "pending", repair: "pending", push: "pending" } });
   assert.deepEqual(cleanAudit(alerted, [running, clean()]), stamp, "an operation still auditing does not count");
-  const dirty = clean({ id: "op-3", createdAt: "2026-03-04T10:00:00.000Z", counts: { initial: 1, afterFix: 1, afterForce: null } });
+  const dirty = clean({ id: "op-3", createdAt: "2026-03-04T10:00:00.000Z", counts: { initial: 1, afterFix: 1, afterForce: null, afterRepair: null } });
   assert.equal(cleanAudit(alerted, [dirty, clean()]), null, "the latest audit decides");
 
   const development = repo("octo/demo", [alert(1, "high", "lodash"), { ...alert(2, "critical", "vite", "development"), createdAt: "2026-03-02T08:00:00.000Z" }]);
@@ -211,8 +212,8 @@ test("auditFindings reports what the latest audit of the default branch found wh
     operation({
       status: "done",
       createdAt: "2026-03-01T10:00:00.000Z",
-      steps: { clone: "done", audit: "done", fix: "skipped", analysis: "skipped", force: "skipped", push: "skipped" },
-      counts: { initial: 2, afterFix: null, afterForce: null },
+      steps: { clone: "done", audit: "done", fix: "skipped", analysis: "skipped", force: "skipped", repair: "skipped", push: "skipped" },
+      counts: { initial: 2, afterFix: null, afterForce: null, afterRepair: null },
       found: [
         { project: "", name: "lodash", severity: "moderate", fix: "available" },
         { project: "", name: "tar", severity: "high", fix: "none" },
@@ -225,7 +226,7 @@ test("auditFindings reports what the latest audit of the default branch found wh
   assert.equal(auditFindings(development, [audited()])?.count, 2, "Dependabot only reports development dependencies, out of a production audit");
   assert.equal(auditFindings(development, [audited({ scope: "all" })]), null, "Dependabot reports alerts in the scope of the audit");
   assert.equal(auditFindings(repo("octo/demo", [alert(1, "high", "lodash")]), [audited()]), null, "Dependabot reports alerts");
-  assert.equal(auditFindings(quiet, [audited({ found: [], counts: { initial: 0, afterFix: null, afterForce: null } })]), null, "a clean audit");
+  assert.equal(auditFindings(quiet, [audited({ found: [], counts: { initial: 0, afterFix: null, afterForce: null, afterRepair: null } })]), null, "a clean audit");
   const develop = audited({ id: "op-2", createdAt: "2026-03-02T10:00:00.000Z", baseBranch: "develop", found: [] });
   assert.deepEqual(auditFindings(quiet, [develop, audited()])?.count, 2, "an audit of another branch does not count");
   const fixed = audited({ id: "op-3", kind: "fix", createdAt: "2026-03-03T10:00:00.000Z", remaining: [] });
@@ -283,7 +284,7 @@ test("a mark of an alert fixed by hand drops when that alert closes or its packa
 test("unfixablePackages lists the packages without a published fix from the latest audit, except those fixed by hand", () => {
   const audited = operation({
     status: "done",
-    steps: { clone: "done", audit: "done", fix: "done", analysis: "skipped", force: "skipped", push: "skipped" },
+    steps: { clone: "done", audit: "done", fix: "done", analysis: "skipped", force: "skipped", repair: "skipped", push: "skipped" },
     remaining: [
       { project: "", name: "xlsx", severity: "high", fix: "none" },
       { project: "gui", name: "xlsx", severity: "high", fix: "none" },
@@ -372,7 +373,7 @@ test("Store fails a running operation whose process is gone and deletes its clon
     store.addRepo(repo("octo/demo"));
     const workDir = path.join(temp.dir, "clone");
     fs.mkdirSync(workDir);
-    store.createOperation(operation({ id: "op-dead", pid: 999_999_999, workDir, steps: { clone: "done", audit: "running", fix: "pending", analysis: "pending", force: "pending", push: "pending" } }));
+    store.createOperation(operation({ id: "op-dead", pid: 999_999_999, workDir, steps: { clone: "done", audit: "running", fix: "pending", analysis: "pending", force: "pending", repair: "pending", push: "pending" } }));
     const [failed] = store.failOrphanedOperations();
     assert.equal(failed.status, "failed");
     assert.equal(failed.steps.audit, "failed");
@@ -390,7 +391,7 @@ test("Store reads an operation saved without the vulnerabilities of its first au
     const store = new Store(temp.dir);
     const remaining = [{ project: "", name: "lodash", severity: "high" as const, fix: "available" as const }];
     for (const [id, afterFix] of [["op-audit", null], ["op-fix", 1]] as const) {
-      const saved = { ...operation({ id, remaining, counts: { initial: 1, afterFix, afterForce: null } }) } as Partial<Operation>;
+      const saved = { ...operation({ id, remaining, counts: { initial: 1, afterFix, afterForce: null, afterRepair: null } }) } as Partial<Operation>;
       delete saved.found;
       fs.writeFileSync(path.join(temp.dir, "operations", `${id}.json`), JSON.stringify(saved));
     }
@@ -418,17 +419,23 @@ test("Store reads an operation saved without scope as an audit of every dependen
   }
 });
 
-test("Store reads an operation saved before the analysis step as one whose analysis was skipped", () => {
+test("Store reads an operation saved before the analysis and repair steps as one whose analysis and repair were skipped", () => {
   const temp = makeTempDir("tracker-analysis-");
   try {
     const store = new Store(temp.dir);
-    const saved = operation({ steps: { clone: "done", audit: "done", fix: "done", analysis: "skipped", force: "skipped", push: "skipped" } }) as any;
+    const saved = operation({ steps: { clone: "done", audit: "done", fix: "done", analysis: "skipped", force: "skipped", repair: "skipped", push: "skipped" } }) as any;
     delete saved.steps.analysis;
+    delete saved.steps.repair;
+    delete saved.counts.afterRepair;
     delete saved.analysis;
+    delete saved.repair;
     fs.writeFileSync(path.join(temp.dir, "operations", "op-1.json"), JSON.stringify(saved));
     const read = store.getOperation("op-1");
     assert.equal(read.steps.analysis, "skipped");
+    assert.equal(read.steps.repair, "skipped");
+    assert.equal(read.counts.afterRepair, null);
     assert.equal(read.analysis, null);
+    assert.equal(read.repair, null);
   } finally {
     temp.cleanup();
   }
@@ -519,8 +526,8 @@ test("describeOperation reports counts, upgrades, changes and the pull request",
     operation({
       status: "done",
       projects: ["", "gui"],
-      steps: { clone: "done", audit: "done", fix: "done", analysis: "skipped", force: "done", push: "done" },
-      counts: { initial: 4, afterFix: 2, afterForce: 0 },
+      steps: { clone: "done", audit: "done", fix: "done", analysis: "skipped", force: "done", repair: "done", push: "done" },
+      counts: { initial: 4, afterFix: 2, afterForce: 0, afterRepair: null },
       changes: [{ project: "gui", name: "lodash", from: "4.17.20", to: "4.18.1" }],
       branch: "fix/npm-audit-2026-10-28-143205",
       pullRequest: { number: 7, url: "https://github.com/octo/demo/pull/7" },

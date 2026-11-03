@@ -121,10 +121,11 @@ function RepoStatus({ view }: { view: RepoView }) {
   const { repo, activeOperation, cleanAudit, auditFindings, unfixable } = view
   if (activeOperation) {
     const analysing = activeOperation.steps.analysis === 'running'
+    const repairing = activeOperation.steps.repair === 'running'
     return (
       <span className="status status-busy">
         <Icon name="loader-circle" className="spin" />
-        {analysing ? 'Analyse par Claude…' : activeOperation.kind === 'audit' ? 'Audit en cours' : 'Correction en cours'}
+        {analysing ? 'Analyse par Claude…' : repairing ? 'Corrections par Claude…' : activeOperation.kind === 'audit' ? 'Audit en cours' : 'Correction en cours'}
       </span>
     )
   }

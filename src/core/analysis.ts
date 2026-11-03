@@ -21,7 +21,7 @@ import type { Store } from "./store.js";
  */
 
 /** Nom du serveur MCP organizer dans la configuration de la session. */
-const ORGANIZER_SERVER = "organizer";
+export const ORGANIZER_SERVER = "organizer";
 
 const ORGANIZER_PACKAGE = "@imenam/mcp-organizer";
 
@@ -81,7 +81,7 @@ export function auditFacts(report: any, project: string): unknown[] {
 }
 
 /** JSON des vulnérabilités dans la limite de taille ; au-delà, les dernières sont seulement comptées. */
-function factsJson(facts: unknown[]): string {
+export function factsJson(facts: unknown[]): string {
   for (let count = facts.length; count > 0; count--) {
     const json = JSON.stringify(facts.slice(0, count), null, 1);
     if (json.length <= MAX_FACTS_CHARS) return count === facts.length ? json : `${json}\n(${facts.length - count} more vulnerabilities not listed)`;
@@ -137,7 +137,7 @@ function prompt(input: AnalysisInput, space: string, owner: { id: string; name: 
 }
 
 /** Serveur MCP organizer de la session, lancé par `npx` avec le token réglé dans la GUI. */
-function organizerServer(connection: OrganizerConnection) {
+export function organizerServer(connection: OrganizerConnection) {
   const launch = process.platform === "win32" ? { command: "cmd", args: ["/c", "npx", "-y", ORGANIZER_PACKAGE] } : { command: "npx", args: ["-y", ORGANIZER_PACKAGE] };
   return { ...launch, env: { ORGANIZER_URL: connection.url, ORGANIZER_TOKEN: connection.token } };
 }

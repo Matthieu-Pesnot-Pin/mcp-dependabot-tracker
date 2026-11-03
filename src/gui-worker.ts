@@ -7,7 +7,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 
 import { IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
-import { AddRepoBodySchema, CategoryBodySchema, ForceBodySchema, PushBodySchema, ScopeBodySchema, SetBranchBodySchema, SetCategoryBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
+import { AddRepoBodySchema, CategoryBodySchema, ForceBodySchema, PushBodySchema, RepairBodySchema, ScopeBodySchema, SetBranchBodySchema, SetCategoryBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
 import { SaveSettingsBodySchema } from "../shared/schemas/settings.schema.js";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -316,6 +316,14 @@ app.post("/api/operations/:id/force", async (c) => {
   if ("response" in read) return read.response;
   return forward(c, "DECIDE_FORCE", { operationId: c.req.param("id"), body: read.body });
 });
+
+app.post("/api/operations/:id/repair", async (c) => {
+  const read = await readBody(c, RepairBodySchema);
+  if ("response" in read) return read.response;
+  return forward(c, "DECIDE_REPAIR", { operationId: c.req.param("id"), body: read.body });
+});
+
+app.get("/api/operations/:id/remarks", (c) => forward(c, "GET_REMARKS", { operationId: c.req.param("id") }));
 
 app.post("/api/operations/:id/push", async (c) => {
   const read = await readBody(c, PushBodySchema);
