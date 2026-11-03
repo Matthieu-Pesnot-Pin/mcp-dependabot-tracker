@@ -279,3 +279,9 @@ cd gui && npm run lint   # oxlint
 | `test/` | Tests `node --test`. |
 
 Les tests utilisent une fausse API GitHub (dépôts, alertes paginées, utilisateur, création et liste des pull requests) et des dépôts nus locaux servis par `file://` (`GITHUB_API_URL`, `GITHUB_SERVER_URL`). `test/operations.test.ts` et `test/server.test.ts` lancent un vrai `npm audit` sur un petit projet vulnérable (`test/fixtures/vulnerable` : `lodash`, corrigé par `audit fix`, et `nth-check`, corrigé seulement par `--force` ; `test/fixtures/vulnerable-dev`, le même avec `nth-check` en devDependency, pour le périmètre production) : ils ont besoin du registre npm et sont ignorés, avec la raison, s'il est injoignable. `test/server.test.ts` lance le serveur sur stdio avec sa GUI sur un port libre et parcourt les outils, les droits et la correction complète depuis l'API de la GUI. L'analyse et les corrections par Claude passent par un faux Claude Code (`test/fake-claude.ts`, qui note ses appels, appelle les outils du serveur `npm` du tracker et répond en `stream-json`) et un faux organizer (tâches, sous-tâches, commentaires).
+
+## Publication
+
+Chaque push sur `master`, merge de pull request compris, publie une nouvelle version sur npm (`.github/workflows/publish.yml`) : `npm ci`, build, tests, puis `npm version patch`, dont le commit et le tag sont poussés sur `master`, et `npm publish`. La publication passe par le trusted publishing de npm (OIDC, sans token), avec attestation de provenance. Un échec du build ou des tests arrête le workflow avant la montée de version.
+
+Sur npmjs.com, le paquet déclare ce workflow comme publieur de confiance (Settings → Trusted publishing → GitHub Actions : `Matthieu-Pesnot-Pin`, `mcp-dependabot-tracker`, `publish.yml`, avec `npm publish` dans les actions autorisées). Le commit de version est poussé avec `GITHUB_TOKEN` : si `master` est protégée, la règle doit autoriser GitHub Actions à y pousser.

@@ -10,7 +10,6 @@
     "build": "npm run build:backend && npm run build:gui",
     "start": "node dist/src/index.js",
     "prepublishOnly": "npm run build",
-    "release": "npm version patch && npm publish && git push --follow-tags",
     "prebuild": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "keywords": [
