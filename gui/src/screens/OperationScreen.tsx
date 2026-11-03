@@ -5,7 +5,7 @@ import { Icon, type IconName } from '../components/Icon'
 import { usePolling } from '../hooks/usePolling'
 import { showError } from '../store/useNotice'
 import { api } from '../utils/api'
-import { clockTime, fromNpmSeverity, plural, projectPrefix, SEVERITY_LABELS } from '../utils/format'
+import { clockTime, fromNpmSeverity, plural, projectPrefix, SCOPE_LABELS, SEVERITY_LABELS } from '../utils/format'
 import { hrefs } from '../utils/router'
 
 /** Relecture rapide pendant l'opération ; plus aucune une fois terminée. */
@@ -332,7 +332,7 @@ export function OperationScreen({ repoId, operationId }: { repoId: string; opera
             {operation.kind === 'audit' ? 'Audit' : 'Correction'} de {name}
           </h1>
           <p className="subtitle">
-            Lancée par {operation.origin === 'agent' ? "l'agent" : 'vous'} · clone temporaire de {operation.baseBranch}
+            Lancée par {operation.origin === 'agent' ? "l'agent" : 'vous'} · clone temporaire de {operation.baseBranch} · {SCOPE_LABELS[operation.scope]}
             {suffix && ` · ${suffix}`}
           </p>
         </div>

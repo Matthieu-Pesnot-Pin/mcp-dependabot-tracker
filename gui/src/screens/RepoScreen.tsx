@@ -1,10 +1,11 @@
 import { handledAlerts, pendingAlerts } from '@shared/alerts'
 import type { RepoView } from '@shared/schemas/api.schema'
-import { RIGHTS, type Right, type Rights } from '@shared/schemas/model.schema'
+import { RIGHTS, type AuditScope, type Right, type Rights } from '@shared/schemas/model.schema'
 import { useEffect, useState } from 'react'
 import { BranchSelector } from '../components/BranchSelector'
 import { CategorySelector } from '../components/CategorySelector'
 import { Icon } from '../components/Icon'
+import { ScopeButton } from '../components/ScopeButton'
 import { SeverityPill } from '../components/Pill'
 import { Toggle } from '../components/Toggle'
 import { usePolling } from '../hooks/usePolling'
@@ -107,7 +108,8 @@ function AgentDrawer({ view, onClose, onChanged }: { view: RepoView; onClose: ()
 /**
  * Alertes encore à traiter. Chaque ligne ouvre l'alerte sur GitHub ; au survol,
  * « Corrigée à la main » la range dans les alertes corrigées à la main. Un
- * paquet que le dernier audit n'a pas pu corriger est signalé.
+ * paquet que le dernier audit n'a pas pu corriger est signalé, une dépendance
+ * de développement porte l'étiquette « dév. ».
  */
 function PendingAlerts({ view, onChanged }: { view: RepoView; onChanged: () => void }) {
   const { repo, unfixable } = view
@@ -145,6 +147,11 @@ function PendingAlerts({ view, onChanged }: { view: RepoView; onChanged: () => v
                 <span className="unfixable-note" title="Le dernier audit n'a trouvé aucune version corrigée publiée sur le registre npm.">
                   <Icon name="triangle-alert" />
                   sans correctif
+                </span>
+              )}
+              {alert.scope === 'development' && (
+                <span className="dev-tag" title="Dépendance de développement : un audit de production la laisse de côté.">
+                  dév.
                 </span>
               )}
               <span className="alert-mark-space" />
@@ -219,14 +226,10 @@ export function RepoScreen({ repoId }: { repoId: string }) {
   }
   const { repo, activeOperation, latestOperation } = view
 
-  async function fix() {
-    if (activeOperation) {
-      navigate(hrefs.operation(repo.id, activeOperation.id))
-      return
-    }
+  async function fix(scope: AuditScope) {
     setStarting(true)
     try {
-      const { operation } = await api.startFix(repo.id)
+      const { operation } = await api.startFix(repo.id, scope)
       navigate(hrefs.operation(repo.id, operation.id))
     } catch (err) {
       showError(err)
@@ -271,16 +274,24 @@ export function RepoScreen({ repoId }: { repoId: string }) {
             <Icon name="bot" />
             Agent
           </button>
-          <button
-            type="button"
-            className="button button-primary"
-            onClick={() => void fix()}
-            disabled={starting || repo.deprecatedAt !== null}
-            title={repo.deprecatedAt ? 'Dépôt déprécié : rétablissez-le depuis l’onglet « Dépréciés » pour le corriger.' : undefined}
-          >
-            <Icon name="wrench" />
-            {activeOperation ? (activeOperation.kind === 'audit' ? "Voir l'audit en cours" : 'Reprendre la correction') : 'Corriger'}
-          </button>
+          {activeOperation ? (
+            <button type="button" className="button button-primary" onClick={() => navigate(hrefs.operation(repo.id, activeOperation.id))}>
+              <Icon name="wrench" />
+              {activeOperation.kind === 'audit' ? "Voir l'audit en cours" : 'Reprendre la correction'}
+            </button>
+          ) : repo.deprecatedAt ? (
+            <button
+              type="button"
+              className="button button-primary"
+              disabled
+              title="Dépôt déprécié : rétablissez-le depuis l’onglet « Dépréciés » pour le corriger."
+            >
+              <Icon name="wrench" />
+              Corriger
+            </button>
+          ) : (
+            <ScopeButton variant="primary" icon="wrench" label="Corriger" disabled={starting} onLaunch={(scope) => void fix(scope)} />
+          )}
         </div>
       </div>
 

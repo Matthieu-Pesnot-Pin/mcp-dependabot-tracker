@@ -27,7 +27,26 @@ export type Rights = z.infer<typeof RightsSchema>;
 /** Droits d'un dépôt qui vient d'être ajouté : l'audit seul. */
 export const DEFAULT_RIGHTS: Rights = { audit: true, fix: false, force: false, push: false };
 
-/** Alerte Dependabot ouverte, telle que la renvoie l'API GitHub, réduite à ce qui s'affiche ; `createdAt` est sa date d'émission. */
+/**
+ * Périmètre d'un audit et de ses corrections : `production` laisse de côté les
+ * devDependencies (`--omit=dev`), `all` couvre toutes les dépendances.
+ */
+export const AUDIT_SCOPES = ["production", "all"] as const;
+
+export type AuditScope = (typeof AUDIT_SCOPES)[number];
+
+export const DEFAULT_AUDIT_SCOPE: AuditScope = "production";
+
+/** Portée d'une dépendance vulnérable selon Dependabot : exécution ou développement. */
+export const DEPENDENCY_SCOPES = ["runtime", "development"] as const;
+
+export type DependencyScope = (typeof DEPENDENCY_SCOPES)[number];
+
+/**
+ * Alerte Dependabot ouverte, telle que la renvoie l'API GitHub, réduite à ce qui
+ * s'affiche ; `createdAt` est sa date d'émission, `scope` la portée de la
+ * dépendance, null quand GitHub ne la connaît pas.
+ */
 export const AlertSchema = z.object({
   number: z.number().int(),
   severity: z.enum(ALERT_SEVERITIES),
@@ -38,6 +57,7 @@ export const AlertSchema = z.object({
   url: z.string(),
   patchedVersion: z.string().nullable(),
   createdAt: z.string(),
+  scope: z.enum(DEPENDENCY_SCOPES).nullable(),
 });
 
 export type Alert = z.infer<typeof AlertSchema>;
@@ -212,7 +232,8 @@ export const AnalysisSchema = z.object({
 export type Analysis = z.infer<typeof AnalysisSchema>;
 
 /**
- * Opération d'audit ou de correction sur un clone temporaire. `workDir` est le
+ * Opération d'audit ou de correction sur un clone temporaire, limitée aux
+ * dépendances de `scope`. `workDir` est le
  * clone, présent tant que l'opération n'est pas terminée ; `pid` est le processus
  * qui exécute l'étape en cours. `found` liste les vulnérabilités du premier
  * audit, `remaining` celles qui restent après la dernière étape. `analysis` est
@@ -223,6 +244,7 @@ export const OperationSchema = z.object({
   repoId: z.string(),
   kind: z.enum(OPERATION_KINDS),
   origin: z.enum(ORIGINS),
+  scope: z.enum(AUDIT_SCOPES),
   status: z.enum(OPERATION_STATUSES),
   createdAt: z.string(),
   updatedAt: z.string(),

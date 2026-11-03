@@ -1,6 +1,6 @@
 import { pendingAlerts, worstOf } from '@shared/alerts'
 import type { RepoView } from '@shared/schemas/api.schema'
-import type { Alert, AlertSeverity, Repo } from '@shared/schemas/model.schema'
+import type { Alert, AlertSeverity, AuditScope, Repo } from '@shared/schemas/model.schema'
 import { ALERT_SEVERITIES } from '@shared/schemas/model.schema'
 
 export { fromNpmSeverity } from '@shared/alerts'
@@ -26,6 +26,12 @@ export const SEVERITY_LABELS: Record<AlertSeverity, string> = {
   high: 'Haute',
   medium: 'Moyenne',
   low: 'Faible',
+}
+
+/** Périmètre d'un audit, en clair. */
+export const SCOPE_LABELS: Record<AuditScope, string> = {
+  production: 'dépendances de production',
+  all: 'toutes les dépendances',
 }
 
 /** Gravité la plus haute d'un ensemble d'alertes, ou null sans alerte. */

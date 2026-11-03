@@ -40,6 +40,14 @@ export function optionalBoolean(args: Args, field: string, fallback: boolean): b
   return value;
 }
 
+/** Lit un argument facultatif parmi `values` ; `fallback` s'il est absent. */
+export function optionalEnum<T extends string>(args: Args, field: string, values: readonly T[], fallback: T): T {
+  const value = args?.[field];
+  if (value === undefined) return fallback;
+  if (!values.includes(value as T)) throw new Error(`"${field}" must be one of ${values.join(", ")} (got ${JSON.stringify(value)}).`);
+  return value as T;
+}
+
 /** Lève une erreur si `args` contient des champs hors de `allowed` : une faute de frappe ne passe pas inaperçue. */
 export function rejectUnknownFields(args: Args, allowed: readonly string[]): void {
   if (!args) return;

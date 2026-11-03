@@ -55,8 +55,8 @@ export function processAlive(pid: number): boolean {
  * corrigée à la main n'en a aucune, un dépôt sans pull request en attente n'en
  * a aucune jusqu'à sa lecture suivante, un dépôt sans date de dépréciation
  * n'est pas déprécié. Une alerte sans date
- * d'émission prend celle de la lecture qui l'a rapportée ; la lecture suivante
- * la remplace par la vraie.
+ * d'émission prend celle de la lecture qui l'a rapportée, une alerte sans
+ * portée n'en a aucune ; la lecture suivante les remplace par les vraies.
  */
 function normalizeReposFile(file: any): unknown {
   if (!Array.isArray(file?.repos)) return file;
@@ -71,7 +71,7 @@ function normalizeReposFile(file: any): unknown {
       pullRequests: repo?.pullRequests ?? [],
       deprecatedAt: repo?.deprecatedAt ?? null,
       alerts: Array.isArray(repo?.alerts)
-        ? repo.alerts.map((alert: any) => ({ ...alert, createdAt: alert?.createdAt ?? repo.syncedAt ?? repo.addedAt }))
+        ? repo.alerts.map((alert: any) => ({ ...alert, createdAt: alert?.createdAt ?? repo.syncedAt ?? repo.addedAt, scope: alert?.scope ?? null }))
         : repo?.alerts,
     })),
   };
@@ -80,7 +80,8 @@ function normalizeReposFile(file: any): unknown {
 /**
  * Complète une opération écrite par une version antérieure : sans `found`, les
  * vulnérabilités du premier audit sont `remaining` tant qu'aucune correction
- * n'a suivi, et inconnues sinon ; sans étape d'analyse, l'analyse est passée.
+ * n'a suivi, et inconnues sinon ; sans étape d'analyse, l'analyse est passée ;
+ * sans périmètre, l'audit a couvert toutes les dépendances.
  */
 function normalizeOperation(operation: any): unknown {
   if (operation === null || typeof operation !== "object") return operation;
@@ -89,6 +90,7 @@ function normalizeOperation(operation: any): unknown {
     found: operation.found ?? (operation.counts?.afterFix === null ? operation.remaining : []),
     steps: operation.steps && typeof operation.steps === "object" ? { analysis: "skipped", ...operation.steps } : operation.steps,
     analysis: operation.analysis ?? null,
+    scope: operation.scope ?? "all",
   };
 }
 

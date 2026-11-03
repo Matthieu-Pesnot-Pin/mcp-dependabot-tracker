@@ -22,6 +22,7 @@ import { checkClaudeToken, packagedClaudeCommand, type ClaudeRuntime } from "./c
 import { OrganizerClient } from "./core/organizer.js";
 import { readSettings, saveSettings, settingsView, testOrganizer, type SettingsChecks } from "./core/settings.js";
 import { SaveSettingsBodySchema } from "../shared/schemas/settings.schema.js";
+import { AUDIT_SCOPES } from "../shared/schemas/model.schema.js";
 import { SYNC_INTERVAL_MS, activeRepos, addRepository, deprecateRepository, listAddableRepositories, restoreRepository, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
@@ -33,6 +34,7 @@ import {
   OperationRequestSchema,
   PushBodySchema,
   RepoRequestSchema,
+  ScopeBodySchema,
   SetBranchBodySchema,
   SetCategoryBodySchema,
   SetRightsBodySchema,
@@ -117,7 +119,7 @@ const operations: OperationContext = {
 
 /** Série « Auditer tout » de la GUI servie par ce processus. */
 const auditAll = new AuditAll(
-  (repoId) => runDefaultBranchAudit(operations, repoId),
+  (repoId, scope) => runDefaultBranchAudit(operations, repoId, scope),
   (message) => logger.error(message)
 );
 
@@ -128,13 +130,14 @@ Concepts:
 - A **tracked repository** is a GitHub repository the user added in the GUI. Its open Dependabot alerts, and the pull requests the tracker opened that are not merged or closed yet, are read from GitHub and refreshed every 10 minutes.
 - A **deprecated repository** is one the user set aside in the GUI: it is neither synced nor audited, list_repositories leaves it out, and every tool refuses it until the user restores it.
 - **Rights**: for each repository, the user allows you to run npm audit (audit), npm audit fix (fix), npm audit fix --force (force) and to push the fixes (push). A tool refuses an action you are not allowed to do; only the user can change the rights.
+- The **scope** of an audit is chosen at each launch: production (the default) runs npm audit and npm audit fix with --omit=dev, so the devDependencies are left out; all covers every dependency. Each Dependabot alert says whether its dependency is a runtime or a development one.
 - The **analysed branch** of a repository is chosen by the user in the GUI (the default branch unless changed). Dependabot alerts always describe the default branch; npm audit describes the analysed branch.
 - An **operation** runs in a temporary clone of the analysed branch, deleted at the end: npm audit in every directory that holds a package-lock.json, then npm audit fix with --package-lock-only and --ignore-scripts (lockfiles only, no install, no scripts), optionally --force, then a commit on a new branch fix/npm-audit-<date>-<time> and a pull request to the analysed branch.
 
 Workflow:
 1. list_repositories to see the tracked repositories, their open alerts and your rights.
 2. get_alerts for the detail of the alerts of one repository.
-3. run_audit to see what npm audit reports, or fix_vulnerabilities to fix: without push, nothing leaves the temporary clone and the result shows what the fixes would change; with push, the fixes are pushed and the pull request is opened.
+3. run_audit to see what npm audit reports, or fix_vulnerabilities to fix, on the production dependencies unless the user asks for all of them: without push, nothing leaves the temporary clone and the result shows what the fixes would change; with push, the fixes are pushed and the pull request is opened.
 
 Rules:
 - An operation runs until it ends; one operation at a time per repository.
@@ -199,7 +202,7 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
     case "START_AUDIT_ALL":
       readGitHubConfig();
       store.failOrphanedOperations();
-      return { auditAll: auditAll.start(activeRepos(store).map((repo) => repo.id)) } satisfies AuditAllResponse;
+      return { auditAll: auditAll.start(activeRepos(store).map((repo) => repo.id), parseRequest(ScopeBodySchema, msg.data?.body).scope) } satisfies AuditAllResponse;
 
     case "LIST_ADDABLE_REPOS":
       return { repositories: await listAddableRepositories(store, readGitHubConfig()) } satisfies AddableReposResponse;
@@ -273,7 +276,7 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
       return { deleted: true };
 
     case "START_FIX":
-      return { operation: startUserFix(operations, parseRequest(RepoRequestSchema, msg.data).repoId) };
+      return { operation: startUserFix(operations, parseRequest(RepoRequestSchema, msg.data).repoId, parseRequest(ScopeBodySchema, msg.data?.body).scope) };
 
     case "GET_OPERATION": {
       store.failOrphanedOperations();
@@ -421,6 +424,12 @@ async function syncStaleRepos() {
 
 const REPOSITORY_DOC = "Tracked repository, as owner/name (see list_repositories).";
 
+const SCOPE_PROPERTY = {
+  type: "string",
+  enum: [...AUDIT_SCOPES],
+  description: "production (default): npm audit and its fixes run with --omit=dev and leave the devDependencies out. all: every dependency, devDependencies included.",
+};
+
 const TOOLS = [
   {
     name: "list_repositories",
@@ -434,7 +443,7 @@ const TOOLS = [
   {
     name: "get_alerts",
     description:
-      "Read the open Dependabot alerts of a tracked repository from GitHub now, and list them from the most to the least severe: number, severity, package, ecosystem, manifest, summary, patched version and link.",
+      "Read the open Dependabot alerts of a tracked repository from GitHub now, and list them from the most to the least severe: number, severity, package, ecosystem, manifest, whether the dependency is a runtime or a development one, summary, patched version and link.",
     inputSchema: {
       type: "object" as const,
       properties: { repository: { type: "string", description: REPOSITORY_DOC } },
@@ -447,7 +456,7 @@ const TOOLS = [
       "Run npm audit on a temporary clone of the analysed branch, in every directory that holds a package-lock.json, and report the vulnerabilities with the fix npm proposes (none, within the declared ranges, or a major upgrade that needs --force). Needs the audit right. Nothing is changed; the clone is deleted.",
     inputSchema: {
       type: "object" as const,
-      properties: { repository: { type: "string", description: REPOSITORY_DOC } },
+      properties: { repository: { type: "string", description: REPOSITORY_DOC }, scope: SCOPE_PROPERTY },
       required: ["repository"],
     },
   },
@@ -460,6 +469,7 @@ const TOOLS = [
       type: "object" as const,
       properties: {
         repository: { type: "string", description: REPOSITORY_DOC },
+        scope: SCOPE_PROPERTY,
         force: {
           type: "boolean",
           description: "Also run npm audit fix --force when vulnerabilities remain that only a major upgrade fixes (default false). Breaking changes possible: only when the user asked for it.",

@@ -1,13 +1,13 @@
 import type { AuditAllState } from "../../shared/schemas/api.schema.js";
-import type { Operation } from "../../shared/schemas/model.schema.js";
+import type { AuditScope, Operation } from "../../shared/schemas/model.schema.js";
 import { ConflictError } from "./errors.js";
 
 /** Audits menés en même temps par « Auditer tout ». */
 export const AUDIT_ALL_CONCURRENCY = 3;
 
 /**
- * Audit de tous les dépôts suivis, lancé depuis la GUI : `AUDIT_ALL_CONCURRENCY`
- * audits à la fois. Un dépôt dont une opération est déjà en cours est laissé de
+ * Audit de tous les dépôts suivis sur un même périmètre, lancé depuis la GUI :
+ * `AUDIT_ALL_CONCURRENCY` audits à la fois. Un dépôt dont une opération est déjà en cours est laissé de
  * côté. Une seule série à la fois dans ce processus.
  */
 export class AuditAll {
@@ -15,7 +15,7 @@ export class AuditAll {
   private run: Promise<void> = Promise.resolve();
 
   constructor(
-    private readonly audit: (repoId: string) => Promise<Operation>,
+    private readonly audit: (repoId: string, scope: AuditScope) => Promise<Operation>,
     private readonly logError: (message: string) => void
   ) {}
 
@@ -24,10 +24,10 @@ export class AuditAll {
     return this.state && { ...this.state, skipped: [...this.state.skipped], failed: [...this.state.failed] };
   }
 
-  /** Lance la série sur `repoIds` et rend aussitôt son état ; refusé si une série est en cours. */
-  start(repoIds: string[]): AuditAllState {
+  /** Lance la série sur `repoIds`, périmètre `scope`, et rend aussitôt son état ; refusé si une série est en cours. */
+  start(repoIds: string[], scope: AuditScope): AuditAllState {
     if (this.state?.running) throw new ConflictError("An audit of every repository is already running.");
-    this.state = { running: true, startedAt: new Date().toISOString(), finishedAt: null, total: repoIds.length, done: 0, skipped: [], failed: [] };
+    this.state = { running: true, scope, startedAt: new Date().toISOString(), finishedAt: null, total: repoIds.length, done: 0, skipped: [], failed: [] };
     this.run = this.auditAll(this.state, [...repoIds]);
     return this.status()!;
   }
@@ -48,7 +48,7 @@ export class AuditAll {
 
   private async auditOne(state: AuditAllState, repoId: string): Promise<void> {
     try {
-      const operation = await this.audit(repoId);
+      const operation = await this.audit(repoId, state.scope);
       if (operation.status !== "done") state.failed.push({ repoId, error: operation.error ?? operation.status });
     } catch (err: any) {
       if (err instanceof ConflictError) {

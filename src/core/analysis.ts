@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { z } from "zod";
-import { AnalysisReportSchema, type AnalysisReport, type AnalysisTask, type ForceCandidate, type Operation } from "../../shared/schemas/model.schema.js";
+import { AnalysisReportSchema, type AnalysisReport, type AnalysisTask, type AuditScope, type ForceCandidate, type Operation } from "../../shared/schemas/model.schema.js";
 import type { Settings } from "../../shared/schemas/settings.schema.js";
 import { runClaudeSession, type ClaudeRuntime } from "./claude.js";
 import { TrackerError } from "./errors.js";
@@ -92,6 +92,7 @@ function factsJson(facts: unknown[]): string {
 export interface AnalysisInput {
   repoId: string;
   branch: string;
+  scope: AuditScope;
   /** Clone du dépôt : dossier de travail de Claude. */
   cwd: string;
   /** Dossier de l'opération, hors du clone : configuration MCP de la session. */
@@ -114,6 +115,9 @@ function prompt(input: AnalysisInput, space: string, owner: { id: string; name: 
         ].join("\n");
   return [
     `You analyse the npm vulnerabilities that \`npm audit fix\` could not fix in the GitHub repository ${input.repoId} (branch ${input.branch}).`,
+    input.scope === "production"
+      ? "The audit and the fixes ran with `--omit=dev`: they cover the production dependencies only, and the vulnerabilities of the devDependencies are out of scope."
+      : "The audit and the fixes cover all the dependencies, devDependencies included.",
     "The current directory is a clone of that branch where `npm audit fix --package-lock-only` already updated the lockfiles. Read the code with Read, Grep and Glob; you cannot run commands nor change files.",
     "",
     "Remaining vulnerabilities, from `npm audit --json` (`project` is the folder of the package-lock.json):",

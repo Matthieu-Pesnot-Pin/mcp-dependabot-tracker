@@ -1,4 +1,4 @@
-import { DEFAULT_COMMIT_MESSAGE, type Operation, type Repo, type Right } from "../../shared/schemas/model.schema.js";
+import { AUDIT_SCOPES, DEFAULT_AUDIT_SCOPE, DEFAULT_COMMIT_MESSAGE, type Operation, type Repo, type Right } from "../../shared/schemas/model.schema.js";
 import type { RepoView } from "../../shared/schemas/api.schema.js";
 import type { GitHubConfig } from "../core/config.js";
 import { TrackerError } from "../core/errors.js";
@@ -6,7 +6,7 @@ import { runAgentOperation, type OperationContext } from "../core/operations.js"
 import { listRepoViews, repoView, syncRepository } from "../core/repos.js";
 import type { Store } from "../core/store.js";
 import { describeAlerts, describeOperation, describeRepo } from "./format.js";
-import { errorResult, optionalBoolean, optionalString, rejectUnknownFields, requireString, textResult, type Args, type ToolResult } from "./types.js";
+import { errorResult, optionalBoolean, optionalEnum, optionalString, rejectUnknownFields, requireString, textResult, type Args, type ToolResult } from "./types.js";
 
 const RIGHT_LABELS: Record<Right, string> = {
   audit: "run npm audit",
@@ -65,20 +65,22 @@ function operationResult(operation: Operation): OperationToolResult {
 }
 
 export async function runAudit(ctx: OperationContext, args: Args): Promise<OperationToolResult> {
-  rejectUnknownFields(args, ["repository"]);
+  rejectUnknownFields(args, ["repository", "scope"]);
   const repo = ctx.store.getRepo(requireString(args, "repository"));
+  const scope = optionalEnum(args, "scope", AUDIT_SCOPES, DEFAULT_AUDIT_SCOPE);
   assertAllowed(repo, "audit");
-  return operationResult(await runAgentOperation(ctx, repo.id, "audit", { force: false, push: false, commitMessage: DEFAULT_COMMIT_MESSAGE }));
+  return operationResult(await runAgentOperation(ctx, repo.id, "audit", { scope, force: false, push: false, commitMessage: DEFAULT_COMMIT_MESSAGE }));
 }
 
 export async function fixVulnerabilities(ctx: OperationContext, args: Args): Promise<OperationToolResult> {
-  rejectUnknownFields(args, ["repository", "force", "push", "commit_message"]);
+  rejectUnknownFields(args, ["repository", "scope", "force", "push", "commit_message"]);
   const repo = ctx.store.getRepo(requireString(args, "repository"));
+  const scope = optionalEnum(args, "scope", AUDIT_SCOPES, DEFAULT_AUDIT_SCOPE);
   const force = optionalBoolean(args, "force", false);
   const push = optionalBoolean(args, "push", false);
   const commitMessage = optionalString(args, "commit_message") ?? DEFAULT_COMMIT_MESSAGE;
   assertAllowed(repo, "fix");
   if (force) assertAllowed(repo, "force");
   if (push) assertAllowed(repo, "push");
-  return operationResult(await runAgentOperation(ctx, repo.id, "fix", { force, push, commitMessage }));
+  return operationResult(await runAgentOperation(ctx, repo.id, "fix", { scope, force, push, commitMessage }));
 }

@@ -1,5 +1,5 @@
 import type { AddableReposResponse, AppConfig, AuditAllResponse, BranchesResponse, CategoriesResponse, OperationResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
-import type { Category, Rights } from '@shared/schemas/model.schema'
+import type { AuditScope, Category, Rights } from '@shared/schemas/model.schema'
 import type { SaveSettingsBody, SettingsView } from '@shared/schemas/settings.schema'
 
 /** Erreur HTTP de l'API ; `status` distingue un conflit (409) des autres échecs. */
@@ -58,7 +58,7 @@ export const api = {
   listRepos: () => request<ReposResponse>('repos'),
   syncRepos: () => send<ReposResponse>('POST', 'sync'),
   getAuditAll: () => request<AuditAllResponse>('audit-all'),
-  startAuditAll: () => send<AuditAllResponse>('POST', 'audit-all'),
+  startAuditAll: (scope: AuditScope) => send<AuditAllResponse>('POST', 'audit-all', { scope }),
   listAddableRepos: () => request<AddableReposResponse>('github/repos'),
   getRepo: (repoId: string) => request<RepoView>(repoPath(repoId)),
   addRepo: (repository: string, categoryId: string | null) => send<RepoView>('POST', 'repos', { repository, categoryId }),
@@ -75,7 +75,7 @@ export const api = {
   renameCategory: (id: string, name: string) => send<Category>('PUT', categoryPath(id), { name }),
   deleteCategory: (id: string) => send<{ deleted: true }>('DELETE', categoryPath(id)),
   setRights: (repoId: string, rights: Rights) => send<RepoView>('PUT', `${repoPath(repoId)}/rights`, { rights }),
-  startFix: (repoId: string) => send<OperationResponse>('POST', `${repoPath(repoId)}/operations`),
+  startFix: (repoId: string, scope: AuditScope) => send<OperationResponse>('POST', `${repoPath(repoId)}/operations`, { scope }),
   getOperation: (id: string) => request<OperationResponse>(operationPath(id)),
   decideForce: (id: string, apply: boolean) => send<OperationResponse>('POST', `${operationPath(id)}/force`, { apply }),
   push: (id: string, commitMessage: string) => send<OperationResponse>('POST', `${operationPath(id)}/push`, { commitMessage }),

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { RightsSchema, type AlertSeverity, type AnalysisTask, type Category, type Operation, type Repo } from "./model.schema.js";
+import { AUDIT_SCOPES, RightsSchema, type AlertSeverity, type AnalysisTask, type AuditScope, type Category, type Operation, type Repo } from "./model.schema.js";
 
 /** Corps de `POST /api/repos` : `propriétaire/nom` ou lien GitHub, et la catégorie où le ranger (aucune par défaut). */
 export const AddRepoBodySchema = z.object({
@@ -39,6 +39,11 @@ export interface BranchesResponse {
   branches: string[];
 }
 
+/** Corps de `POST /api/repos/:owner/:name/operations` et de `POST /api/audit-all` : le périmètre de l'audit. */
+export const ScopeBodySchema = z.object({ scope: z.enum(AUDIT_SCOPES) });
+
+export type ScopeBody = z.infer<typeof ScopeBodySchema>;
+
 /** `apply` : lancer `npm audit fix --force` ; sinon l'étape est passée. */
 export const ForceBodySchema = z.object({ apply: z.boolean() });
 
@@ -56,20 +61,27 @@ export const AlertRequestSchema = z.object({ repoId: z.string().min(1), number: 
 
 export const OperationRequestSchema = z.object({ operationId: z.string().min(1) });
 
-/** Vulnérabilités trouvées par un audit : leur nombre, la plus haute gravité, et la date de l'audit. */
+/** Vulnérabilités trouvées par un audit : leur nombre, la plus haute gravité, la date et le périmètre de l'audit. */
 export interface AuditFindings {
   at: string;
+  scope: AuditScope;
   count: number;
   severity: AlertSeverity;
 }
 
+/** Audit qui n'a trouvé aucune vulnérabilité : sa date et son périmètre. */
+export interface CleanAudit {
+  at: string;
+  scope: AuditScope;
+}
+
 /**
  * Dépôt, sa catégorie, et l'état de son opération en cours et de la dernière
- * opération, pour la liste et l'écran du dépôt. `cleanAuditAt` est la date du
- * dernier audit quand il n'a trouvé aucune vulnérabilité alors que Dependabot
- * signale encore des alertes émises avant lui ; `auditFindings` ce qu'a trouvé
- * le dernier audit de la branche par défaut alors que Dependabot ne signale
- * aucune alerte ; `unfixable` les paquets pour lesquels le dernier audit n'a
+ * opération, pour la liste et l'écran du dépôt. `cleanAudit` est le dernier
+ * audit quand il n'a trouvé aucune vulnérabilité alors que Dependabot signale
+ * encore, dans son périmètre, des alertes émises avant lui ; `auditFindings` ce
+ * qu'a trouvé le dernier audit de la branche par défaut alors que Dependabot ne
+ * signale aucune alerte dans son périmètre ; `unfixable` les paquets pour lesquels le dernier audit n'a
  * trouvé aucune version corrigée, hors ceux marqués corrigés à la main ;
  * `analysisTask` la tâche organizer de la dernière analyse par Claude, tant
  * qu'elle n'est pas terminée.
@@ -79,7 +91,7 @@ export interface RepoView {
   category: Category | null;
   activeOperation: Operation | null;
   latestOperation: Operation | null;
-  cleanAuditAt: string | null;
+  cleanAudit: CleanAudit | null;
   auditFindings: AuditFindings | null;
   unfixable: string[];
   analysisTask: AnalysisTask | null;
@@ -88,10 +100,12 @@ export interface RepoView {
 /**
  * Série « Auditer tout » : `done` dépôts traités sur `total`, dont ceux laissés
  * de côté parce qu'une opération y était en cours (`skipped`) et ceux dont
- * l'audit a échoué, avec la raison (`failed`).
+ * l'audit a échoué, avec la raison (`failed`) ; `scope` est le périmètre des
+ * audits.
  */
 export interface AuditAllState {
   running: boolean;
+  scope: AuditScope;
   startedAt: string;
   finishedAt: string | null;
   total: number;

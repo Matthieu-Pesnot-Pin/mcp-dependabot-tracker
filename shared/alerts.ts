@@ -1,9 +1,17 @@
-import { ALERT_SEVERITIES, type Alert, type AlertSeverity, type NpmSeverity, type Repo } from "./schemas/model.schema.js";
+import { ALERT_SEVERITIES, type Alert, type AlertSeverity, type AuditScope, type NpmSeverity, type Repo } from "./schemas/model.schema.js";
 
 /** Alertes ouvertes que l'utilisateur n'a pas marquées corrigées à la main. */
 export function pendingAlerts(repo: Repo): Alert[] {
   const handled = new Set(repo.handledAlerts.map((mark) => mark.number));
   return repo.alerts.filter((alert) => !handled.has(alert.number));
+}
+
+/**
+ * Alertes qu'un audit de périmètre `scope` peut retrouver : toutes pour `all`,
+ * celles qui ne portent pas sur une dépendance de développement pour `production`.
+ */
+export function alertsInScope(alerts: Alert[], scope: AuditScope): Alert[] {
+  return scope === "all" ? alerts : alerts.filter((alert) => alert.scope !== "development");
 }
 
 /** Alertes ouvertes marquées corrigées à la main. */

@@ -1,6 +1,6 @@
-import { fromNpmSeverity, pendingAlerts, worstOf } from "../../shared/alerts.js";
+import { alertsInScope, fromNpmSeverity, pendingAlerts, worstOf } from "../../shared/alerts.js";
 import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type AnalysisTask, type Category, type HandledAlert, type Operation, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
-import type { AuditFindings, RepoView } from "../../shared/schemas/api.schema.js";
+import type { AuditFindings, CleanAudit, RepoView } from "../../shared/schemas/api.schema.js";
 import { latestAnalysed } from "./analysis.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, NotFoundError } from "./errors.js";
@@ -50,30 +50,33 @@ export function sortRepos<T extends { repo: Repo; auditFindings?: AuditFindings 
 }
 
 /**
- * Date du dernier audit, quand il n'a trouvé aucune vulnérabilité alors que
- * Dependabot signale encore des alertes : l'audit doit porter sur la branche
- * par défaut, la seule que Dependabot analyse, et dater d'après chacune des
- * alertes. Null sinon. `operations` va de la plus récente à la plus ancienne.
+ * Dernier audit, quand il n'a trouvé aucune vulnérabilité alors que Dependabot
+ * signale encore des alertes dans son périmètre : l'audit doit porter sur la
+ * branche par défaut, la seule que Dependabot analyse, et dater d'après
+ * chacune de ces alertes. Null sinon. `operations` va de la plus récente à la
+ * plus ancienne.
  */
-export function cleanAuditAt(repo: Repo, operations: Operation[]): string | null {
-  if (repo.alerts.length === 0) return null;
+export function cleanAudit(repo: Repo, operations: Operation[]): CleanAudit | null {
   const audited = operations.find((operation) => operation.steps.audit === "done");
   if (!audited || audited.counts.initial !== 0 || audited.baseBranch !== repo.defaultBranch) return null;
+  const alerts = alertsInScope(repo.alerts, audited.scope);
+  if (alerts.length === 0) return null;
   const auditedAt = Date.parse(audited.createdAt);
-  return repo.alerts.every((alert) => Date.parse(alert.createdAt) <= auditedAt) ? audited.createdAt : null;
+  return alerts.every((alert) => Date.parse(alert.createdAt) <= auditedAt) ? { at: audited.createdAt, scope: audited.scope } : null;
 }
 
 /**
  * Vulnérabilités trouvées par le dernier audit de la branche par défaut, la
- * seule que Dependabot analyse, quand Dependabot ne signale aucune alerte.
- * Null sinon. `operations` va de la plus récente à la plus ancienne.
+ * seule que Dependabot analyse, quand Dependabot ne signale aucune alerte dans
+ * le périmètre de cet audit. Null sinon. `operations` va de la plus récente à
+ * la plus ancienne.
  */
 export function auditFindings(repo: Repo, operations: Operation[]): AuditFindings | null {
-  if (repo.alerts.length > 0) return null;
   const audited = operations.find((operation) => operation.steps.audit === "done" && operation.baseBranch === repo.defaultBranch);
-  const severity = audited ? worstOf(audited.found.map((vulnerability) => fromNpmSeverity(vulnerability.severity))) : null;
-  if (!audited || severity === null) return null;
-  return { at: audited.createdAt, count: audited.found.length, severity };
+  if (!audited || alertsInScope(repo.alerts, audited.scope).length > 0) return null;
+  const severity = worstOf(audited.found.map((vulnerability) => fromNpmSeverity(vulnerability.severity)));
+  if (severity === null) return null;
+  return { at: audited.createdAt, scope: audited.scope, count: audited.found.length, severity };
 }
 
 /**
@@ -124,7 +127,7 @@ function buildRepoView(repo: Repo, operations: Operation[], category: Category |
     category,
     activeOperation: operations.find(isActive) ?? null,
     latestOperation: operations[0] ?? null,
-    cleanAuditAt: cleanAuditAt(repo, operations),
+    cleanAudit: cleanAudit(repo, operations),
     auditFindings: auditFindings(repo, operations),
     unfixable: unfixablePackages(repo, operations),
     analysisTask: openAnalysisTask(operations),

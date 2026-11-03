@@ -14,6 +14,9 @@ export const SERVER_ENTRY = path.resolve(__dirname, "../src/index.js");
 /** Projet npm vulnérable : lodash (corrigé par `npm audit fix`) et nth-check (corrigé seulement par `--force`). */
 export const VULNERABLE_FIXTURE = path.resolve(__dirname, "../../test/fixtures/vulnerable");
 
+/** Même projet, nth-check en devDependency : un audit de production ne voit que lodash. */
+export const VULNERABLE_DEV_FIXTURE = path.resolve(__dirname, "../../test/fixtures/vulnerable-dev");
+
 /** Crée un répertoire temporaire et renvoie sa fonction de suppression. */
 export function makeTempDir(prefix: string): { dir: string; cleanup: () => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -121,6 +124,7 @@ export interface FakeAlert {
   package: string;
   summary: string;
   createdAt?: string;
+  scope?: "runtime" | "development";
 }
 
 interface FakeRepo {
@@ -198,7 +202,7 @@ export class FakeGitHub {
         created_at: alert.createdAt ?? "2026-01-01T00:00:00Z",
         state: "open",
         html_url: `https://github.com/${repo.owner}/${repo.name}/security/dependabot/${alert.number}`,
-        dependency: { package: { ecosystem: "npm", name: alert.package }, manifest_path: "package-lock.json", scope: "runtime" },
+        dependency: { package: { ecosystem: "npm", name: alert.package }, manifest_path: "package-lock.json", scope: alert.scope ?? "runtime" },
         security_advisory: { ghsa_id: `GHSA-${alert.number}`, summary: alert.summary, severity: alert.severity },
         security_vulnerability: { severity: alert.severity, vulnerable_version_range: "< 9", first_patched_version: { identifier: "9.0.0" } },
       }));

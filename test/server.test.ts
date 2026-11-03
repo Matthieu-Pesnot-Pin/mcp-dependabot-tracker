@@ -128,7 +128,7 @@ test("the agent reads the alerts and is held to its rights", async () => {
 
   const alerts = await client.callTool("get_alerts", { repository: "octo/demo" });
   assert.equal(alerts.isError, false, alerts.text);
-  assert.match(alerts.text, /- #2 critical simple-git \(npm, package-lock\.json\): Remote code execution — patched in 9\.0\.0/);
+  assert.match(alerts.text, /- #2 critical simple-git \(npm, package-lock\.json, runtime dependency\): Remote code execution — patched in 9\.0\.0/);
 
   const refused = await client.callTool("fix_vulnerabilities", { repository: "octo/demo" });
   assert.equal(refused.isError, true);
@@ -136,6 +136,8 @@ test("the agent reads the alerts and is held to its rights", async () => {
 
   const unknownField = await client.callTool("run_audit", { repository: "octo/demo", force: true });
   assert.match(unknownField.text, /Unknown field\(s\): force/);
+  const badScope = await client.callTool("run_audit", { repository: "octo/demo", scope: "dev" });
+  assert.match(badScope.text, /"scope" must be one of production, all/);
 
   const rights = await call("PUT", "repos/octo/demo/rights", { rights: { audit: true, fix: true, force: false, push: true } });
   assert.equal(rights.status, 200, rights.json.error);
@@ -228,7 +230,7 @@ test("the GUI deprecates a repository: no sync, no audit, hidden from the agent,
   const refused = await client.callTool("get_alerts", { repository: "octo/extra-2" });
   assert.equal(refused.isError, true);
   assert.match(refused.text, /octo\/extra-2 is deprecated/);
-  assert.equal((await call("POST", "repos/octo/extra-2/operations")).status, 409);
+  assert.equal((await call("POST", "repos/octo/extra-2/operations", { scope: "production" })).status, 409);
 
   const restored = await call("DELETE", "repos/octo/extra-2/deprecated");
   assert.equal(restored.status, 200, restored.json.error);
@@ -241,25 +243,29 @@ test("the GUI deprecates a repository: no sync, no audit, hidden from the agent,
 test("the GUI audits every repository; the agent sees what Dependabot misses", { skip }, async () => {
   assert.equal((await call("POST", "repos", { repository: "octo/quiet" })).status, 200);
   assert.deepEqual((await call("GET", "audit-all")).json, { auditAll: null });
-  const started = await call("POST", "audit-all");
+  assert.equal((await call("POST", "audit-all")).status, 400, "the scope is required");
+  const started = await call("POST", "audit-all", { scope: "production" });
   assert.equal(started.status, 200, started.json.error);
-  assert.equal(started.json.auditAll.running, true);
-  assert.equal((await call("POST", "audit-all")).status, 409);
+  assert.deepEqual([started.json.auditAll.running, started.json.auditAll.scope], [true, "production"]);
+  assert.equal((await call("POST", "audit-all", { scope: "production" })).status, 409);
   const finished = await waitFor("the audit of every repository", () => call("GET", "audit-all"), (response) => response.json.auditAll.running === false);
   const { total, done, skipped, failed } = finished.json.auditAll;
   assert.deepEqual({ done, skipped, failed }, { done: total, skipped: [], failed: [] });
 
   const quiet = (await call("GET", "repos/octo/quiet")).json;
   assert.ok(quiet.auditFindings?.count > 0, JSON.stringify(quiet.auditFindings));
-  assert.equal(quiet.latestOperation.baseBranch, "main");
-  assert.match((await client.callTool("list_repositories")).text, /octo\/quiet[\s\S]*found \d+ vulnerabilities \(worst: \w+\) on the default branch although Dependabot reports none/);
+  assert.deepEqual([quiet.latestOperation.baseBranch, quiet.latestOperation.scope], ["main", "production"]);
+  assert.match(
+    (await client.callTool("list_repositories")).text,
+    /octo\/quiet[\s\S]*\(production dependencies\) found \d+ vulnerabilities \(worst: \w+\) on the default branch although Dependabot reports none there/
+  );
   assert.equal((await call("DELETE", "repos/octo/quiet")).status, 200);
 });
 
 test("the agent fixes and pushes; the result links to the operation in the GUI", { skip }, async () => {
   const fixed = await client.callTool("fix_vulnerabilities", { repository: "octo/demo", push: true }, 180_000);
   assert.equal(fixed.isError, false, fixed.text);
-  assert.match(fixed.text, /^npm audit fix on octo\/demo \(operation op-[a-z0-9-]+\): done\./);
+  assert.match(fixed.text, /^npm audit fix on octo\/demo, production dependencies \(operation op-[a-z0-9-]+\): done\./);
   assert.match(fixed.text, /Vulnerabilities: 2 found, 1 left after npm audit fix/);
   assert.match(fixed.text, /npm audit fix --force would upgrade: nth-check 1\.0\.2 → 3\.0\.1/);
   assert.match(fixed.text, /Pull request #\d+: https:\/\/github\.com\/octo\/demo\/pull\/\d+ \(branch fix\/npm-audit-/);
@@ -275,11 +281,12 @@ test("the agent fixes and pushes; the result links to the operation in the GUI",
 });
 
 test("the GUI runs a fix through the --force decision to the pull request", { skip }, async () => {
-  const started = await call("POST", "repos/octo/demo/operations");
+  assert.equal((await call("POST", "repos/octo/demo/operations", { scope: "dev" })).status, 400);
+  const started = await call("POST", "repos/octo/demo/operations", { scope: "all" });
   assert.equal(started.status, 200, started.json.error);
   const id = started.json.operation.id;
-  assert.equal(started.json.operation.origin, "user");
-  assert.equal((await call("POST", "repos/octo/demo/operations")).status, 409);
+  assert.deepEqual([started.json.operation.origin, started.json.operation.scope], ["user", "all"]);
+  assert.equal((await call("POST", "repos/octo/demo/operations", { scope: "all" })).status, 409);
 
   const read = async () => (await call("GET", `operations/${id}`)).json.operation;
   const waitingForce = await waitFor("waiting_force", read, (op) => op.status === "waiting_force" || op.status === "failed");

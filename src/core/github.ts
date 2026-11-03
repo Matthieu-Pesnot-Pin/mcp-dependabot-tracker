@@ -1,4 +1,4 @@
-import { ALERT_SEVERITIES, type Alert, type AlertSeverity } from "../../shared/schemas/model.schema.js";
+import { ALERT_SEVERITIES, DEPENDENCY_SCOPES, type Alert, type AlertSeverity, type DependencyScope } from "../../shared/schemas/model.schema.js";
 import type { GitHubConfig } from "./config.js";
 import { NotFoundError, TrackerError } from "./errors.js";
 
@@ -208,5 +208,6 @@ function toAlert(raw: any): Alert {
     url: raw.html_url ?? "",
     patchedVersion: raw.security_vulnerability?.first_patched_version?.identifier ?? null,
     createdAt: raw.created_at,
+    scope: (DEPENDENCY_SCOPES as readonly string[]).includes(raw.dependency?.scope) ? (raw.dependency.scope as DependencyScope) : null,
   };
 }

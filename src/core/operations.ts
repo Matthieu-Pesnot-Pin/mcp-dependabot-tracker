@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import {
   DEFAULT_COMMIT_MESSAGE,
+  type AuditScope,
   type Change,
   type Operation,
   type OperationKind,
@@ -48,6 +49,7 @@ export interface OperationContext {
 
 /** Choix de l'agent pour une opération qu'il mène d'un bout à l'autre. */
 export interface AgentPlan {
+  scope: AuditScope;
   force: boolean;
   push: boolean;
   commitMessage: string;
@@ -103,6 +105,11 @@ function gitAuthEnv(config: GitHubConfig): Record<string, string> {
  */
 const NPM_ENV = { npm_config_update_notifier: "false", npm_config_fund: "false", npm_config_allow_remote: "all" };
 
+/** Options npm qui limitent l'audit et ses corrections au périmètre `scope`. */
+function scopeArgs(scope: AuditScope): string[] {
+  return scope === "production" ? ["--omit=dev"] : [];
+}
+
 /** Sous-commande git d'une liste d'arguments, après les options `-c clé=valeur`. */
 function subcommand(args: string[]): string {
   let index = 0;
@@ -110,13 +117,14 @@ function subcommand(args: string[]): string {
   return args[index] ?? "";
 }
 
-function newOperation(repo: Repo, kind: OperationKind, origin: Origin): Operation {
+function newOperation(repo: Repo, kind: OperationKind, origin: Origin, scope: AuditScope): Operation {
   const createdAt = now();
   return {
     id: `op-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`,
     repoId: repo.id,
     kind,
     origin,
+    scope,
     status: "running",
     createdAt,
     updatedAt: createdAt,
@@ -250,7 +258,7 @@ async function cloneStep(runner: Runner): Promise<void> {
 async function auditAll(runner: Runner, count: keyof Operation["counts"]): Promise<AuditedVulnerability[]> {
   const vulnerabilities: AuditedVulnerability[] = [];
   for (const project of runner.operation.projects) {
-    const report = await runner.npm(project, ["audit", "--json"]);
+    const report = await runner.npm(project, ["audit", ...scopeArgs(runner.operation.scope), "--json"]);
     runner.auditReports.set(project, report);
     vulnerabilities.push(...parseAuditReport(report, project));
   }
@@ -285,7 +293,7 @@ async function fixStep(runner: Runner, vulnerabilities: AuditedVulnerability[]):
   runner.setStep("fix", "running");
   const projects = new Set(vulnerabilities.map((vulnerability) => vulnerability.project));
   for (const project of runner.operation.projects.filter((candidate) => projects.has(candidate))) {
-    await runner.npm(project, ["audit", "fix", "--package-lock-only", "--ignore-scripts", "--json"]);
+    await runner.npm(project, ["audit", "fix", ...scopeArgs(runner.operation.scope), "--package-lock-only", "--ignore-scripts", "--json"]);
   }
   const remaining = await auditAll(runner, "afterFix");
   await refreshChanges(runner);
@@ -320,6 +328,7 @@ async function analysisStep(runner: Runner, ctx: OperationContext): Promise<void
     const { report, task } = await analyseVulnerabilities({
       repoId: operation.repoId,
       branch: operation.baseBranch,
+      scope: operation.scope,
       cwd: runner.repoDir,
       workDir: operation.workDir!,
       facts: operation.projects.flatMap((project) => auditFacts(runner.auditReports.get(project), project)),
@@ -349,7 +358,7 @@ async function forceStep(runner: Runner): Promise<void> {
   runner.setStep("force", "running");
   const projects = new Set(runner.operation.forceCandidates.map((candidate) => candidate.project));
   for (const project of runner.operation.projects.filter((candidate) => projects.has(candidate))) {
-    await runner.npm(project, ["audit", "fix", "--force", "--package-lock-only", "--ignore-scripts", "--json"]);
+    await runner.npm(project, ["audit", "fix", "--force", ...scopeArgs(runner.operation.scope), "--package-lock-only", "--ignore-scripts", "--json"]);
   }
   await auditAll(runner, "afterForce");
   await refreshChanges(runner);
@@ -358,9 +367,13 @@ async function forceStep(runner: Runner): Promise<void> {
 
 function pullRequestBody(operation: Operation): string {
   const after = operation.counts.afterForce ?? operation.counts.afterFix;
+  const command = ["npm audit fix", ...scopeArgs(operation.scope), "--package-lock-only --ignore-scripts"].join(" ");
   const lines = [
-    "Automated `npm audit` fixes, made by mcp-dependabot-tracker in a temporary clone (`npm audit fix --package-lock-only --ignore-scripts`).",
+    `Automated \`npm audit\` fixes, made by mcp-dependabot-tracker in a temporary clone (\`${command}\`).`,
     "",
+    operation.scope === "production"
+      ? "- Scope: production dependencies only; the vulnerabilities of the devDependencies were neither audited nor fixed."
+      : "- Scope: all dependencies, devDependencies included.",
     `- Vulnerabilities before: ${operation.counts.initial}`,
     `- Vulnerabilities after: ${after}`,
     `- \`npm audit fix --force\`: ${operation.steps.force === "done" ? "applied" : "not applied"}`,
@@ -502,15 +515,16 @@ function inBackground(ctx: OperationContext, id: string, run: Promise<Operation>
 // --- Entrées ---------------------------------------------------------------------
 
 /**
- * Lance une correction depuis la GUI : clone, audit, `npm audit fix` et
- * l'analyse par Claude s'exécutent en arrière-plan, puis l'opération attend la
- * décision sur `--force` ou le push. Refusé sur un dépôt déprécié.
+ * Lance une correction depuis la GUI, sur le périmètre `scope` : clone, audit,
+ * `npm audit fix` et l'analyse par Claude s'exécutent en arrière-plan, puis
+ * l'opération attend la décision sur `--force` ou le push. Refusé sur un dépôt
+ * déprécié.
  */
-export function startUserFix(ctx: OperationContext, repoId: string): Operation {
+export function startUserFix(ctx: OperationContext, repoId: string, scope: AuditScope): Operation {
   ctx.githubConfig();
   const repo = ctx.store.getRepo(repoId);
   assertNotDeprecated(repo);
-  const operation = ctx.store.createOperation(newOperation(repo, "fix", "user"));
+  const operation = ctx.store.createOperation(newOperation(repo, "fix", "user", scope));
   inBackground(
     ctx,
     operation.id,
@@ -532,15 +546,15 @@ export function startUserFix(ctx: OperationContext, repoId: string): Operation {
 }
 
 /**
- * Audit de la branche par défaut, celle que Dependabot analyse, lancé par
- * l'utilisateur et attendu jusqu'à sa fin. Refusé si une opération est en
- * cours sur le dépôt, ou s'il est déprécié.
+ * Audit de la branche par défaut, celle que Dependabot analyse, sur le
+ * périmètre `scope`, lancé par l'utilisateur et attendu jusqu'à sa fin. Refusé
+ * si une opération est en cours sur le dépôt, ou s'il est déprécié.
  */
-export async function runDefaultBranchAudit(ctx: OperationContext, repoId: string): Promise<Operation> {
+export async function runDefaultBranchAudit(ctx: OperationContext, repoId: string, scope: AuditScope): Promise<Operation> {
   ctx.githubConfig();
   const repo = ctx.store.getRepo(repoId);
   assertNotDeprecated(repo);
-  const operation = ctx.store.createOperation({ ...newOperation(repo, "audit", "user"), baseBranch: repo.defaultBranch });
+  const operation = ctx.store.createOperation({ ...newOperation(repo, "audit", "user", scope), baseBranch: repo.defaultBranch });
   return execute(ctx, operation.id, async (runner) => {
     await cloneStep(runner);
     await auditStep(runner);
@@ -602,15 +616,16 @@ export function cancelOperation(ctx: OperationContext, id: string): Operation {
 }
 
 /**
- * Opération menée par l'agent d'un bout à l'autre, attendue jusqu'à sa fin :
- * `audit` s'arrête après `npm audit` ; `fix` enchaîne `npm audit fix`, puis
- * `--force` et le push selon `plan`. Refusé sur un dépôt déprécié.
+ * Opération menée par l'agent d'un bout à l'autre, sur le périmètre de `plan`,
+ * attendue jusqu'à sa fin : `audit` s'arrête après `npm audit` ; `fix` enchaîne
+ * `npm audit fix`, puis `--force` et le push selon `plan`. Refusé sur un dépôt
+ * déprécié.
  */
 export async function runAgentOperation(ctx: OperationContext, repoId: string, kind: OperationKind, plan: AgentPlan): Promise<Operation> {
   ctx.githubConfig();
   const repo = ctx.store.getRepo(repoId);
   assertNotDeprecated(repo);
-  const operation = ctx.store.createOperation({ ...newOperation(repo, kind, "agent"), commitMessage: plan.commitMessage });
+  const operation = ctx.store.createOperation({ ...newOperation(repo, kind, "agent", plan.scope), commitMessage: plan.commitMessage });
   return execute(ctx, operation.id, async (runner) => {
     await cloneStep(runner);
     const vulnerabilities = await auditStep(runner);

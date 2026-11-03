@@ -342,6 +342,79 @@ code {
   color: var(--faint);
 }
 
+/* --- Bouton à choix du périmètre ------------------------------------------- */
+
+.split-button {
+  display: inline-flex;
+}
+
+.split-main.button {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.split-toggle.button {
+  padding: 0 10px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.split-toggle.button-primary {
+  border-left: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.split-toggle.button-secondary {
+  border-left: none;
+}
+
+.scope-menu {
+  left: auto;
+  right: 0;
+  padding: 6px;
+}
+
+.scope-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  border-radius: 6px;
+  text-align: left;
+}
+
+.scope-option:hover,
+.scope-option:focus-visible {
+  background: var(--brand-bg);
+}
+
+.scope-option-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.scope-option-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.scope-option-detail {
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.dev-tag {
+  flex-shrink: 0;
+  padding: 3px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* --- Boutons ---------------------------------------------------------------- */
 
 .button {

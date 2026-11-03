@@ -7,7 +7,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 
 import { IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
-import { AddRepoBodySchema, CategoryBodySchema, ForceBodySchema, PushBodySchema, SetBranchBodySchema, SetCategoryBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
+import { AddRepoBodySchema, CategoryBodySchema, ForceBodySchema, PushBodySchema, ScopeBodySchema, SetBranchBodySchema, SetCategoryBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
 import { SaveSettingsBodySchema } from "../shared/schemas/settings.schema.js";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -243,7 +243,11 @@ app.post("/api/sync", (c) => forward(c, "SYNC_REPOS"));
 
 app.get("/api/audit-all", (c) => forward(c, "GET_AUDIT_ALL"));
 
-app.post("/api/audit-all", (c) => forward(c, "START_AUDIT_ALL"));
+app.post("/api/audit-all", async (c) => {
+  const read = await readBody(c, ScopeBodySchema);
+  if ("response" in read) return read.response;
+  return forward(c, "START_AUDIT_ALL", { body: read.body });
+});
 
 app.get("/api/github/repos", (c) => forward(c, "LIST_ADDABLE_REPOS"));
 
@@ -299,7 +303,11 @@ app.put("/api/categories/:id", async (c) => {
 
 app.delete("/api/categories/:id", (c) => forward(c, "DELETE_CATEGORY", { categoryId: c.req.param("id") }));
 
-app.post("/api/repos/:owner/:name/operations", (c) => forward(c, "START_FIX", { repoId: repoId(c) }));
+app.post("/api/repos/:owner/:name/operations", async (c) => {
+  const read = await readBody(c, ScopeBodySchema);
+  if ("response" in read) return read.response;
+  return forward(c, "START_FIX", { repoId: repoId(c), body: read.body });
+});
 
 app.get("/api/operations/:id", (c) => forward(c, "GET_OPERATION", { operationId: c.req.param("id") }));
 

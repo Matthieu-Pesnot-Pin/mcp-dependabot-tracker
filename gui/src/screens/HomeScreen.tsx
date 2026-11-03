@@ -10,7 +10,7 @@ import { Toggle } from '../components/Toggle'
 import { usePolling } from '../hooks/usePolling'
 import { showError } from '../store/useNotice'
 import { api } from '../utils/api'
-import { dayAndTime, plural, worstSeverity } from '../utils/format'
+import { dayAndTime, plural, SCOPE_LABELS, worstSeverity } from '../utils/format'
 import { hrefs, navigate, rememberHomeTab, type HomeTab } from '../utils/router'
 
 const POLL_MS = 3000
@@ -53,7 +53,7 @@ function useStoredFlag(key: string): [boolean, (value: boolean) => void] {
  * des vulnérabilités trouvées par l'audit alors que Dependabot ne signale rien.
  */
 function isVulnerable(view: RepoView): boolean {
-  return view.unfixable.length > 0 || view.auditFindings !== null || (pendingAlerts(view.repo).length > 0 && view.cleanAuditAt === null)
+  return view.unfixable.length > 0 || view.auditFindings !== null || (pendingAlerts(view.repo).length > 0 && view.cleanAudit === null)
 }
 
 /** Paquets sans version corrigée publiée, signalés devant la pastille. */
@@ -118,7 +118,7 @@ function AnalysisTaskNote({ view }: { view: RepoView }) {
  * version corrigée sont signalés devant elles.
  */
 function RepoStatus({ view }: { view: RepoView }) {
-  const { repo, activeOperation, cleanAuditAt, auditFindings, unfixable } = view
+  const { repo, activeOperation, cleanAudit, auditFindings, unfixable } = view
   if (activeOperation) {
     const analysing = activeOperation.steps.analysis === 'running'
     return (
@@ -142,11 +142,11 @@ function RepoStatus({ view }: { view: RepoView }) {
     )
   }
   const worst = worstSeverity(pending)
-  if (worst && cleanAuditAt) {
+  if (worst && cleanAudit) {
     return (
-      <span className="status status-clean" title="Le dernier audit n'a trouvé aucune vulnérabilité : Dependabot n'a pas encore repassé.">
+      <span className="status status-clean" title={`Le dernier audit (${SCOPE_LABELS[cleanAudit.scope]}) n'a trouvé aucune vulnérabilité : Dependabot n'a pas encore repassé.`}>
         <Icon name="circle-check" className="text-ok" />
-        Audit OK le {dayAndTime(cleanAuditAt)}
+        Audit OK le {dayAndTime(cleanAudit.at)}
         <SeverityPill severity={worst} faded>
           {plural(pending.length, 'alerte')}
         </SeverityPill>
@@ -165,7 +165,7 @@ function RepoStatus({ view }: { view: RepoView }) {
     return (
       <span
         className="status status-clean"
-        title="Dependabot ne signale aucune alerte, mais le dernier audit de la branche par défaut a trouvé des vulnérabilités : Dependabot n'a pas encore repassé."
+        title={`Dependabot ne signale aucune alerte, mais le dernier audit de la branche par défaut (${SCOPE_LABELS[auditFindings.scope]}) a trouvé des vulnérabilités : Dependabot n'a pas encore repassé.`}
       >
         <UnfixableNote unfixable={unfixable} />
         <Icon name="triangle-alert" className="text-warning" />

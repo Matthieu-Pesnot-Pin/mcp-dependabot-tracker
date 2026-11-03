@@ -1,4 +1,4 @@
-import { ALERT_SEVERITIES, RIGHTS, type Category, type Operation, type Repo } from "../../shared/schemas/model.schema.js";
+import { ALERT_SEVERITIES, RIGHTS, type AuditScope, type Category, type Operation, type Repo } from "../../shared/schemas/model.schema.js";
 import type { RepoView } from "../../shared/schemas/api.schema.js";
 import { pendingAlerts } from "../../shared/alerts.js";
 import { projectLabel } from "../core/npm-audit.js";
@@ -12,7 +12,15 @@ export function rightsLabel(repo: Repo): string {
   return allowed.length === 0 ? "none" : allowed.join(", ");
 }
 
-/** Alertes restantes par gravité, et le nombre de celles que l'utilisateur a corrigées à la main. */
+/** Périmètre d'un audit, en clair. */
+function scopeLabel(scope: AuditScope): string {
+  return scope === "production" ? "production dependencies" : "all dependencies";
+}
+
+/**
+ * Alertes restantes par gravité, dont celles qui portent sur une dépendance de
+ * développement, et le nombre de celles que l'utilisateur a corrigées à la main.
+ */
 function alertsLabel(repo: Repo): string {
   const pending = pendingAlerts(repo);
   const handled = repo.alerts.length - pending.length;
@@ -20,7 +28,9 @@ function alertsLabel(repo: Repo): string {
   if (pending.length === 0) return `none${handledNote}`;
   const counts = countBySeverity(pending);
   const detail = ALERT_SEVERITIES.filter((severity) => counts[severity] > 0).map((severity) => `${severity} ${counts[severity]}`);
-  return `${pending.length} (${detail.join(", ")})${handledNote}`;
+  const development = pending.filter((alert) => alert.scope === "development").length;
+  const developmentNote = development > 0 ? `; ${development} on development dependencies` : "";
+  return `${pending.length} (${detail.join(", ")}${developmentNote})${handledNote}`;
 }
 
 /** Description d'un dépôt pour l'agent ; `category` est la catégorie où l'utilisateur l'a rangé. */
@@ -36,12 +46,16 @@ export function describeRepo(view: RepoView, category: Category | null): string 
     lines.push(`  Pull requests opened by the tracker, not merged yet: ${repo.pullRequests.map((pull) => `#${pull.number} ${pull.url}`).join(", ")}`);
   }
   if (view.unfixable.length > 0) lines.push(`  Last npm audit found no published fix for: ${view.unfixable.join(", ")}`);
-  if (view.cleanAuditAt) {
-    lines.push(`  npm audit of ${view.cleanAuditAt} found no vulnerability on the default branch: these Dependabot alerts are probably not refreshed yet.`);
+  if (view.cleanAudit) {
+    const { at, scope } = view.cleanAudit;
+    const alerts = scope === "production" ? "the Dependabot alerts on production dependencies" : "these Dependabot alerts";
+    lines.push(`  npm audit of ${at} (${scopeLabel(scope)}) found no vulnerability on the default branch: ${alerts} are probably not refreshed yet.`);
   }
   if (view.auditFindings) {
-    const { at, count, severity } = view.auditFindings;
-    lines.push(`  npm audit of ${at} found ${count} vulnerabilit${count === 1 ? "y" : "ies"} (worst: ${severity}) on the default branch although Dependabot reports none: Dependabot has probably not caught up yet.`);
+    const { at, scope, count, severity } = view.auditFindings;
+    lines.push(
+      `  npm audit of ${at} (${scopeLabel(scope)}) found ${count} vulnerabilit${count === 1 ? "y" : "ies"} (worst: ${severity}) on the default branch although Dependabot reports none there: Dependabot has probably not caught up yet.`
+    );
   }
   lines.push(`  Agent rights: ${rightsLabel(repo)}`);
   if (activeOperation) lines.push(`  Operation in progress: ${activeOperation.id} (${activeOperation.status})`);
@@ -54,7 +68,8 @@ export function describeAlerts(repo: Repo): string {
     const patched = alert.patchedVersion ? ` — patched in ${alert.patchedVersion}` : " — no patched version";
     const mark = repo.handledAlerts.find((candidate) => candidate.number === alert.number);
     const handled = mark ? ` — fixed by hand by the user on ${mark.markedAt}` : "";
-    return `- #${alert.number} ${alert.severity} ${alert.package} (${alert.ecosystem}, ${alert.manifestPath}): ${alert.summary}${patched}${handled} — ${alert.url}`;
+    const scope = alert.scope ? `, ${alert.scope} dependency` : "";
+    return `- #${alert.number} ${alert.severity} ${alert.package} (${alert.ecosystem}, ${alert.manifestPath}${scope}): ${alert.summary}${patched}${handled} — ${alert.url}`;
   });
   return [header, ...lines].join("\n");
 }
@@ -68,7 +83,7 @@ function list<T>(items: T[], render: (item: T) => string): string {
 /** Compte rendu d'une opération pour l'agent : étapes, vulnérabilités, paquets modifiés, PR, erreur. */
 export function describeOperation(operation: Operation): string {
   const title = operation.kind === "audit" ? "npm audit" : "npm audit fix";
-  const lines = [`${title} on ${operation.repoId} (operation ${operation.id}): ${operation.status}.`];
+  const lines = [`${title} on ${operation.repoId}, ${scopeLabel(operation.scope)} (operation ${operation.id}): ${operation.status}.`];
   if (operation.projects.length > 0) {
     lines.push(`- npm projects: ${operation.projects.map((project) => projectLabel(project) || "./").join(", ")}`);
   }

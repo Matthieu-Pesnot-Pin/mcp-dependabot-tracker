@@ -11,7 +11,7 @@ import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
 import { AuditAll } from "../src/core/audit-all.js";
 import { ConflictError } from "../src/core/errors.js";
-import { auditFindings, cleanAuditAt, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
+import { auditFindings, cleanAudit, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
 import { describeOperation } from "../src/tools/format.js";
@@ -21,8 +21,8 @@ import { DEFAULT_RIGHTS, type Alert, type Operation, type Repo } from "../shared
 import { DEFAULT_SETTINGS } from "../shared/schemas/settings.schema.js";
 import { makeTempDir } from "./helpers.js";
 
-function alert(number: number, severity: Alert["severity"], pkg: string): Alert {
-  return { number, severity, ecosystem: "npm", package: pkg, manifestPath: "package-lock.json", summary: "s", url: "u", patchedVersion: null, createdAt: "2026-01-01T00:00:00.000Z" };
+function alert(number: number, severity: Alert["severity"], pkg: string, scope: Alert["scope"] = "runtime"): Alert {
+  return { number, severity, ecosystem: "npm", package: pkg, manifestPath: "package-lock.json", summary: "s", url: "u", patchedVersion: null, createdAt: "2026-01-01T00:00:00.000Z", scope };
 }
 
 function repo(id: string, alerts: Alert[] = [], syncedAt: string | null = null): Repo {
@@ -36,6 +36,7 @@ function operation(overrides: Partial<Operation> = {}): Operation {
     repoId: "octo/demo",
     kind: "fix",
     origin: "user",
+    scope: "production",
     status: "running",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
@@ -181,21 +182,28 @@ test("repositories sort by worst severity, then alert count; alerts by severity 
   assert.deepEqual(sortAlerts([alert(3, "low", "z"), alert(1, "critical", "b"), alert(2, "critical", "a")]).map((a) => a.number), [2, 1, 3]);
 });
 
-test("cleanAuditAt reports an audit without vulnerability on the default branch, newer than every alert", () => {
+test("cleanAudit reports an audit without vulnerability on the default branch, newer than every alert in its scope", () => {
   const alerted = repo("octo/demo", [alert(1, "high", "lodash")]);
   const clean = (overrides: Partial<Operation> = {}) =>
     operation({ status: "done", createdAt: "2026-03-01T10:00:00.000Z", steps: { clone: "done", audit: "done", fix: "skipped", analysis: "skipped", force: "skipped", push: "skipped" }, counts: { initial: 0, afterFix: null, afterForce: null }, ...overrides });
+  const stamp = { at: "2026-03-01T10:00:00.000Z", scope: "production" };
 
-  assert.equal(cleanAuditAt(alerted, [clean()]), "2026-03-01T10:00:00.000Z");
-  assert.equal(cleanAuditAt(repo("octo/demo"), [clean()]), null, "no alert, nothing to explain");
-  assert.equal(cleanAuditAt(alerted, [clean({ counts: { initial: 2, afterFix: 0, afterForce: null } })]), null, "the audit found vulnerabilities");
-  assert.equal(cleanAuditAt(alerted, [clean({ baseBranch: "develop" })]), null, "Dependabot only covers the default branch");
+  assert.deepEqual(cleanAudit(alerted, [clean()]), stamp);
+  assert.equal(cleanAudit(repo("octo/demo"), [clean()]), null, "no alert, nothing to explain");
+  assert.equal(cleanAudit(alerted, [clean({ counts: { initial: 2, afterFix: 0, afterForce: null } })]), null, "the audit found vulnerabilities");
+  assert.equal(cleanAudit(alerted, [clean({ baseBranch: "develop" })]), null, "Dependabot only covers the default branch");
   const newer = repo("octo/demo", [alert(1, "high", "lodash"), { ...alert(2, "critical", "tar"), createdAt: "2026-03-02T08:00:00.000Z" }]);
-  assert.equal(cleanAuditAt(newer, [clean()]), null, "an alert emitted after the audit");
+  assert.equal(cleanAudit(newer, [clean()]), null, "an alert emitted after the audit");
   const running = operation({ id: "op-2", createdAt: "2026-03-03T10:00:00.000Z", steps: { clone: "running", audit: "pending", fix: "pending", analysis: "pending", force: "pending", push: "pending" } });
-  assert.equal(cleanAuditAt(alerted, [running, clean()]), "2026-03-01T10:00:00.000Z", "an operation still auditing does not count");
+  assert.deepEqual(cleanAudit(alerted, [running, clean()]), stamp, "an operation still auditing does not count");
   const dirty = clean({ id: "op-3", createdAt: "2026-03-04T10:00:00.000Z", counts: { initial: 1, afterFix: 1, afterForce: null } });
-  assert.equal(cleanAuditAt(alerted, [dirty, clean()]), null, "the latest audit decides");
+  assert.equal(cleanAudit(alerted, [dirty, clean()]), null, "the latest audit decides");
+
+  const development = repo("octo/demo", [alert(1, "high", "lodash"), { ...alert(2, "critical", "vite", "development"), createdAt: "2026-03-02T08:00:00.000Z" }]);
+  assert.deepEqual(cleanAudit(development, [clean()]), stamp, "a production audit leaves the alerts on development dependencies aside");
+  assert.equal(cleanAudit(development, [clean({ scope: "all" })]), null, "an audit of every dependency answers for them too");
+  assert.equal(cleanAudit(repo("octo/demo", [alert(2, "critical", "vite", "development")]), [clean()]), null, "no alert in the scope of the audit");
+  assert.deepEqual(cleanAudit(repo("octo/demo", [alert(1, "high", "lodash", null)]), [clean()]), stamp, "an alert of unknown scope counts as a production one");
 });
 
 test("auditFindings reports what the latest audit of the default branch found while Dependabot reports nothing", () => {
@@ -212,7 +220,10 @@ test("auditFindings reports what the latest audit of the default branch found wh
       ...overrides,
     });
   const quiet = repo("octo/demo");
-  assert.deepEqual(auditFindings(quiet, [audited()]), { at: "2026-03-01T10:00:00.000Z", count: 2, severity: "high" });
+  assert.deepEqual(auditFindings(quiet, [audited()]), { at: "2026-03-01T10:00:00.000Z", scope: "production", count: 2, severity: "high" });
+  const development = repo("octo/demo", [alert(1, "high", "vite", "development")]);
+  assert.equal(auditFindings(development, [audited()])?.count, 2, "Dependabot only reports development dependencies, out of a production audit");
+  assert.equal(auditFindings(development, [audited({ scope: "all" })]), null, "Dependabot reports alerts in the scope of the audit");
   assert.equal(auditFindings(repo("octo/demo", [alert(1, "high", "lodash")]), [audited()]), null, "Dependabot reports alerts");
   assert.equal(auditFindings(quiet, [audited({ found: [], counts: { initial: 0, afterFix: null, afterForce: null } })]), null, "a clean audit");
   const develop = audited({ id: "op-2", createdAt: "2026-03-02T10:00:00.000Z", baseBranch: "develop", found: [] });
@@ -226,7 +237,9 @@ test("auditFindings reports what the latest audit of the default branch found wh
 test("AuditAll audits three repositories at a time and reports those skipped or failed", async () => {
   let running = 0;
   let peak = 0;
-  const audit = async (repoId: string): Promise<Operation> => {
+  const scopes = new Set<string>();
+  const audit = async (repoId: string, scope: Operation["scope"]): Promise<Operation> => {
+    scopes.add(scope);
     if (repoId === "o/busy") throw new ConflictError("An operation is already in progress");
     running += 1;
     peak = Math.max(peak, running);
@@ -238,9 +251,9 @@ test("AuditAll audits three repositories at a time and reports those skipped or 
   const auditAll = new AuditAll(audit, (message) => errors.push(message));
   assert.equal(auditAll.status(), null);
   const ids = ["o/a", "o/busy", "o/b", "o/broken", "o/c", "o/d"];
-  const started = auditAll.start(ids);
-  assert.deepEqual([started.running, started.total, started.done], [true, 6, 0]);
-  assert.throws(() => auditAll.start(ids), /already running/);
+  const started = auditAll.start(ids, "all");
+  assert.deepEqual([started.running, started.scope, started.total, started.done], [true, "all", 6, 0]);
+  assert.throws(() => auditAll.start(ids, "production"), /already running/);
   await auditAll.finished();
   const done = auditAll.status()!;
   assert.equal(done.running, false);
@@ -249,6 +262,7 @@ test("AuditAll audits three repositories at a time and reports those skipped or 
   assert.deepEqual(done.skipped, ["o/busy"]);
   assert.deepEqual(done.failed, [{ repoId: "o/broken", error: "No package-lock.json" }]);
   assert.equal(peak, 3);
+  assert.deepEqual([...scopes], ["all"]);
   assert.deepEqual(errors, []);
 });
 
@@ -387,6 +401,23 @@ test("Store reads an operation saved without the vulnerabilities of its first au
   }
 });
 
+test("Store reads an operation saved without scope as an audit of every dependency, and an alert without scope as of unknown scope", () => {
+  const temp = makeTempDir("tracker-scope-");
+  try {
+    const store = new Store(temp.dir);
+    const saved = operation() as Partial<Operation>;
+    delete saved.scope;
+    fs.writeFileSync(path.join(temp.dir, "operations", "op-1.json"), JSON.stringify(saved));
+    assert.equal(store.getOperation("op-1").scope, "all");
+    const stored = repo("octo/demo", [alert(1, "high", "lodash")]) as any;
+    delete stored.alerts[0].scope;
+    fs.writeFileSync(path.join(temp.dir, "repos.json"), JSON.stringify({ categories: [], repos: [stored] }));
+    assert.equal(store.getRepo("octo/demo").alerts[0].scope, null);
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("Store reads an operation saved before the analysis step as one whose analysis was skipped", () => {
   const temp = makeTempDir("tracker-analysis-");
   try {
@@ -495,7 +526,7 @@ test("describeOperation reports counts, upgrades, changes and the pull request",
       pullRequest: { number: 7, url: "https://github.com/octo/demo/pull/7" },
     })
   );
-  assert.match(text, /^npm audit fix on octo\/demo \(operation op-1\): done\./);
+  assert.match(text, /^npm audit fix on octo\/demo, production dependencies \(operation op-1\): done\./);
   assert.match(text, /npm projects: \.\/, gui\//);
   assert.match(text, /Vulnerabilities: 4 found, 2 left after npm audit fix, 0 left after npm audit fix --force/);
   assert.match(text, /Updated packages \(1\): gui\/lodash 4\.17\.20 → 4\.18\.1/);
