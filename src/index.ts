@@ -292,7 +292,7 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
 
     case "DECIDE_REPAIR": {
       const { operationId } = parseRequest(OperationRequestSchema, msg.data);
-      return { operation: decideRepair(operations, operationId, parseRequest(RepairBodySchema, msg.data?.body).run) };
+      return { operation: await decideRepair(operations, operationId, parseRequest(RepairBodySchema, msg.data?.body).run) };
     }
 
     case "GET_REMARKS":

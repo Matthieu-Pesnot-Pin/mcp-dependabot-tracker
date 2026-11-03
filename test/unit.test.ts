@@ -15,6 +15,7 @@ import { auditFindings, cleanAudit, pruneHandledAlerts, sortAlerts, sortRepos, s
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
 import { describeOperation } from "../src/tools/format.js";
+import { assertSandboxAvailable } from "../src/core/repair.js";
 import { organizerUrl } from "../src/core/organizer.js";
 import { readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
 import { DEFAULT_RIGHTS, type Alert, type Operation, type Repo } from "../shared/schemas/model.schema.js";
@@ -572,4 +573,10 @@ test("setup-mcp writes an entry with the token placeholder and rejects both expo
   } finally {
     temp.cleanup();
   }
+});
+
+test("the fixes by Claude check that bubblewrap can build a sandbox on Linux, and only there", async () => {
+  await assertSandboxAvailable("win32", "no-such-bwrap");
+  await assert.rejects(assertSandboxAvailable("linux", "no-such-bwrap"), /need bubblewrap \(bwrap\).*not in the PATH of the MCP server\. Install it on the server: sudo apt-get install -y bubblewrap socat/);
+  await assert.rejects(assertSandboxAvailable("linux", process.execPath), /bubblewrap \(bwrap\) is installed but cannot create a sandbox for the account of the MCP server: .*--ro-bind[\s\S]*apparmor_restrict_unprivileged_userns/);
 });

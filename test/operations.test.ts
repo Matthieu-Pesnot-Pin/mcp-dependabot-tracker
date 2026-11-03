@@ -286,7 +286,7 @@ test("Claude fixes by hand after the user's remarks, in a commit of its own afte
     assert.deepEqual(remarks.remarks.map((remark) => [remark.author, remark.body]), [[organizer.owner.name, "Garde le thème sombre."]]);
     assert.equal(remarks.task.key, analysisTask);
 
-    decideRepair(ctx, id, true);
+    await decideRepair(ctx, id, true);
     const first = await waitStatus(id, ["waiting_push", "waiting_repair", "failed"]);
     assert.equal(first.status, "waiting_push", first.repair?.error ?? first.error ?? "");
     assert.equal(first.steps.repair, "done");
@@ -310,7 +310,7 @@ test("Claude fixes by hand after the user's remarks, in a commit of its own afte
     assert.ok(!fs.existsSync(option("--mcp-config")));
 
     organizer.addComment(analysisTask, "Ajoute un commentaire d'en-tête.");
-    decideRepair(ctx, id, true);
+    await decideRepair(ctx, id, true);
     const second = await waitStatus(id, ["waiting_push", "waiting_repair", "failed"]);
     assert.equal(second.status, "waiting_push", second.repair?.error ?? second.error ?? "");
     assert.equal(second.repair?.error, null);
@@ -339,13 +339,13 @@ test("Claude fixes by hand after the user's remarks, in a commit of its own afte
 test("fixes by Claude that fail leave the clone as it was, and the operation waits for them again", { skip }, async () => {
   try {
     const { id } = await waitingRepair("broken");
-    decideRepair(ctx, id, true);
+    await decideRepair(ctx, id, true);
     const failed = await waitStatus(id, ["waiting_repair", "waiting_push", "failed"]);
     assert.equal(failed.status, "waiting_repair", failed.error ?? "");
     assert.equal(failed.steps.repair, "failed");
     assert.match(failed.repair?.error ?? "", /The tests could not start/);
     assert.ok(!fs.existsSync(path.join(failed.workDir!, "repo", "src", "fixed.js")), "the changes of the failed pass are dropped");
-    decideRepair(ctx, id, false);
+    await decideRepair(ctx, id, false);
     const skipped = await waitStatus(id, ["waiting_push", "done", "failed"]);
     assert.equal(skipped.status, "waiting_push", skipped.error ?? "");
     assert.equal(skipped.steps.repair, "skipped");

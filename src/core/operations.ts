@@ -31,7 +31,7 @@ import {
   type AuditedVulnerability,
   type Lockfile,
 } from "./npm-audit.js";
-import { repairVulnerabilities } from "./repair.js";
+import { assertSandboxAvailable, repairVulnerabilities } from "./repair.js";
 import { assertNotDeprecated, isActive, type Store } from "./store.js";
 
 /** Accès aux données et à GitHub pour exécuter les opérations. */
@@ -734,9 +734,11 @@ export function decideForce(ctx: OperationContext, id: string, apply: boolean): 
 /**
  * Lance ou passe les corrections par Claude d'une opération qui les attend ;
  * `run` sur une opération qui attend le push après un passage relance Claude
- * avec les remarques de l'utilisateur.
+ * avec les remarques de l'utilisateur. Un lancement est refusé tant que le
+ * bac à sable de Claude Code ne peut pas démarrer sur le serveur.
  */
-export function decideRepair(ctx: OperationContext, id: string, run: boolean): Operation {
+export async function decideRepair(ctx: OperationContext, id: string, run: boolean): Promise<Operation> {
+  if (run) await assertSandboxAvailable();
   const relaunch = run && ctx.store.getOperation(id).status === "waiting_push";
   const operation = resume(ctx, id, relaunch ? "waiting_push" : "waiting_repair", (current) => {
     if (relaunch && !current.repair?.report) throw new ConflictError(`Operation ${id} has no fixes by Claude to run again.`);

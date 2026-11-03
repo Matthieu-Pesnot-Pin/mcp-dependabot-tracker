@@ -1,3 +1,4 @@
+import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { z } from "zod";
@@ -6,6 +7,7 @@ import { RepairReportSchema, TEST_OUTCOMES, type AnalysisTask, type AuditScope, 
 import type { Settings } from "../../shared/schemas/settings.schema.js";
 import { ORGANIZER_SERVER, factsJson, organizerServer } from "./analysis.js";
 import { runClaudeSession, type ClaudeRuntime } from "./claude.js";
+import { tail } from "./commands.js";
 import { TrackerError } from "./errors.js";
 import { OrganizerClient } from "./organizer.js";
 import { organizerConnection } from "./settings.js";
@@ -30,6 +32,45 @@ const ALLOWED_COMMANDS = ["npm install", "npm ci", "npm audit", "npm test", "npm
 
 /** Réglages de la session : Edit et Write refusent tout chemin hors du clone. */
 const SESSION_SETTINGS = { permissions: { blockWritesOutsideWorkingDirectories: true } };
+
+/** Bac à sable minimal, du type de ceux où Claude Code lance ses commandes sous Linux. */
+const BWRAP_PROBE = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-user", "--unshare-pid", "--unshare-net", "true"];
+
+/** Durée maximale du test de bubblewrap. */
+const BWRAP_PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * Vérifie, sous Linux, que bubblewrap crée un bac à sable pour le compte et
+ * avec les restrictions du serveur : Claude Code s'en sert pour lancer ses
+ * commandes sans son token, et refuse de démarrer sans lui. Lève une erreur qui
+ * dit quoi installer ou régler ; sans effet sur les autres systèmes.
+ */
+export function assertSandboxAvailable(platform: NodeJS.Platform = process.platform, command = "bwrap"): Promise<void> {
+  if (platform !== "linux") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, BWRAP_PROBE, { stdio: ["ignore", "ignore", "pipe"], timeout: BWRAP_PROBE_TIMEOUT_MS });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += String(chunk)));
+    child.on("error", (err: any) =>
+      reject(
+        new TrackerError(
+          err.code === "ENOENT"
+            ? "The fixes by Claude need bubblewrap (bwrap), which Claude Code uses on Linux to run its commands without its token, and it is not in the PATH of the MCP server. Install it on the server: sudo apt-get install -y bubblewrap socat"
+            : `The fixes by Claude need bubblewrap (bwrap), which could not be started: ${err.message}`
+        )
+      )
+    );
+    child.on("close", (code) => {
+      if (code === 0) return resolve();
+      reject(
+        new TrackerError(
+          `bubblewrap (bwrap) is installed but cannot create a sandbox for the account of the MCP server${stderr.trim() ? `: ${tail(stderr, 3)}` : "."} ` +
+            "Check the AppArmor restriction on user namespaces (kernel.apparmor_restrict_unprivileged_userns on Ubuntu 24.04 and later) and the hardening of the service (RestrictNamespaces, PrivateUsers, SystemCallFilter)."
+        )
+      );
+    });
+  });
+}
 
 /** Résultat demandé à Claude : le rapport et la clé de la sous-tâche. */
 const OutputSchema = RepairReportSchema.extend({ task: z.string().min(1), commitMessage: z.string().trim().min(1) });
