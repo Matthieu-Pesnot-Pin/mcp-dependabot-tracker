@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 /**
  * Faux Claude Code : il note chaque appel dans `<CLAUDE_CONFIG_DIR>/calls.jsonl`
@@ -9,12 +11,14 @@ import path from "node:path";
  *   `untagged` tâche créée et assignée, sans tag ;
  *   `slow`     session qui ne se termine pas d'elle-même ;
  *   `broken`   corrections qui modifient le clone puis échouent ;
+ *   `idle`     corrections qui ne modifient rien ;
  *   tout autre token : tâche créée, assignée et taguée selon la consigne.
  * Avec `--mcp-config`, il appelle le faux organizer avec l'adresse et le token
  * de la configuration ; sans, il répond simplement. Une consigne de corrections
  * lit les remarques de la tâche de l'analyse, écrit `src/fixed.js` et un
- * fichier dans `node_modules`, puis crée la sous-tâche du rapport, ou reprend
- * celle du passage précédent.
+ * fichier dans `node_modules`, appelle l'outil `npm_ls` du serveur `npm` de la
+ * configuration et note sa réponse dans `<CLAUDE_CONFIG_DIR>/npm-tools.txt`,
+ * puis crée la sous-tâche du rapport, ou reprend celle du passage précédent.
  */
 
 const args = process.argv.slice(2);
@@ -58,12 +62,12 @@ async function main() {
     return;
   }
 
-  const server = JSON.parse(fs.readFileSync(configFile, "utf-8")).mcpServers.organizer;
-  const { ORGANIZER_URL: url, ORGANIZER_TOKEN: organizerToken } = server.env;
+  const servers = JSON.parse(fs.readFileSync(configFile, "utf-8")).mcpServers;
+  const { ORGANIZER_URL: url, ORGANIZER_TOKEN: organizerToken } = servers.organizer.env;
   const prompt = option("-p") ?? "";
   const ownerId = /member id ([^)\s]+)\)/.exec(prompt)?.[1] ?? "";
   const tag = /set its tags to exactly \["([^"]+)"\]/.exec(prompt)?.[1] ?? "";
-  if (prompt.startsWith("You fix the npm vulnerabilities")) return repair(url, organizerToken, prompt, ownerId, tag);
+  if (prompt.startsWith("You fix the npm vulnerabilities")) return repair(url, organizerToken, prompt, ownerId, tag, servers.npm);
 
   emit({ type: "assistant", message: { id: "m-1", content: [{ type: "tool_use", name: "Read", input: { file_path: path.join(process.cwd(), "package.json") } }] } });
   emit({ type: "assistant", message: { id: "m-2", content: [{ type: "text", text: "nth-check sert à css-select ; la montée majeure est sans risque." }] } });
@@ -86,17 +90,32 @@ async function main() {
   });
 }
 
-async function repair(url: string, organizerToken: string, prompt: string, ownerId: string, tag: string) {
+/** Appelle un outil d'un serveur MCP stdio de la configuration et rend le texte de sa réponse. */
+async function callMcpTool(server: { command: string; args: string[] }, name: string, args: Record<string, unknown>): Promise<string> {
+  const client = new Client({ name: "fake-claude", version: "0.0.0" });
+  await client.connect(new StdioClientTransport({ command: server.command, args: server.args }));
+  try {
+    const result: any = await client.callTool({ name, arguments: args });
+    return result.content.map((block: { text: string }) => block.text).join("\n");
+  } finally {
+    await client.close();
+  }
+}
+
+async function repair(url: string, organizerToken: string, prompt: string, ownerId: string, tag: string, npm: { command: string; args: string[] }) {
   const analysisTask = /Read the organizer task (\S+) with get_task/.exec(prompt)?.[1] ?? "";
   const previous = /your previous report, task ([^\s,]+), with update_task/.exec(prompt)?.[1] ?? null;
   const { comments } = await call(url, organizerToken, "GET", `tasks/${analysisTask}`);
   const remarks = comments.map((comment: { body: string }) => comment.body);
   emit({ type: "assistant", message: { id: "m-1", content: [{ type: "tool_use", name: "mcp__organizer__get_task", input: {} }] } });
-  fs.mkdirSync("src", { recursive: true });
-  fs.writeFileSync(path.join("src", "fixed.js"), `// ${remarks.join(" / ")}\n`);
+  if (token !== "idle") {
+    fs.mkdirSync("src", { recursive: true });
+    fs.writeFileSync(path.join("src", "fixed.js"), `// ${remarks.join(" / ")}\n`);
+  }
   fs.mkdirSync("node_modules", { recursive: true });
   fs.writeFileSync(path.join("node_modules", "installed.txt"), "installed by npm ci\n");
   emit({ type: "assistant", message: { id: "m-2", content: [{ type: "tool_use", name: "Edit", input: {} }] } });
+  fs.writeFileSync(path.join(home, "npm-tools.txt"), await callMcpTool(npm, "npm_ls", { project: "", package: "lodash" }));
   if (token === "broken") {
     emit({ type: "result", subtype: "success", is_error: true, result: "The tests could not start", num_turns: 2 });
     process.exit(1);
@@ -116,7 +135,7 @@ async function repair(url: string, organizerToken: string, prompt: string, owner
     structured_output: {
       task: key,
       summary: `${remarks.length} remarque(s) prise(s) en compte.`,
-      changes: [{ file: "src/fixed.js", change: "correctif appliqué" }],
+      changes: token === "idle" ? [] : [{ file: "src/fixed.js", change: "correctif appliqué" }],
       commitMessage: "fix(deps): apply the fixes by Claude",
       tests: { outcome: "passed", detail: "Les tests passent." },
     },

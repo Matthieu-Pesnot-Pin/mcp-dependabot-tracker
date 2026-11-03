@@ -44,14 +44,14 @@ function inheritedEnv(): NodeJS.ProcessEnv {
 }
 
 /**
- * Lance `git` ou `npm` sans shell, et attend sa fin. La commande reçoit
+ * Lance `git`, `npm` ou `bwrap` sans shell, et attend sa fin. La commande reçoit
  * l'environnement du serveur sans GITHUB_TOKEN, plus `options.env`. Sous Windows,
  * `npm` est un script `.cmd` que Node ne lance qu'à travers un shell : ses
  * arguments sont alors des options fixes, jamais une valeur venue de
  * l'utilisateur. Le code de sortie n'est pas interprété ici ; un dépassement de
  * `timeoutMs` ou l'annulation par `signal` arrêtent la commande.
  */
-export function runCommand(command: "git" | "npm", args: string[], options: CommandOptions): Promise<CommandResult> {
+export function runCommand(command: "git" | "npm" | "bwrap", args: string[], options: CommandOptions): Promise<CommandResult> {
   const viaShell = command === "npm" && process.platform === "win32";
   if (viaShell && args.some((arg) => !/^[A-Za-z0-9=._-]+$/.test(arg))) {
     throw new TrackerError(`Refused npm argument list: ${JSON.stringify(args)}.`);

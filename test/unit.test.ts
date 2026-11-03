@@ -16,6 +16,8 @@ import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
 import { describeOperation } from "../src/tools/format.js";
 import { assertSandboxAvailable } from "../src/core/repair.js";
+import { bwrapArgs, projectDir } from "../src/core/npm-sandbox.js";
+import { npmArgs } from "../src/npm-tools.js";
 import { organizerUrl } from "../src/core/organizer.js";
 import { readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
 import { DEFAULT_RIGHTS, type Alert, type Operation, type Repo } from "../shared/schemas/model.schema.js";
@@ -579,4 +581,42 @@ test("the fixes by Claude check that bubblewrap can build a sandbox on Linux, an
   await assertSandboxAvailable("win32", "no-such-bwrap");
   await assert.rejects(assertSandboxAvailable("linux", "no-such-bwrap"), /need bubblewrap \(bwrap\).*not in the PATH of the MCP server\. Install it on the server: sudo apt-get install -y bubblewrap socat/);
   await assert.rejects(assertSandboxAvailable("linux", process.execPath), /bubblewrap \(bwrap\) is installed but cannot create a sandbox for the account of the MCP server: .*--ro-bind[\s\S]*apparmor_restrict_unprivileged_userns/);
+});
+
+test("the npm tools of Claude run fixed npm commands, with names only as arguments", () => {
+  assert.deepEqual(npmArgs("npm_install_lockfile", { project: "", packages: ["mermaid@12.0.1"] }, "production"), ["install", "--package-lock-only", "--ignore-scripts", "mermaid@12.0.1"]);
+  assert.deepEqual(npmArgs("npm_audit", { project: "web" }, "production"), ["audit", "--omit=dev"]);
+  assert.deepEqual(npmArgs("npm_audit", { project: "web" }, "all"), ["audit"]);
+  assert.deepEqual(npmArgs("npm_run", { project: "", script: "test:unit" }, "all"), ["run", "test:unit"]);
+  assert.deepEqual(npmArgs("tsc", { project: "" }, "all"), ["exec", "--no", "--", "tsc", "--noEmit"]);
+  assert.throws(() => npmArgs("npm_install_lockfile", { project: "", packages: ["--global"] }, "all"), /package or script name/);
+  assert.throws(() => npmArgs("npm_run", { project: "", script: "test; rm -rf /" }, "all"), /package or script name/);
+  assert.throws(() => npmArgs("npm_ci", { project: "", force: true }, "all"), /force/);
+});
+
+test("the npm tools of Claude only run in a project folder of the clone", () => {
+  const temp = makeTempDir("npm-tools-");
+  try {
+    const root = path.join(temp.dir, "repo");
+    fs.mkdirSync(path.join(root, "web", "node_modules", "x"), { recursive: true });
+    fs.writeFileSync(path.join(root, "package.json"), "{}");
+    fs.writeFileSync(path.join(root, "web", "package.json"), "{}");
+    fs.writeFileSync(path.join(root, "web", "node_modules", "x", "package.json"), "{}");
+    const sandbox = { root, cache: path.join(temp.dir, "npm-cache") };
+    assert.equal(projectDir(sandbox, ""), root);
+    assert.equal(projectDir(sandbox, "web"), path.join(root, "web"));
+    assert.throws(() => projectDir(sandbox, ".."), /not a project folder/);
+    assert.throws(() => projectDir(sandbox, "web/node_modules/x"), /not a project folder/);
+    assert.throws(() => projectDir(sandbox, "src"), /has no package.json/);
+
+    const args = bwrapArgs(sandbox, path.join(root, "web"), ["ci"]);
+    const pairs = (flag: string) => args.flatMap((arg, index) => (arg === flag ? [[args[index + 1], args[index + 2]]] : []));
+    assert.deepEqual(pairs("--bind"), [[root, root], [sandbox.cache, sandbox.cache]], "only the clone and the npm cache are writable");
+    assert.ok(!pairs("--ro-bind").some(([source]) => source === "/" || source === temp.dir), "the rest of the server stays hidden");
+    assert.ok(args.includes("--clearenv"));
+    assert.deepEqual(args.slice(args.indexOf("--chdir"), args.indexOf("--chdir") + 2), ["--chdir", path.join(root, "web")]);
+    assert.deepEqual(args.slice(-2), ["npm", "ci"]);
+  } finally {
+    temp.cleanup();
+  }
 });

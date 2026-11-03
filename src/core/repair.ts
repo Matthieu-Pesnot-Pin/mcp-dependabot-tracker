@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { z } from "zod";
 import type { RemarksResponse } from "../../shared/schemas/api.schema.js";
 import { RepairReportSchema, TEST_OUTCOMES, type AnalysisTask, type AuditScope, type Operation, type RepairReport } from "../../shared/schemas/model.schema.js";
@@ -15,9 +16,10 @@ import { organizerConnection } from "./settings.js";
 /**
  * Corrections par Claude des vulnérabilités que `npm audit fix` laisse dans un
  * clone, d'après la tâche de l'analyse et les commentaires que l'utilisateur y
- * a laissés. Claude modifie le clone (Read, Grep, Glob, Edit, Write et
- * quelques commandes npm : installation, audit, tests), sans git ni écriture
- * hors du clone ; les commandes qu'il lance ne reçoivent pas son token. Il crée
+ * a laissés. Claude modifie le clone (Read, Grep, Glob, Edit, Write), sans git
+ * ni écriture hors du clone, et lance les commandes npm (lockfile, audit,
+ * installation, tests) par les outils du serveur `npm-tools`, que le tracker
+ * exécute dans son propre bac à sable, sans aucun token. Il crée
  * une sous-tâche « rapport de développement » de la tâche de l'analyse, ou met
  * à jour celle d'un passage précédent, puis rend un rapport structuré. Le
  * tracker relit la sous-tâche sur l'organizer : absente, rattachée à une autre
@@ -27,13 +29,22 @@ import { organizerConnection } from "./settings.js";
 /** Outils organizer autorisés ; tout autre appel est refusé par `dontAsk`. */
 const ORGANIZER_TOOLS = ["get_task", "create_task", "update_task", "set_assignees", "set_tags"];
 
-/** Commandes que Claude peut lancer dans le clone, chacune avec ou sans arguments. */
-const ALLOWED_COMMANDS = ["npm install", "npm ci", "npm audit", "npm test", "npm run", "npm ls", "npx tsc"];
+/** Serveur MCP des commandes npm, dans la configuration de la session. */
+const NPM_SERVER = "npm";
+
+/** Outils du serveur `npm-tools`. */
+const NPM_TOOLS = ["npm_install_lockfile", "npm_audit", "npm_ci", "npm_test", "npm_run", "npm_ls", "tsc"];
 
 /** Réglages de la session : Edit et Write refusent tout chemin hors du clone. */
 const SESSION_SETTINGS = { permissions: { blockWritesOutsideWorkingDirectories: true } };
 
-/** Bac à sable minimal, du type de ceux où Claude Code lance ses commandes sous Linux. */
+/** Lancement du serveur `npm-tools` du tracker sur le clone et le cache npm de l'opération. */
+function npmServer(input: RepairInput, cache: string) {
+  const entry = fileURLToPath(new URL("../npm-tools.js", import.meta.url));
+  return { command: process.execPath, args: [entry, "--root", input.cwd, "--cache", cache, "--scope", input.scope] };
+}
+
+/** Bac à sable minimal, du type de ceux où le tracker lance les commandes npm sous Linux. */
 const BWRAP_PROBE = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-user", "--unshare-pid", "--unshare-net", "true"];
 
 /** Durée maximale du test de bubblewrap. */
@@ -41,8 +52,8 @@ const BWRAP_PROBE_TIMEOUT_MS = 10_000;
 
 /**
  * Vérifie, sous Linux, que bubblewrap crée un bac à sable pour le compte et
- * avec les restrictions du serveur : Claude Code s'en sert pour lancer ses
- * commandes sans son token, et refuse de démarrer sans lui. Lève une erreur qui
+ * avec les restrictions du serveur : le tracker s'en sert pour lancer les
+ * commandes npm de Claude, et Claude Code refuse de démarrer sans lui. Lève une erreur qui
  * dit quoi installer ou régler ; sans effet sur les autres systèmes.
  */
 export function assertSandboxAvailable(platform: NodeJS.Platform = process.platform, command = "bwrap"): Promise<void> {
@@ -55,7 +66,7 @@ export function assertSandboxAvailable(platform: NodeJS.Platform = process.platf
       reject(
         new TrackerError(
           err.code === "ENOENT"
-            ? "The fixes by Claude need bubblewrap (bwrap), which Claude Code uses on Linux to run its commands without its token, and it is not in the PATH of the MCP server. Install it on the server: sudo apt-get install -y bubblewrap socat"
+            ? "The fixes by Claude need bubblewrap (bwrap), which isolates the npm commands of Claude on Linux, and it is not in the PATH of the MCP server. Install it on the server: sudo apt-get install -y bubblewrap socat"
             : `The fixes by Claude need bubblewrap (bwrap), which could not be started: ${err.message}`
         )
       )
@@ -144,9 +155,10 @@ function prompt(input: RepairInput, space: string, owner: { id: string; name: st
     "",
     "Your job:",
     `1. Read the organizer task ${input.analysisTask} with get_task: its description is the analysis of these vulnerabilities, and its comments are the remarks of the user. Follow the remarks: they take precedence over the analysis.`,
-    "2. Fix what can be fixed, with minimal changes: upgrade a dependency in package.json, or pin a transitive one with an `overrides` entry, then run `npm install --package-lock-only --ignore-scripts` in the folder of its package-lock.json; adapt the code to the new versions.",
-    `3. Check your work: run \`npm audit${omit}\` in each project; install the dependencies with \`npm ci\` and run the tests (\`npm test\`, or the test script of package.json) when the project has some.`,
-    "   You can only run npm install, npm ci, npm audit, npm test, npm run, npm ls and npx tsc. Never run git, and never write outside the current directory: the tracker commits your changes, node_modules aside.",
+    `2. Fix what can be fixed, with minimal changes: upgrade a dependency in package.json, or pin a transitive one with an \`overrides\` entry, with Edit, then update the lockfile with the ${NPM_SERVER} tool npm_install_lockfile in the folder of the package-lock.json; adapt the code to the new versions.`,
+    `3. Check your work with the ${NPM_SERVER} tools, the only way to run npm here: npm_audit${omit ? " (it runs `npm audit" + omit + "`)" : ""} in each project; npm_ci to install the dependencies, then npm_test (or npm_run with the test script of package.json) when the project has some; npm_ls and tsc when useful. Their \`project\` argument is the folder of the package.json, "" for the root.`,
+    "   You have no shell. Never write outside the current directory: the tracker commits your changes, node_modules aside.",
+    "   If a command fails, quote its exact error, with the path it names, in your report.",
     `4. Report in the organizer space "${space}": ${report} Its description, in French markdown, details every change file by file and why, how each remark of the user was taken into account, the result of the audit and of the tests, and what is left to check by hand.`,
     `   Assign it to ${owner.name} with set_assignees (member id ${owner.id}), and set its tags to exactly ["${tag}"] with set_tags.`,
     "5. Finish with the structured report: the key of the sub-task, a summary in French, every changed file with its change in a few words in French, a conventional commit message in English for your changes, and the outcome of the tests with a one-sentence detail in French.",
@@ -173,7 +185,8 @@ export async function repairVulnerabilities(input: RepairInput): Promise<{ repor
   const tag = input.repoId.split("/")[1];
 
   const configFile = path.join(input.workDir, "repair-mcp.json");
-  fs.writeFileSync(configFile, JSON.stringify({ mcpServers: { [ORGANIZER_SERVER]: organizerServer(connection) } }), { encoding: "utf-8", mode: 0o600 });
+  const servers = { [ORGANIZER_SERVER]: organizerServer(connection), [NPM_SERVER]: npmServer(input, path.join(input.workDir, "npm-cache")) };
+  fs.writeFileSync(configFile, JSON.stringify({ mcpServers: servers }), { encoding: "utf-8", mode: 0o600 });
   let structured: unknown;
   try {
     ({ structured } = await runClaudeSession(input.claude, {
@@ -181,9 +194,9 @@ export async function repairVulnerabilities(input: RepairInput): Promise<{ repor
       prompt: prompt(input, space.name, owner, tag),
       args: [
         "--tools",
-        "Read,Grep,Glob,Edit,Write,Bash",
+        "Read,Grep,Glob,Edit,Write",
         "--allowedTools",
-        ["Edit", "Write", ...ALLOWED_COMMANDS.map((command) => `Bash(${command} *)`), ...ORGANIZER_TOOLS.map((tool) => `mcp__${ORGANIZER_SERVER}__${tool}`)].join(","),
+        ["Edit", "Write", ...NPM_TOOLS.map((tool) => `mcp__${NPM_SERVER}__${tool}`), ...ORGANIZER_TOOLS.map((tool) => `mcp__${ORGANIZER_SERVER}__${tool}`)].join(","),
         "--settings",
         JSON.stringify(SESSION_SETTINGS),
         "--mcp-config",

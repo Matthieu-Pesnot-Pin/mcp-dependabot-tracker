@@ -833,7 +833,7 @@ code {
 }
 
 .step-label {
-  flex: 1;
+  flex: 1 0 auto;
   color: var(--text-soft);
 }
 
@@ -848,8 +848,12 @@ code {
 }
 
 .step-result {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   font-size: 13px;
   color: var(--faint);
+  white-space: pre;
 }
 
 .unfixable-toggle {
@@ -1624,6 +1628,17 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.task-link-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-link svg {
+  flex-shrink: 0;
 }
 
 .verdict {

@@ -301,10 +301,13 @@ test("Claude fixes by hand after the user's remarks, in a commit of its own afte
 
     const call = claudeCalls().at(-1)!;
     const option = (name: string) => call.args[call.args.indexOf(name) + 1];
-    assert.equal(option("--tools"), "Read,Grep,Glob,Edit,Write,Bash");
-    assert.ok(option("--allowedTools").split(",").includes("Bash(npm test *)"));
+    assert.equal(option("--tools"), "Read,Grep,Glob,Edit,Write", "Claude has no shell");
+    assert.ok(option("--allowedTools").split(",").includes("mcp__npm__npm_test"));
     assert.ok(!option("--allowedTools").includes("git"), "Claude never runs git");
     assert.deepEqual(JSON.parse(option("--settings")), { permissions: { blockWritesOutsideWorkingDirectories: true } });
+    const npmTools = fs.readFileSync(path.join(call.home, "npm-tools.txt"), "utf-8");
+    assert.match(npmTools, /^\$ npm ls lodash --all  \(in \., exit code \d+\)/, "the npm commands of Claude run through the npm tools of the tracker");
+    assert.match(npmTools, /lodash/);
     assert.ok(call.env.includes("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"), "the commands of Claude do not receive its token");
     assert.ok(!call.env.includes("GITHUB_TOKEN"));
     assert.ok(!fs.existsSync(option("--mcp-config")));
@@ -331,6 +334,25 @@ test("Claude fixes by hand after the user's remarks, in a commit of its own afte
     const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
     assert.match(pull.body, new RegExp(`Fixes by Claude Code, detailed in organizer task ${repair.task?.key}:`));
     assert.match(pull.body, /- `src\/fixed\.js`: correctif appliqué/);
+  } finally {
+    settings = DEFAULT_SETTINGS;
+  }
+});
+
+test("fixes by Claude that change nothing keep the commit of npm audit fix, ready to push", { skip }, async () => {
+  try {
+    const { repoId, id } = await waitingRepair("idle");
+    await decideRepair(ctx, id, true);
+    const idle = await waitStatus(id, ["waiting_push", "waiting_repair", "done", "failed"]);
+    assert.equal(idle.status, "waiting_push", idle.repair?.error ?? idle.error ?? "");
+    assert.deepEqual([idle.repair?.commit, idle.repair?.report?.changes], [null, []]);
+    assert.deepEqual(idle.changes.map((change) => change.name), ["lodash"], "the changes still compare with the cloned commit");
+    pushOperation(ctx, id, "fix(deps): resolve npm audit vulnerabilities");
+    const done = await waitStatus(id, ["done", "failed"]);
+    assert.equal(done.status, "done", done.error ?? "");
+    const [owner, name] = repoId.split("/");
+    const subjects = remotes.log(owner, name, done.branch!).split("\n").filter(Boolean).map((line) => line.split("|")[1]);
+    assert.deepEqual(subjects, ["fix(deps): resolve npm audit vulnerabilities", "initial"]);
   } finally {
     settings = DEFAULT_SETTINGS;
   }

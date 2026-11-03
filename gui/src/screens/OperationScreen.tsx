@@ -102,11 +102,24 @@ function stepResult(operation: Operation, step: StepName): ReactNode {
     case 'force':
       return fixedText(afterFix, afterForce)
     case 'repair':
-      return operation.repair ? repairResult(operation, operation.repair) : null
+      return operation.repair ? (
+        <>
+          {repairResult(operation, operation.repair)}
+          {operation.repair.task && (
+            <>
+              {' · '}
+              <a className="link task-link" href={operation.repair.task.url} target="_blank" rel="noreferrer" title={operation.repair.task.title}>
+                <span className="task-link-text">Rapport {operation.repair.task.key}</span>
+                <Icon name="external-link" size={14} />
+              </a>
+            </>
+          )}
+        </>
+      ) : null
     case 'analysis':
       return operation.analysis?.task ? (
-        <a className="link task-link" href={operation.analysis.task.url} target="_blank" rel="noreferrer">
-          Tâche « {operation.analysis.task.title} »
+        <a className="link task-link" href={operation.analysis.task.url} target="_blank" rel="noreferrer" title={operation.analysis.task.title}>
+          <span className="task-link-text">Tâche « {operation.analysis.task.title} »</span>
           <Icon name="external-link" size={14} />
         </a>
       ) : null
@@ -460,6 +473,9 @@ function StepRow({ operation, step, onDone }: { operation: Operation; step: Step
         <ClaudeActivity activity={operation.repair.activity} hint="Le commit et le rapport arrivent à la fin des corrections." />
       )}
       {step === 'analysis' && state === 'done' && operation.analysis?.report && <p className="step-body hint">{operation.analysis.report.summary}</p>}
+      {step === 'repair' && state === 'done' && operation.status !== 'waiting_push' && operation.repair?.report && (
+        <p className="step-body hint">{operation.repair.report.summary}</p>
+      )}
       {operation.status === 'waiting_force' && step === 'force' && <ForceDecision operation={operation} onDone={onDone} />}
       {operation.status === 'waiting_repair' && step === 'repair' && <RepairLauncher operation={operation} onDone={onDone} />}
       {operation.status === 'waiting_push' && step === 'push' && <PushForm key={operation.id} operation={operation} onDone={onDone} />}

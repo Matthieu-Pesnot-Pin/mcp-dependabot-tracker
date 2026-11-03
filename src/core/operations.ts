@@ -228,10 +228,21 @@ class Runner {
     return parseLockfile(fs.readFileSync(file, "utf-8"), project);
   }
 
+  /**
+   * Commit cloné : HEAD tant que le tracker n'a rien commité ; après le commit
+   * de `npm audit fix`, son parent, et sans ce commit, la base des corrections
+   * par Claude.
+   */
+  get clonedCommit(): string {
+    const repair = this.operation.repair;
+    if (!repair) return "HEAD";
+    return repair.auditCommit ? `${repair.auditCommit}~1` : repair.base;
+  }
+
   /** Lockfile du projet tel qu'il est dans le commit cloné. */
   async originalLock(project: string): Promise<Lockfile> {
     const file = project === "" ? "package-lock.json" : `${project}/package-lock.json`;
-    return parseLockfile(await this.git(["show", `HEAD:${file}`]), project);
+    return parseLockfile(await this.git(["show", `${this.clonedCommit}:${file}`]), project);
   }
 }
 
@@ -572,7 +583,7 @@ function finish(runner: Runner): void {
  */
 function settleForPush(runner: Runner): void {
   const operation = runner.operation;
-  if (operation.changes.length > 0 || operation.repair?.commit) {
+  if (operation.changes.length > 0 || operation.repair?.auditCommit || operation.repair?.commit) {
     runner.update((current) => ({ ...current, status: "waiting_push", branch: current.branch ?? branchName(new Date()) }));
   } else {
     finish(runner);
