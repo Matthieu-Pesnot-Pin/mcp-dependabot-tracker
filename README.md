@@ -282,6 +282,6 @@ Les tests utilisent une fausse API GitHub (dépôts, alertes paginées, utilisat
 
 ## Publication
 
-Chaque push sur `master`, merge de pull request compris, publie une nouvelle version sur npm (`.github/workflows/publish.yml`) : `npm ci`, build, tests, puis `npm version patch`, dont le commit et le tag sont poussés sur `master`, et `npm publish`. La publication passe par le trusted publishing de npm (OIDC, sans token), avec attestation de provenance. Un échec du build ou des tests arrête le workflow avant la montée de version.
+Chaque push sur `master`, merge de pull request compris, publie une nouvelle version sur npm (`.github/workflows/publish.yml`) : installation de bubblewrap (les tests des corrections par Claude passent par le bac à sable des commandes npm), `npm ci`, build, tests, puis `npm version patch`, dont le commit et le tag sont poussés sur `master`, et `npm publish`. La publication passe par le trusted publishing de npm (OIDC, sans token), avec attestation de provenance. Un échec du build ou des tests arrête le workflow avant la montée de version.
 
 Sur npmjs.com, le paquet déclare ce workflow comme publieur de confiance (Settings → Trusted publishing → GitHub Actions : `Matthieu-Pesnot-Pin`, `mcp-dependabot-tracker`, `publish.yml`, avec `npm publish` dans les actions autorisées). Le commit de version est poussé avec `GITHUB_TOKEN` : si `master` est protégée, la règle doit autoriser GitHub Actions à y pousser.
