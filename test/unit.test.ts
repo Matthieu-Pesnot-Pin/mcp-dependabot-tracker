@@ -11,7 +11,7 @@ import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
 import { AuditAll } from "../src/core/audit-all.js";
 import { ConflictError } from "../src/core/errors.js";
-import { auditFindings, auditTargetRepos, cleanAudit, cleanProductionAudit,queuedRepos, operationSummary, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
+import { auditFindings, auditTargetRepos, cleanAudit, cleanProductionAudit, lastAudit, queuedRepos, operationSummary, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
 import { describeOperation } from "../src/tools/format.js";
@@ -241,6 +241,26 @@ test("auditFindings reports what the latest audit of the default branch found wh
   assert.deepEqual(auditFindings(quiet, [fixed])?.severity, "high", "a fix reports what its first audit found");
   const views = [{ repo: repo("o/alerted", [alert(1, "medium", "a")]) }, { repo: quiet, auditFindings: auditFindings(quiet, [audited()]) }, { repo: repo("o/clean") }];
   assert.deepEqual(sortRepos(views).map((view) => view.repo.id), ["octo/demo", "o/alerted", "o/clean"]);
+});
+
+test("lastAudit sums up the latest audit, whatever its branch", () => {
+  const audited = (overrides: Partial<Operation> = {}) =>
+    operation({
+      status: "done",
+      createdAt: "2026-03-01T10:00:00.000Z",
+      steps: { clone: "done", audit: "done", fix: "skipped", repair: "skipped", push: "skipped" },
+      found: [
+        { project: "", name: "lodash", severity: "moderate", fix: "available" },
+        { project: "", name: "tar", severity: "high", fix: "none" },
+      ],
+      ...overrides,
+    });
+  assert.equal(lastAudit([]), null, "no audit");
+  assert.deepEqual(lastAudit([audited()]), { at: "2026-03-01T10:00:00.000Z", scope: "production", branch: "main", count: 2, severity: "high" });
+  const develop = audited({ id: "op-2", createdAt: "2026-03-02T10:00:00.000Z", baseBranch: "develop", found: [] });
+  assert.deepEqual(lastAudit([develop, audited()]), { at: "2026-03-02T10:00:00.000Z", scope: "production", branch: "develop", count: 0, severity: null });
+  const running = audited({ id: "op-3", status: "running", steps: { clone: "done", audit: "running", fix: "pending", repair: "pending", push: "pending" } });
+  assert.equal(lastAudit([running, audited()])?.count, 2, "an audit still running does not count");
 });
 
 test("AuditAll audits three repositories at a time and reports those skipped or failed", async () => {

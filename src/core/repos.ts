@@ -1,6 +1,6 @@
 import { alertsInScope, fromNpmSeverity, pendingAlerts, worstOf } from "../../shared/alerts.js";
 import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type Category, type HandledAlert, type Operation, type OrganizerTask, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
-import type { AuditFindings, AuditTarget, CleanAudit, OperationSummary, RepoView } from "../../shared/schemas/api.schema.js";
+import type { AuditFindings, AuditTarget, CleanAudit, LastAudit, OperationSummary, RepoView } from "../../shared/schemas/api.schema.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, NotFoundError } from "./errors.js";
 import { GitHubClient, type OpenPullRequest } from "./github.js";
@@ -47,6 +47,24 @@ export function sortRepos<T extends { repo: Repo; auditFindings?: AuditFindings 
     const kb = key(b);
     return ka.worst - kb.worst || kb.count - ka.count || a.repo.id.localeCompare(b.repo.id);
   });
+}
+
+/**
+ * Dernier audit, quelle que soit sa branche : sa date, son périmètre, la
+ * branche auditée, le nombre de vulnérabilités trouvées et la plus haute
+ * gravité. Null sans audit. `operations` va de la plus récente à la plus
+ * ancienne.
+ */
+export function lastAudit(operations: Operation[]): LastAudit | null {
+  const audited = operations.find((operation) => operation.steps.audit === "done");
+  if (!audited) return null;
+  return {
+    at: audited.createdAt,
+    scope: audited.scope,
+    branch: audited.baseBranch,
+    count: audited.found.length,
+    severity: worstOf(audited.found.map((vulnerability) => fromNpmSeverity(vulnerability.severity))),
+  };
 }
 
 /**
@@ -159,6 +177,7 @@ function buildRepoView(repo: Repo, operations: Operation[], category: Category |
     category,
     activeOperation: operations.find(isActive) ?? null,
     latestOperation: operations[0] ?? null,
+    lastAudit: lastAudit(operations),
     cleanAudit: cleanAudit(repo, operations),
     cleanProductionAudit: cleanProductionAudit(repo, operations),
     auditFindings: auditFindings(repo, operations),

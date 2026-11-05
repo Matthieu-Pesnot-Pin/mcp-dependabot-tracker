@@ -651,67 +651,163 @@ code {
   margin-right: 6px;
 }
 
-/* Ligne d'un dépôt sur deux niveaux : le nom au-dessus, les informations et les boutons en dessous. */
-.row-repo {
-  padding-top: 10px;
-  padding-bottom: 10px;
+/*
+ * Tableau des dépôts de l'accueil : l'en-tête et chaque ligne partagent les
+ * colonnes du tableau (subgrid). Sécurité, dernier audit et suivi ont une
+ * largeur fixe ; un contenu trop long est coupé, jamais poussé sur la colonne
+ * voisine.
+ */
+.repo-table {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 170px 215px 180px auto 16px;
+  column-gap: 20px;
 }
 
-.row-body {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 4px;
+.repo-table-head,
+.repo-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  gap: inherit;
+  padding: 0 20px;
+}
+
+.repo-table-head {
+  height: 40px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--faint);
+}
+
+.repo-row {
+  min-height: 48px;
+}
+
+.repo-name {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
 }
 
-.row-head {
+.repo-cell {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
   min-width: 0;
-  min-height: 24px;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
-.row-head .row-title {
-  flex: 0 1 auto;
+.repo-follow {
+  gap: 14px;
 }
 
-.row-details {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  min-height: 28px;
-}
-
-.row-meta {
-  display: flex;
-  flex: 1;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 4px 18px;
-  min-width: 0;
-}
-
-.row-end {
-  display: flex;
+/* Élément d'une cellule, posé au-dessus du lien de la ligne pour garder son infobulle et son clic. */
+.cell-mark {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
-.row-note {
-  display: inline-flex;
+.cell-shrink {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.cell-shrink svg {
   flex-shrink: 0;
-  align-items: center;
 }
 
-.row-status {
-  display: inline-flex;
+.cell-ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cell-faint {
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.cell-audit {
+  color: var(--muted);
+}
+
+.follow-link,
+.follow-mark {
+  color: var(--accent-soft);
+}
+
+.follow-link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.repo-actions {
+  display: flex;
   align-items: center;
-  gap: 12px;
-  margin-right: 10px;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.repo-actions .row-action {
+  margin-right: 0;
+}
+
+.repo-actions-hover {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.row:hover .repo-actions-hover,
+.row:focus-within .repo-actions-hover {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .repo-actions-hover {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .repo-table {
+    display: block;
+  }
+
+  .repo-table-head {
+    display: none;
+  }
+
+  .repo-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    padding: 10px 44px 10px 16px;
+  }
+
+  .repo-name {
+    flex: 1 1 100%;
+  }
+
+  .repo-cell {
+    overflow: visible;
+  }
+
+  .repo-row .row-chevron {
+    position: absolute;
+    top: 50%;
+    right: 16px;
+    transform: translateY(-50%);
+  }
 }
 
 .unfixable-note {
@@ -1281,6 +1377,7 @@ code {
 }
 
 .home .page {
+  width: 1020px;
   min-width: 0;
 }
 

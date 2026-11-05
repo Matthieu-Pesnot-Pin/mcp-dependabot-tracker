@@ -86,8 +86,22 @@ export interface CleanAudit {
 }
 
 /**
+ * Dernier audit d'un dépôt, quelle que soit sa branche : sa date, son
+ * périmètre, la branche auditée, le nombre de vulnérabilités trouvées et la
+ * plus haute gravité, null sans vulnérabilité.
+ */
+export interface LastAudit {
+  at: string;
+  scope: AuditScope;
+  branch: string;
+  count: number;
+  severity: AlertSeverity | null;
+}
+
+/**
  * Dépôt, sa catégorie, et l'état de son opération en cours et de la dernière
- * opération, pour la liste et l'écran du dépôt. `cleanAudit` est le dernier
+ * opération, pour la liste et l'écran du dépôt. `lastAudit` résume le dernier
+ * audit, quelle que soit sa branche. `cleanAudit` est le dernier
  * audit quand il n'a trouvé aucune vulnérabilité alors que Dependabot signale
  * encore, dans son périmètre, des alertes émises avant lui ;
  * `cleanProductionAudit` le dernier audit, de production, de la branche par
@@ -104,6 +118,7 @@ export interface RepoView {
   category: Category | null;
   activeOperation: Operation | null;
   latestOperation: Operation | null;
+  lastAudit: LastAudit | null;
   cleanAudit: CleanAudit | null;
   cleanProductionAudit: CleanAudit | null;
   auditFindings: AuditFindings | null;
