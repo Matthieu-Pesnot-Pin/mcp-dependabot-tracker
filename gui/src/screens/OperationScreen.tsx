@@ -442,6 +442,56 @@ function UnfixableList({ vulnerabilities }: { vulnerabilities: Vulnerability[] }
   )
 }
 
+/**
+ * Encart d'une correction poussée : il propose de marquer le dépôt « à
+ * déployer » ; une fois marqué, il le dit et permet d'annuler la marque.
+ */
+function DeployOffer({ repoId }: { repoId: string }) {
+  const polled = usePolling(`repo:${repoId}`, () => api.getRepo(repoId), null)
+  const [busy, setBusy] = useState(false)
+  const repo = polled.data?.repo
+  if (!repo || repo.deprecatedAt !== null) return null
+  const pending = repo.deployPendingAt !== null
+
+  async function toggle() {
+    setBusy(true)
+    try {
+      await (pending ? api.unmarkDeployPending(repoId) : api.markDeployPending(repoId))
+      polled.reload()
+    } catch (err) {
+      showError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="step-body">
+      <div className="deploy-offer">
+        <Icon name="rocket" className="deploy-offer-icon" />
+        {pending ? (
+          <>
+            <span className="deploy-offer-text">
+              Marqué à déployer : le dépôt attend dans « <a className="link" href={hrefs.deploy()}>À déployer</a> ».
+            </span>
+            <button type="button" className="button button-secondary" onClick={() => void toggle()} disabled={busy}>
+              Annuler
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="deploy-offer-text">Pas de déploiement automatique ? Marquez le dépôt pour le retrouver dans « À déployer ».</span>
+            <button type="button" className="button button-primary" onClick={() => void toggle()} disabled={busy}>
+              <Icon name="rocket" />
+              Marquer à déployer
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function StepRow({ operation, step, onDone }: { operation: Operation; step: StepName; onDone: () => void }) {
   const [showUnfixable, setShowUnfixable] = useState(false)
   const state = operation.steps[step]
@@ -486,6 +536,7 @@ function StepRow({ operation, step, onDone }: { operation: Operation; step: Step
       {operation.status === 'waiting_force' && step === 'force' && <ForceDecision operation={operation} onDone={onDone} />}
       {operation.status === 'waiting_repair' && step === 'repair' && <RepairLauncher operation={operation} onDone={onDone} />}
       {operation.status === 'waiting_push' && step === 'push' && <PushForm key={operation.id} operation={operation} onDone={onDone} />}
+      {step === 'push' && state === 'done' && operation.pullRequest && <DeployOffer repoId={operation.repoId} />}
       {failedHere && <p className="step-body error-text pre">{failure}</p>}
     </div>
   )

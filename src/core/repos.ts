@@ -213,11 +213,24 @@ export async function syncAllRepositories(store: Store, config: GitHubConfig): P
   await Promise.all(activeRepos(store).map((repo) => syncRepository(store, config, repo.id)));
 }
 
-/** Marque le dépôt déprécié et le retire de la file d'attente ; sans effet s'il l'est déjà, refusé pendant une opération en cours. */
+/** Marque le dépôt déprécié et lui retire la file d'attente et la marque « à déployer » ; sans effet s'il l'est déjà, refusé pendant une opération en cours. */
 export function deprecateRepository(store: Store, repoId: string): Repo {
   const repo = store.getRepo(repoId);
   if (store.activeOperation(repo.id)) throw new ConflictError(`An operation is in progress on ${repo.id}: wait for it to finish or cancel it before deprecating the repository.`);
-  return store.updateRepo(repo.id, (current) => (current.deprecatedAt === null ? { ...current, deprecatedAt: new Date().toISOString(), queuedAt: null } : current));
+  return store.updateRepo(repo.id, (current) =>
+    current.deprecatedAt === null ? { ...current, deprecatedAt: new Date().toISOString(), queuedAt: null, deployPendingAt: null } : current,
+  );
+}
+
+/** Marque le dépôt « à déployer » ; sans effet s'il l'est déjà, refusé pour un dépôt déprécié. */
+export function markDeployPending(store: Store, repoId: string): Repo {
+  assertNotDeprecated(store.getRepo(repoId));
+  return store.updateRepo(repoId, (current) => (current.deployPendingAt === null ? { ...current, deployPendingAt: new Date().toISOString() } : current));
+}
+
+/** Retire la marque « à déployer » ; sans effet si le dépôt ne l'a pas. */
+export function unmarkDeployPending(store: Store, repoId: string): Repo {
+  return store.updateRepo(repoId, (current) => ({ ...current, deployPendingAt: null }));
 }
 
 /** Met le dépôt dans la file d'attente ; sans effet s'il y est déjà, refusé pour un dépôt déprécié. */
@@ -282,6 +295,7 @@ export async function addRepository(store: Store, config: GitHubConfig, input: s
     syncError: null,
     deprecatedAt: null,
     queuedAt: null,
+    deployPendingAt: null,
   });
   return syncRepository(store, config, remote.fullName);
 }

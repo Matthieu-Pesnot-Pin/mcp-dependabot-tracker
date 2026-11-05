@@ -263,6 +263,10 @@ app.put("/api/repos/:owner/:name/queued", (c) => forward(c, "QUEUE_REPO", { repo
 
 app.delete("/api/repos/:owner/:name/queued", (c) => forward(c, "UNQUEUE_REPO", { repoId: repoId(c) }));
 
+app.put("/api/repos/:owner/:name/deploy-pending", (c) => forward(c, "MARK_DEPLOY_PENDING", { repoId: repoId(c) }));
+
+app.delete("/api/repos/:owner/:name/deploy-pending", (c) => forward(c, "UNMARK_DEPLOY_PENDING", { repoId: repoId(c) }));
+
 app.put("/api/repos/:owner/:name/rights", async (c) => {
   const read = await readBody(c, SetRightsBodySchema);
   if ("response" in read) return read.response;

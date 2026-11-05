@@ -236,9 +236,22 @@ test("the GUI queues repositories one by one or a whole category, and marks them
   assert.equal(done.status, 200, done.json.error);
   assert.equal(done.json.repo.queuedAt, null);
 
+  const pending = await call("PUT", "repos/octo/extra-3/deploy-pending");
+  assert.equal(pending.status, 200, pending.json.error);
+  assert.ok(pending.json.repo.deployPendingAt);
+  assert.equal((await call("PUT", "repos/octo/extra-3/deploy-pending")).json.repo.deployPendingAt, pending.json.repo.deployPendingAt, "marking twice keeps the first date");
+  assert.equal((await call("PUT", "repos/octo/missing/deploy-pending")).status, 404);
+  const deployed = await call("DELETE", "repos/octo/extra-3/deploy-pending");
+  assert.equal(deployed.status, 200, deployed.json.error);
+  assert.equal(deployed.json.repo.deployPendingAt, null);
+
   assert.equal((await call("PUT", "repos/octo/extra-2/queued")).status, 200);
-  assert.equal((await call("PUT", "repos/octo/extra-2/deprecated")).json.repo.queuedAt, null, "deprecating leaves the queue");
+  assert.equal((await call("PUT", "repos/octo/extra-2/deploy-pending")).status, 200);
+  const deprecated = await call("PUT", "repos/octo/extra-2/deprecated");
+  assert.equal(deprecated.json.repo.queuedAt, null, "deprecating leaves the queue");
+  assert.equal(deprecated.json.repo.deployPendingAt, null, "deprecating drops the deploy mark");
   assert.equal((await call("PUT", "repos/octo/extra-2/queued")).status, 409, "a deprecated repository cannot be queued");
+  assert.equal((await call("PUT", "repos/octo/extra-2/deploy-pending")).status, 409, "a deprecated repository cannot be marked to deploy");
 
   assert.equal((await call("DELETE", "repos/octo/extra-3")).status, 200);
   assert.equal((await call("DELETE", "repos/octo/extra-2")).status, 200);

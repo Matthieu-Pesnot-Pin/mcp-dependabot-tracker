@@ -594,17 +594,17 @@ code {
   color: var(--text);
 }
 
-.row-action-queue {
+.row-action-toggle {
   margin-right: 0;
 }
 
-.row .row-action-queue.is-on {
+.row .row-action-toggle.is-on {
   background: var(--brand-bg);
   border-color: transparent;
   color: var(--accent-soft);
 }
 
-.row .row-action-queue.is-on:hover {
+.row .row-action-toggle.is-on:hover {
   border-color: #2a3160;
 }
 
@@ -932,6 +932,27 @@ code {
 .step-body {
   padding: 0 20px 18px 52px;
   font-size: 13px;
+}
+
+.deploy-offer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.deploy-offer-icon {
+  flex-shrink: 0;
+  color: var(--accent-soft);
+}
+
+.deploy-offer-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
 }
 
 .step-actions {

@@ -24,7 +24,7 @@ import { OrganizerClient } from "./core/organizer.js";
 import { readSettings, saveSettings, settingsView, testOrganizer, type SettingsChecks } from "./core/settings.js";
 import { SaveSettingsBodySchema } from "../shared/schemas/settings.schema.js";
 import { AUDIT_SCOPES } from "../shared/schemas/model.schema.js";
-import { SYNC_INTERVAL_MS, addRepository, auditTargetRepos, queueCategory, queueRepository, unqueueRepository, operationSummary, deprecateRepository, listAddableRepositories, restoreRepository, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
+import { SYNC_INTERVAL_MS, addRepository, auditTargetRepos, queueCategory, queueRepository, unqueueRepository, markDeployPending, unmarkDeployPending,operationSummary, deprecateRepository, listAddableRepositories, restoreRepository, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
   AddRepoBodySchema,
@@ -235,6 +235,12 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
 
     case "UNQUEUE_REPO":
       return repoView(store, unqueueRepository(store, parseRequest(RepoRequestSchema, msg.data).repoId));
+
+    case "MARK_DEPLOY_PENDING":
+      return repoView(store, markDeployPending(store, parseRequest(RepoRequestSchema, msg.data).repoId));
+
+    case "UNMARK_DEPLOY_PENDING":
+      return repoView(store, unmarkDeployPending(store, parseRequest(RepoRequestSchema, msg.data).repoId));
 
     case "RESTORE_REPO":
       return repoView(store, await restoreRepository(store, readGitHubConfig(), parseRequest(RepoRequestSchema, msg.data).repoId));

@@ -17,7 +17,7 @@ export default function App() {
   const closeAdd = useCallback(() => setAdding(false), [])
 
   let screen: ReactNode
-  const onHome = route.name === 'home' || route.name === 'queue' || route.name === 'deprecated'
+  const onHome = route.name === 'home' || route.name === 'queue' || route.name === 'deploy' || route.name === 'deprecated'
   if (onHome) {
     const tab: HomeTab = route.name === 'home' ? { kind: 'category', categoryId: route.categoryId } : { kind: route.name }
     screen = <HomeScreen tab={tab} adding={adding} onAdd={openAdd} onCloseAdd={closeAdd} />
@@ -44,15 +44,17 @@ export default function App() {
           <Icon name="settings" />
         </a>
         <SyncButton />
-        <AuditAllButton
-          target={
-            route.name === 'queue'
-              ? { kind: 'queue' }
-              : route.name === 'home' && route.categoryId !== null
-                ? { kind: 'category', categoryId: route.categoryId }
-                : { kind: 'all' }
-          }
-        />
+        {route.name !== 'deploy' && (
+          <AuditAllButton
+            target={
+              route.name === 'queue'
+                ? { kind: 'queue' }
+                : route.name === 'home' && route.categoryId !== null
+                  ? { kind: 'category', categoryId: route.categoryId }
+                  : { kind: 'all' }
+            }
+          />
+        )}
         <button type="button" className="button button-primary" onClick={openAdd}>
           <Icon name="plus" />
           Ajouter un dépôt

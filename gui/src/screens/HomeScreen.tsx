@@ -219,10 +219,10 @@ function repoStatus(view: RepoView): { note: ReactNode; pill: ReactNode } {
 
 /**
  * Ligne d'un dépôt de l'accueil, sur deux niveaux : le nom seul sur la première
- * ligne ; sur la seconde, la PR, la tâche et l'état à gauche, la pastille et
+ * ligne ; sur la seconde, `lead` puis la PR, la tâche et l'état à gauche, la pastille et
  * les boutons à droite. Le chevron est centré sur la hauteur de la ligne.
  */
-function RepoRow({ view, actions }: { view: RepoView; actions: ReactNode }) {
+function RepoRow({ view, lead, actions }: { view: RepoView; lead?: ReactNode; actions: ReactNode }) {
   const { note, pill } = repoStatus(view)
   return (
     <div className="row row-linked row-repo">
@@ -232,6 +232,7 @@ function RepoRow({ view, actions }: { view: RepoView; actions: ReactNode }) {
         </a>
         <div className="row-details">
           <div className="row-meta">
+            {lead}
             <PendingPullRequests repo={view.repo} />
             <AnalysisTaskNote view={view} />
             {note}
@@ -412,7 +413,7 @@ function QueueToggle({ view, onDone }: { view: RepoView; onDone: () => void }) {
   return (
     <button
       type="button"
-      className={`row-action row-action-queue${queued ? ' is-on' : ''}`}
+      className={`row-action row-action-toggle${queued ? ' is-on' : ''}`}
       onClick={() => void toggle()}
       disabled={busy}
       title={label}
@@ -420,6 +421,40 @@ function QueueToggle({ view, onDone }: { view: RepoView; onDone: () => void }) {
       aria-pressed={queued}
     >
       <Icon name={queued ? 'list-check' : 'list-plus'} size={14} />
+    </button>
+  )
+}
+
+/** Bouton de chaque ligne qui marque le dépôt « à déployer », ou lui retire la marque ; allumé tant qu'il l'a. */
+function DeployToggle({ view, onDone }: { view: RepoView; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const repoId = view.repo.id
+  const pending = view.repo.deployPendingAt !== null
+
+  async function toggle() {
+    setBusy(true)
+    try {
+      await (pending ? api.unmarkDeployPending(repoId) : api.markDeployPending(repoId))
+      onDone()
+    } catch (err) {
+      showError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const label = pending ? 'Retirer de « À déployer »' : 'Marquer à déployer'
+  return (
+    <button
+      type="button"
+      className={`row-action row-action-toggle${pending ? ' is-on' : ''}`}
+      onClick={() => void toggle()}
+      disabled={busy}
+      title={label}
+      aria-label={`${label} : ${repoId}`}
+      aria-pressed={pending}
+    >
+      <Icon name="rocket" size={14} />
     </button>
   )
 }
@@ -474,6 +509,29 @@ function DoneButton({ repoId, onDone }: { repoId: string; onDone: () => void }) 
     <button type="button" className="button button-secondary row-button" onClick={() => void done()} disabled={busy} title="Retirer de la file d'attente">
       <Icon name="check" size={14} />
       Traité
+    </button>
+  )
+}
+
+/** Bouton « Déployé » d'une ligne de l'onglet « À déployer » : il retire la marque du dépôt. */
+function DeployedButton({ repoId, onDone }: { repoId: string; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+
+  async function deployed() {
+    setBusy(true)
+    try {
+      await api.unmarkDeployPending(repoId)
+      onDone()
+    } catch (err) {
+      showError(err)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <button type="button" className="button button-secondary row-button" onClick={() => void deployed()} disabled={busy} title="Retirer de « À déployer »">
+      <Icon name="check" size={14} />
+      Déployé
     </button>
   )
 }
@@ -559,7 +617,8 @@ function DeprecatedList({ views, onChanged }: { views: RepoView[]; onChanged: ()
  * Accueil : la barre des catégories, et les dépôts de l'onglet choisi. Une
  * catégorie, ou tous les projets, liste ses dépôts non dépréciés du plus exposé
  * au moins exposé ; la file d'attente liste les siens dans l'ordre de leur
- * entrée, chacun avec « Traité » ; l'onglet « Dépréciés » liste les autres.
+ * entrée, chacun avec « Traité » ; « À déployer » liste les dépôts marqués, dans
+ * l'ordre de leur marque, chacun avec « Déployé » ; l'onglet « Dépréciés » liste les autres.
  */
 export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; adding: boolean; onCloseAdd: () => void; onAdd: () => void }) {
   const repos = usePolling('repos', api.listRepos, POLL_MS)
@@ -574,18 +633,22 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
   const tracked = allViews.filter((view) => view.repo.deprecatedAt === null)
   const deprecated = allViews.filter((view) => view.repo.deprecatedAt !== null).sort((a, b) => b.repo.deprecatedAt!.localeCompare(a.repo.deprecatedAt!))
   const showingQueue = tab.kind === 'queue'
+  const showingDeploy = tab.kind === 'deploy'
   const showingDeprecated = tab.kind === 'deprecated'
   const inCategory = showingQueue
     ? tracked.filter((view) => view.repo.queuedAt !== null).sort((a, b) => a.repo.queuedAt!.localeCompare(b.repo.queuedAt!))
-    : tracked.filter((view) => categoryId === null || view.repo.categoryId === categoryId)
+    : showingDeploy
+      ? tracked.filter((view) => view.repo.deployPendingAt !== null).sort((a, b) => a.repo.deployPendingAt!.localeCompare(b.repo.deployPendingAt!))
+      : tracked.filter((view) => categoryId === null || view.repo.categoryId === categoryId)
   const views = inCategory.filter((view) => (!onlyVulnerable || isVulnerable(view)) && (!onlyPendingPr || view.repo.pullRequests.length > 0))
-  const where = showingQueue ? "dans la file d'attente" : categoryId === null ? 'parmi vos projets' : 'dans cette catégorie'
+  const where = showingQueue ? "dans la file d'attente" : showingDeploy ? 'parmi les dépôts à déployer' : categoryId === null ? 'parmi vos projets' : 'dans cette catégorie'
 
   useEffect(() => {
     if (showingDeprecated) rememberHomeTab({ kind: 'deprecated' })
     else if (showingQueue) rememberHomeTab({ kind: 'queue' })
+    else if (showingDeploy) rememberHomeTab({ kind: 'deploy' })
     else if (!unknownCategory) rememberHomeTab({ kind: 'category', categoryId })
-  }, [showingDeprecated, showingQueue, categoryId, unknownCategory])
+  }, [showingDeprecated, showingQueue, showingDeploy, categoryId, unknownCategory])
 
   if (showingDeprecated) {
     return (
@@ -608,7 +671,7 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
       {repos.data && <CategorySidebar categories={categories} views={tracked} deprecatedCount={deprecated.length} tab={tab} onChanged={repos.reload} />}
       <div className="page">
         <div className="home-head">
-          <h1 className="page-title">{showingQueue ? "File d'attente" : category ? category.name : 'Tous mes projets'}</h1>
+          <h1 className="page-title">{showingQueue ? "File d'attente" : showingDeploy ? 'À déployer' : category ? category.name : 'Tous mes projets'}</h1>
           <div className="filters">
             {category && inCategory.length > 0 && <QueueCategoryButton categoryId={category.id} views={inCategory} onDone={repos.reload} />}
             <label className="filter">
@@ -643,7 +706,12 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
             <p>La file d'attente est vide : ajoutez-y un dépôt avec le bouton de file de sa ligne.</p>
           </div>
         )}
-        {repos.data && !showingQueue && !unknownCategory && inCategory.length === 0 && (
+        {repos.data && showingDeploy && inCategory.length === 0 && (
+          <div className="panel empty">
+            <p>Aucun dépôt à déployer : marquez-en un avec le bouton fusée de sa ligne, ou depuis l'écran du dépôt.</p>
+          </div>
+        )}
+        {repos.data && !showingQueue && !showingDeploy && !unknownCategory && inCategory.length === 0 && (
           <div className="panel empty">
             <p>{categoryId === null ? 'Aucun dépôt suivi.' : 'Aucun dépôt dans cette catégorie.'}</p>
             <button type="button" className="button button-primary" onClick={onAdd}>
@@ -658,12 +726,22 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
               <RepoRow
                 key={view.repo.id}
                 view={view}
+                lead={
+                  showingDeploy && (
+                    <span className="status status-clean">
+                      <Icon name="rocket" />À déployer depuis le {dayAndTime(view.repo.deployPendingAt!)}
+                    </span>
+                  )
+                }
                 actions={
                   showingQueue ? (
                     <DoneButton repoId={view.repo.id} onDone={repos.reload} />
+                  ) : showingDeploy ? (
+                    <DeployedButton repoId={view.repo.id} onDone={repos.reload} />
                   ) : (
                     <>
                       <QueueToggle view={view} onDone={repos.reload} />
+                      <DeployToggle view={view} onDone={repos.reload} />
                       <DeprecateButton repoId={view.repo.id} onDone={repos.reload} />
                     </>
                   )

@@ -255,6 +255,40 @@ function QueueButton({ view, onChanged }: { view: RepoView; onChanged: () => voi
   )
 }
 
+/**
+ * Bouton « à déployer » de l'en-tête : « Déployé », allumé, retire la marque
+ * d'un dépôt qui l'a ; « À déployer » marque un dépôt qui ne l'a pas.
+ */
+function DeployButton({ view, onChanged }: { view: RepoView; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const repoId = view.repo.id
+  const pending = view.repo.deployPendingAt !== null
+
+  async function toggle() {
+    setBusy(true)
+    try {
+      await (pending ? api.unmarkDeployPending(repoId) : api.markDeployPending(repoId))
+      onChanged()
+    } catch (err) {
+      showError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return pending ? (
+    <button type="button" className="button button-queued" onClick={() => void toggle()} disabled={busy} title="Retirer de « À déployer »">
+      <Icon name="rocket" />
+      Déployé
+    </button>
+  ) : (
+    <button type="button" className="button button-secondary" onClick={() => void toggle()} disabled={busy}>
+      <Icon name="rocket" />
+      À déployer
+    </button>
+  )
+}
+
 export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
   const polled = usePolling(`repo:${repoId}`, () => api.getRepo(repoId), POLL_MS)
   const history = usePolling(`history:${repoId}`, () => api.listOperations(repoId), POLL_MS)
@@ -309,6 +343,7 @@ export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
           </div>
         </div>
         <div className="page-actions">
+          {!repo.deprecatedAt && <DeployButton view={view} onChanged={polled.reload} />}
           {!repo.deprecatedAt && <QueueButton view={view} onChanged={polled.reload} />}
           <button type="button" className="button button-secondary" onClick={() => setDrawer(true)}>
             <Icon name="bot" />
