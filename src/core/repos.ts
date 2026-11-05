@@ -66,6 +66,19 @@ export function cleanAudit(repo: Repo, operations: Operation[]): CleanAudit | nu
 }
 
 /**
+ * Dernier audit, quand il porte sur la branche par défaut et sur les seules
+ * dépendances de production, n'y a trouvé aucune vulnérabilité, et que toutes
+ * les alertes Dependabot ouvertes portent sur des dépendances de développement.
+ * Null sinon. `operations` va de la plus récente à la plus ancienne.
+ */
+export function cleanProductionAudit(repo: Repo, operations: Operation[]): CleanAudit | null {
+  const audited = operations.find((operation) => operation.steps.audit === "done");
+  if (!audited || audited.counts.initial !== 0 || audited.baseBranch !== repo.defaultBranch || audited.scope !== "production") return null;
+  if (repo.alerts.length === 0 || alertsInScope(repo.alerts, "production").length > 0) return null;
+  return { at: audited.createdAt, scope: audited.scope };
+}
+
+/**
  * Vulnérabilités trouvées par le dernier audit de la branche par défaut, la
  * seule que Dependabot analyse, quand Dependabot ne signale aucune alerte dans
  * le périmètre de cet audit. Null sinon. `operations` va de la plus récente à
@@ -148,6 +161,7 @@ function buildRepoView(repo: Repo, operations: Operation[], category: Category |
     activeOperation: operations.find(isActive) ?? null,
     latestOperation: operations[0] ?? null,
     cleanAudit: cleanAudit(repo, operations),
+    cleanProductionAudit: cleanProductionAudit(repo, operations),
     auditFindings: auditFindings(repo, operations),
     unfixable: unfixablePackages(repo, operations),
     analysisTask: openAnalysisTask(operations),

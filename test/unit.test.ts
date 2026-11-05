@@ -11,7 +11,7 @@ import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
 import { AuditAll } from "../src/core/audit-all.js";
 import { ConflictError } from "../src/core/errors.js";
-import { auditFindings, auditTargetRepos, cleanAudit, queuedRepos, operationSummary, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
+import { auditFindings, auditTargetRepos, cleanAudit, cleanProductionAudit,queuedRepos, operationSummary, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
 import { describeOperation } from "../src/tools/format.js";
@@ -209,6 +209,20 @@ test("cleanAudit reports an audit without vulnerability on the default branch, n
   assert.equal(cleanAudit(development, [clean({ scope: "all" })]), null, "an audit of every dependency answers for them too");
   assert.equal(cleanAudit(repo("octo/demo", [alert(2, "critical", "vite", "development")]), [clean()]), null, "no alert in the scope of the audit");
   assert.deepEqual(cleanAudit(repo("octo/demo", [alert(1, "high", "lodash", null)]), [clean()]), stamp, "an alert of unknown scope counts as a production one");
+});
+
+test("cleanProductionAudit reports a clean production audit of the default branch when every alert is on a development dependency", () => {
+  const devOnly = repo("octo/demo", [alert(1, "high", "vite", "development")]);
+  const clean = (overrides: Partial<Operation> = {}) =>
+    operation({ status: "done", createdAt: "2026-03-01T10:00:00.000Z", steps: { clone: "done", audit: "done", fix: "skipped", analysis: "skipped", force: "skipped", repair: "skipped", push: "skipped" }, counts: { initial: 0, afterFix: null, afterForce: null, afterRepair: null }, ...overrides });
+  const stamp = { at: "2026-03-01T10:00:00.000Z", scope: "production" };
+
+  assert.deepEqual(cleanProductionAudit(devOnly, [clean()]), stamp);
+  assert.equal(cleanProductionAudit(repo("octo/demo"), [clean()]), null, "no alert, nothing to explain");
+  assert.equal(cleanProductionAudit(repo("octo/demo", [alert(1, "high", "vite", "development"), alert(2, "high", "lodash")]), [clean()]), null, "an alert on a production dependency");
+  assert.equal(cleanProductionAudit(devOnly, [clean({ scope: "all" })]), null, "an audit of every dependency");
+  assert.equal(cleanProductionAudit(devOnly, [clean({ baseBranch: "develop" })]), null, "Dependabot only covers the default branch");
+  assert.equal(cleanProductionAudit(devOnly, [clean({ counts: { initial: 1, afterFix: 1, afterForce: null, afterRepair: null } })]), null, "the audit found vulnerabilities");
 });
 
 test("auditFindings reports what the latest audit of the default branch found while Dependabot reports nothing", () => {

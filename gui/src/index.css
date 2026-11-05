@@ -665,6 +665,18 @@ code {
   min-width: 0;
 }
 
+.row-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  min-height: 24px;
+}
+
+.row-head .row-title {
+  flex: 0 1 auto;
+}
+
 .row-details {
   display: flex;
   align-items: center;
@@ -690,9 +702,9 @@ code {
 
 .row-status {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 12px;
-  margin-right: 10px;
 }
 
 .unfixable-note {

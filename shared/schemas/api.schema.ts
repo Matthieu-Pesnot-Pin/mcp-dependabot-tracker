@@ -98,7 +98,10 @@ export interface CleanAudit {
  * Dépôt, sa catégorie, et l'état de son opération en cours et de la dernière
  * opération, pour la liste et l'écran du dépôt. `cleanAudit` est le dernier
  * audit quand il n'a trouvé aucune vulnérabilité alors que Dependabot signale
- * encore, dans son périmètre, des alertes émises avant lui ; `auditFindings` ce
+ * encore, dans son périmètre, des alertes émises avant lui ;
+ * `cleanProductionAudit` le dernier audit, de production, de la branche par
+ * défaut, quand il n'a trouvé aucune vulnérabilité et que toutes les alertes
+ * ouvertes portent sur des dépendances de développement ; `auditFindings` ce
  * qu'a trouvé le dernier audit de la branche par défaut alors que Dependabot ne
  * signale aucune alerte dans son périmètre ; `unfixable` les paquets pour lesquels le dernier audit n'a
  * trouvé aucune version corrigée, hors ceux marqués corrigés à la main ;
@@ -111,6 +114,7 @@ export interface RepoView {
   activeOperation: Operation | null;
   latestOperation: Operation | null;
   cleanAudit: CleanAudit | null;
+  cleanProductionAudit: CleanAudit | null;
   auditFindings: AuditFindings | null;
   unfixable: string[];
   analysisTask: AnalysisTask | null;

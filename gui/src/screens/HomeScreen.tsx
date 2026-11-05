@@ -110,15 +110,17 @@ function AnalysisTaskNote({ view }: { view: RepoView }) {
 }
 
 /**
- * État d'un dépôt, en deux parties : `note`, l'information la plus utile, à la
- * suite de la PR et de la tâche ; `pill`, la pastille d'alertes, devant les
- * boutons de la ligne. Des alertes toutes corrigées à la main, ou un audit sans
- * vulnérabilité plus récent qu'elles, estompent leur pastille ; des
- * vulnérabilités que l'audit a trouvées sans alerte Dependabot ont leur propre
- * pastille ; des paquets sans version corrigée sont signalés devant elles.
+ * État d'un dépôt, en deux parties affichées à la suite de son nom : `note`,
+ * l'information la plus utile, et `pill`, la pastille d'alertes. Des alertes
+ * toutes corrigées à la main, ou un audit sans vulnérabilité plus récent
+ * qu'elles, estompent leur pastille ; un audit de production sans vulnérabilité
+ * est signalé quand toutes les alertes portent sur des dépendances de
+ * développement ; des vulnérabilités que l'audit a trouvées sans alerte
+ * Dependabot ont leur propre pastille ; des paquets sans version corrigée sont
+ * signalés devant elles.
  */
 function repoStatus(view: RepoView): { note: ReactNode; pill: ReactNode } {
-  const { repo, activeOperation, cleanAudit, auditFindings, unfixable } = view
+  const { repo, activeOperation, cleanAudit, cleanProductionAudit, auditFindings, unfixable } = view
   if (activeOperation) {
     const analysing = activeOperation.steps.analysis === 'running'
     const repairing = activeOperation.steps.repair === 'running'
@@ -167,7 +169,12 @@ function repoStatus(view: RepoView): { note: ReactNode; pill: ReactNode } {
   }
   if (worst) {
     return {
-      note: null,
+      note: cleanProductionAudit && (
+        <span className="status status-clean" title="Le dernier audit des dépendances de production n'a trouvé aucune vulnérabilité ; les alertes ouvertes portent sur des dépendances de développement.">
+          <Icon name="circle-check" className="text-ok" />
+          Audit production OK le {dayAndTime(cleanProductionAudit.at)}
+        </span>
+      ),
       pill: (
         <>
           <UnfixableNote unfixable={unfixable} />
@@ -218,29 +225,32 @@ function repoStatus(view: RepoView): { note: ReactNode; pill: ReactNode } {
 }
 
 /**
- * Ligne d'un dépôt de l'accueil, sur deux niveaux : le nom seul sur la première
- * ligne ; sur la seconde, `lead` puis la PR, la tâche et l'état à gauche, la pastille et
- * les boutons à droite. Le chevron est centré sur la hauteur de la ligne.
+ * Ligne d'un dépôt de l'accueil, sur deux niveaux : le nom puis l'état du
+ * dépôt et sa pastille sur la première ligne ; sur la seconde, `lead`, la PR et
+ * la tâche à gauche, les boutons à droite. Le chevron est centré sur la hauteur
+ * de la ligne.
  */
 function RepoRow({ view, lead, actions }: { view: RepoView; lead?: ReactNode; actions: ReactNode }) {
   const { note, pill } = repoStatus(view)
   return (
     <div className="row row-linked row-repo">
       <div className="row-body">
-        <a className="row-title row-link" href={hrefs.repo(view.repo.id)}>
-          {view.repo.id}
-        </a>
+        <div className="row-head">
+          <a className="row-title row-link" href={hrefs.repo(view.repo.id)}>
+            {view.repo.id}
+          </a>
+          <span className="row-status">
+            {note}
+            {pill}
+          </span>
+        </div>
         <div className="row-details">
           <div className="row-meta">
             {lead}
             <PendingPullRequests repo={view.repo} />
             <AnalysisTaskNote view={view} />
-            {note}
           </div>
-          <div className="row-end">
-            {pill && <span className="row-status">{pill}</span>}
-            {actions}
-          </div>
+          <div className="row-end">{actions}</div>
         </div>
       </div>
       <Icon name="chevron-right" className="row-chevron" />

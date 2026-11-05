@@ -51,6 +51,9 @@ export function describeRepo(view: RepoView, category: Category | null): string 
     const alerts = scope === "production" ? "the Dependabot alerts on production dependencies" : "these Dependabot alerts";
     lines.push(`  npm audit of ${at} (${scopeLabel(scope)}) found no vulnerability on the default branch: ${alerts} are probably not refreshed yet.`);
   }
+  if (view.cleanProductionAudit) {
+    lines.push(`  npm audit of ${view.cleanProductionAudit.at} (production dependencies) found no vulnerability on the default branch; every open Dependabot alert is on a development dependency.`);
+  }
   if (view.auditFindings) {
     const { at, scope, count, severity } = view.auditFindings;
     lines.push(
