@@ -1,7 +1,8 @@
 name: Publish to npm
 
 # Chaque push sur master (merge de pull request compris) : build, tests, version patch
-# commitée et taguée sur master, puis publication npm par trusted publishing (OIDC).
+# commitée et taguée localement, publication npm par trusted publishing (OIDC), puis
+# push du commit de version et du tag sur master.
 # Le push du commit de version, fait avec GITHUB_TOKEN, ne relance pas ce workflow.
 
 on:
@@ -42,6 +43,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           npm version patch
-          git push --follow-tags
 
       - run: npm publish
+
+      - name: Push the version commit and tag
+        run: git push --follow-tags

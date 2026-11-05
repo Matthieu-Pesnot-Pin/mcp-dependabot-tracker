@@ -688,6 +688,7 @@ code {
   display: flex;
   flex: 1;
   flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 4px 18px;
   min-width: 0;
@@ -700,11 +701,17 @@ code {
   flex-shrink: 0;
 }
 
-.row-status {
+.row-note {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
+}
+
+.row-status {
+  display: inline-flex;
+  align-items: center;
   gap: 12px;
+  margin-right: 10px;
 }
 
 .unfixable-note {

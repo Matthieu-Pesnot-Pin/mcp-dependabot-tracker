@@ -108,8 +108,9 @@ function AnalysisTaskNote({ view }: { view: RepoView }) {
 }
 
 /**
- * État d'un dépôt, en deux parties affichées à la suite de son nom : `note`,
- * l'information la plus utile, et `pill`, la pastille d'alertes. Des alertes
+ * État d'un dépôt, en deux parties : `note`, l'information la plus utile,
+ * affichée à la suite de son nom, et `pill`, la pastille d'alertes, devant les
+ * boutons de la ligne. Des alertes
  * toutes corrigées à la main, ou un audit sans vulnérabilité plus récent
  * qu'elles, estompent leur pastille ; un audit de production sans vulnérabilité
  * est signalé quand toutes les alertes portent sur des dépendances de
@@ -223,9 +224,9 @@ function repoStatus(view: RepoView): { note: ReactNode; pill: ReactNode } {
 
 /**
  * Ligne d'un dépôt de l'accueil, sur deux niveaux : le nom puis l'état du
- * dépôt et sa pastille sur la première ligne ; sur la seconde, `lead`, la PR et
- * la tâche à gauche, les boutons à droite. Le chevron est centré sur la hauteur
- * de la ligne.
+ * dépôt (audit, correction en cours…) sur la première ligne ; sur la seconde,
+ * alignés à droite, `lead`, la PR, la tâche, la pastille d'alertes et les
+ * boutons. Le chevron est centré sur la hauteur de la ligne.
  */
 function RepoRow({ view, lead, actions }: { view: RepoView; lead?: ReactNode; actions: ReactNode }) {
   const { note, pill } = repoStatus(view)
@@ -236,10 +237,7 @@ function RepoRow({ view, lead, actions }: { view: RepoView; lead?: ReactNode; ac
           <a className="row-title row-link" href={hrefs.repo(view.repo.id)}>
             {view.repo.id}
           </a>
-          <span className="row-status">
-            {note}
-            {pill}
-          </span>
+          {note && <span className="row-note">{note}</span>}
         </div>
         <div className="row-details">
           <div className="row-meta">
@@ -247,7 +245,10 @@ function RepoRow({ view, lead, actions }: { view: RepoView; lead?: ReactNode; ac
             <PendingPullRequests repo={view.repo} />
             <AnalysisTaskNote view={view} />
           </div>
-          <div className="row-end">{actions}</div>
+          <div className="row-end">
+            {pill && <span className="row-status">{pill}</span>}
+            {actions}
+          </div>
         </div>
       </div>
       <Icon name="chevron-right" className="row-chevron" />
