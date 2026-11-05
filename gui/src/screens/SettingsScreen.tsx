@@ -1,7 +1,6 @@
 import { ANALYSIS_LIMITS, type SaveSettingsBody, type SettingsView } from '@shared/schemas/settings.schema'
 import { useState } from 'react'
 import { Icon } from '../components/Icon'
-import { Toggle } from '../components/Toggle'
 import { usePolling } from '../hooks/usePolling'
 import { showError, useNotice } from '../store/useNotice'
 import { api } from '../utils/api'
@@ -98,7 +97,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
         </a>
         <div className="page-head-text">
           <h1 className="page-title">Réglages</h1>
-          <p className="subtitle">Analyse par Claude quand npm audit fix ne suffit pas</p>
+          <p className="subtitle">Corrections par Claude quand npm audit fix ne suffit pas</p>
         </div>
         <div className="page-actions">
           <button type="button" className="button button-primary" disabled={busy} onClick={() => void save()}>
@@ -107,7 +106,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
         </div>
       </div>
 
-      <p className="section-label">Organizer — où l'agent crée la tâche</p>
+      <p className="section-label">Organizer — où Claude dépose son rapport</p>
       <div className="panel settings-card">
         <div className="settings-fields">
           <label className="settings-field">
@@ -139,7 +138,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
         </div>
       </div>
 
-      <p className="section-label">Claude — abonnement utilisé pour l'analyse</p>
+      <p className="section-label">Claude — abonnement utilisé pour les corrections</p>
       <div className="panel settings-card">
         <div className="settings-status settings-status-top">
           {view.claude.tokenHint !== null ? (
@@ -158,7 +157,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
           ) : (
             <>
               <Icon name="circle-alert" className="text-warning" />
-              <span>Non connecté — l'analyse ne peut pas démarrer</span>
+              <span>Non connecté — sans Claude, une correction pousse les seules corrections de npm audit fix</span>
             </>
           )}
         </div>
@@ -196,17 +195,13 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
         )}
       </div>
 
-      <p className="section-label">Analyse</p>
+      <p className="section-label">Corrections par Claude</p>
       <div className="panel settings-card">
         <div className="right">
           <div>
-            <div className="right-label">Analyser automatiquement</div>
-            <div className="right-description">Dès qu'une correction se termine avec des vulnérabilités restantes</div>
+            <div className="right-label">Limites d'une session</div>
+            <div className="right-description">Claude est lancé dès que npm audit fix laisse des vulnérabilités</div>
           </div>
-          <Toggle checked={analysis.auto} onChange={(auto) => setAnalysis({ ...analysis, auto })} label="Analyser automatiquement" />
-        </div>
-        <div className="right">
-          <div className="right-label">Limites d'une analyse</div>
           <div className="limits">
             <input
               className="input number-input"
@@ -235,7 +230,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
   )
 }
 
-/** Réglages de l'analyse par Claude : connexion à l'organizer, token d'abonnement Claude, déclenchement et limites. */
+/** Réglages des corrections par Claude : connexion à l'organizer, token d'abonnement Claude et limites d'une session. */
 export function SettingsScreen() {
   const polled = usePolling('settings', () => api.getSettings(), null, { remember: false })
   const [saved, setSaved] = useState<SettingsView | null>(null)

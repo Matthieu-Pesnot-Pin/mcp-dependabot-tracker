@@ -1,11 +1,11 @@
 import { alertsInScope, fromNpmSeverity, pendingAlerts, worstOf } from "../../shared/alerts.js";
-import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type AnalysisTask, type Category, type HandledAlert, type Operation, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
+import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type Category, type HandledAlert, type Operation, type OrganizerTask, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
 import type { AuditFindings, AuditTarget, CleanAudit, OperationSummary, RepoView } from "../../shared/schemas/api.schema.js";
-import { latestAnalysed } from "./analysis.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, NotFoundError } from "./errors.js";
 import { GitHubClient, type OpenPullRequest } from "./github.js";
 import { isTrackerBranch } from "./operations.js";
+import { latestReported } from "./repair.js";
 import { parseRepoRef } from "./repo-ref.js";
 import { assertNotDeprecated, isActive, type Store } from "./store.js";
 
@@ -131,7 +131,7 @@ export function trackerPullRequests(repoId: string, pulls: OpenPullRequest[]): P
 
 /** Ligne de l'historique d'une opération. */
 export function operationSummary(operation: Operation): OperationSummary {
-  const { initial, afterFix, afterForce, afterRepair } = operation.counts;
+  const { initial, afterFix, afterRepair } = operation.counts;
   return {
     id: operation.id,
     kind: operation.kind,
@@ -141,9 +141,8 @@ export function operationSummary(operation: Operation): OperationSummary {
     baseBranch: operation.baseBranch,
     createdAt: operation.createdAt,
     before: initial,
-    after: afterRepair ?? afterForce ?? afterFix ?? (operation.kind === "audit" ? initial : null),
-    analysed: operation.analysis !== null,
-    claudeRuns: operation.repair?.runs ?? 0,
+    after: afterRepair ?? afterFix ?? (operation.kind === "audit" ? initial : null),
+    claude: operation.repair !== null,
     pullRequest: operation.pullRequest,
     error: operation.error,
   };
@@ -164,13 +163,13 @@ function buildRepoView(repo: Repo, operations: Operation[], category: Category |
     cleanProductionAudit: cleanProductionAudit(repo, operations),
     auditFindings: auditFindings(repo, operations),
     unfixable: unfixablePackages(repo, operations),
-    analysisTask: openAnalysisTask(operations),
+    reportTask: openReportTask(operations),
   };
 }
 
-/** Tâche organizer de la dernière analyse, tant qu'elle n'est pas terminée. `operations` va de la plus récente à la plus ancienne. */
-export function openAnalysisTask(operations: Operation[]): AnalysisTask | null {
-  const task = latestAnalysed(operations)?.analysis?.task ?? null;
+/** Tâche organizer du dernier rapport de Claude, tant qu'elle n'est pas terminée. `operations` va de la plus récente à la plus ancienne. */
+export function openReportTask(operations: Operation[]): OrganizerTask | null {
+  const task = latestReported(operations)?.repair?.task ?? null;
   return task && task.status !== "done" ? task : null;
 }
 
@@ -264,6 +263,20 @@ export function queueCategory(store: Store, categoryId: string): void {
 /** Retire le dépôt de la file d'attente ; sans effet s'il n'y est pas. */
 export function unqueueRepository(store: Store, repoId: string): Repo {
   return store.updateRepo(repoId, (current) => ({ ...current, queuedAt: null }));
+}
+
+/**
+ * Retire du dépôt ses pull requests en attente, que l'utilisateur dit
+ * fusionnées, sans attendre la relecture suivante ; avec `deploy`, le dépôt
+ * passe aussi « à déployer ». Refusé pour un dépôt déprécié.
+ */
+export function markPullRequestsMerged(store: Store, repoId: string, deploy: boolean): Repo {
+  assertNotDeprecated(store.getRepo(repoId));
+  return store.updateRepo(repoId, (current) => ({
+    ...current,
+    pullRequests: [],
+    deployPendingAt: deploy ? (current.deployPendingAt ?? new Date().toISOString()) : current.deployPendingAt,
+  }));
 }
 
 /** Dépôts non dépréciés visés par « Auditer tout » ; une catégorie inconnue est refusée. */

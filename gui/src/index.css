@@ -946,7 +946,7 @@ code {
   font-size: 13px;
 }
 
-.deploy-offer {
+.merged-offer {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -956,30 +956,15 @@ code {
   border-radius: 8px;
 }
 
-.deploy-offer-icon {
+.merged-offer-icon {
   flex-shrink: 0;
   color: var(--accent-soft);
 }
 
-.deploy-offer-text {
+.merged-offer-text {
   flex: 1;
   min-width: 0;
   color: var(--muted);
-}
-
-.step-actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.candidates {
-  margin-top: 8px;
-  padding: 0;
-  list-style: none;
-  color: var(--warning);
-  font-size: 13px;
-  line-height: 1.7;
 }
 
 .hint {
@@ -1046,11 +1031,6 @@ code {
 .step-body .input {
   height: 36px;
   background: var(--panel);
-}
-
-.step-body .commit-input {
-  width: 600px;
-  max-width: 100%;
 }
 
 .input:focus {
@@ -1754,69 +1734,14 @@ code {
   font-weight: 500;
 }
 
-.verdict-title svg {
-  color: var(--accent-soft);
-}
-
-.verdict-text,
-.verdict-urgent {
+.verdict-text {
   margin: 8px 0 0 22px;
   color: var(--muted);
   line-height: 1.6;
 }
 
-.verdict-urgent {
-  padding: 0;
-  list-style: none;
-}
-
-/* Corrections par Claude */
-
-.remarks-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.remarks-count {
-  flex: 1;
-}
-
-.remarks-head .link {
-  font-size: 12px;
-}
-
-.remarks-note {
-  margin: 8px 0 0 22px;
-  font-size: 12px;
-  color: var(--faint);
-}
-
-.remarks-list {
-  max-height: 260px;
-  overflow: auto;
-  margin: 4px 0 0 22px;
-  padding: 0;
-  list-style: none;
-}
-
-.remarks-list li {
-  margin-top: 10px;
-}
-
-.remarks-body {
-  color: var(--text-strong);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.remarks-meta {
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--faint);
+.verdict-title svg {
+  color: var(--accent-soft);
 }
 
 .repair-summary {
@@ -1854,15 +1779,6 @@ code {
 
 .repair-line .link {
   font-size: 12px;
-}
-
-.commit-input-spaced {
-  margin-top: 16px;
-}
-
-.step-actions-reversed {
-  flex-direction: row-reverse;
-  justify-content: flex-end;
 }
 
 /* Onglets */
@@ -2024,54 +1940,6 @@ code {
   color: var(--muted);
 }
 
-/* Sessions de Claude */
-
-.sessions {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
-}
-
-.session-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.session-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  text-align: left;
-}
-
-.session-card:hover {
-  background: var(--surface-raised);
-}
-
-.session-card.is-active {
-  background: var(--surface-current);
-  border-color: var(--accent);
-}
-
-.session-card-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text);
-}
-
-.session-card-meta {
-  margin-left: 22px;
-  font-size: 11px;
-  color: var(--faint);
-}
-
 .session-detail {
   padding: 22px 24px;
 }
@@ -2128,15 +1996,6 @@ code {
   color: var(--text);
 }
 
-.session-remarks {
-  margin: 0;
-  padding: 0 0 0 14px;
-  list-style: none;
-  border-left: 2px solid var(--border-strong);
-  color: var(--text-soft);
-  line-height: 1.7;
-}
-
 .session-events {
   display: flex;
   flex-direction: column;
@@ -2176,10 +2035,4 @@ code {
 
 .session-detail .repair-changes {
   margin-left: 0;
-}
-
-@media (max-width: 900px) {
-  .sessions {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }

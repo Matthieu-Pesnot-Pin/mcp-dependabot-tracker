@@ -10,9 +10,6 @@ export const KEPT_OPERATIONS = 20
 
 const STATUS_TEXTS: Record<OperationSummary['status'], string> = {
   running: 'en cours',
-  waiting_force: 'attend le --force',
-  waiting_repair: 'attend les corrections',
-  waiting_push: 'attend le push',
   done: 'terminée',
   failed: 'échouée',
   cancelled: 'annulée',
@@ -34,10 +31,9 @@ function countsText(operation: OperationSummary): ReactNode {
   return `${before} → ${plural(after, 'vulnérabilité')}`
 }
 
-/** Part de Claude : `analyse`, `analyse · 2 passages`. */
+/** Part de Claude : `Claude` quand il a été lancé pour corriger. */
 function claudeText(operation: OperationSummary): string | null {
-  if (!operation.analysed) return null
-  return operation.claudeRuns === 0 ? 'analyse' : `analyse · ${plural(operation.claudeRuns, 'passage')}`
+  return operation.claude ? 'Claude' : null
 }
 
 /** Issue de l'opération : la pull request ouverte, ou son statut. */

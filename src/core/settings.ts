@@ -6,7 +6,7 @@ import { TrackerError } from "./errors.js";
 import { organizerUrl, type OrganizerConnection, type OrganizerSpace } from "./organizer.js";
 
 /**
- * Réglages de l'analyse par Claude, dans `<données>/settings.json`, lisible par
+ * Réglages des corrections par Claude, dans `<données>/settings.json`, lisible par
  * le seul compte du serveur : ils portent le token de l'organizer et celui de
  * Claude, que la GUI ne reçoit jamais en entier.
  */
@@ -89,7 +89,7 @@ async function checkedOrganizer(organizer: Settings["organizer"], checks: Settin
 /**
  * Enregistre les réglages de la GUI. Une connexion à l'organizer modifiée est
  * testée, un nouveau token Claude vérifié : un échec refuse tout
- * l'enregistrement. L'analyse automatique exige l'organizer et Claude.
+ * l'enregistrement.
  */
 export async function saveSettings(dataDir: string, body: SaveSettingsBody, checks: SettingsChecks): Promise<SettingsView> {
   const current = readSettings(dataDir);
@@ -105,9 +105,6 @@ export async function saveSettings(dataDir: string, body: SaveSettingsBody, chec
   }
 
   const next: Settings = { organizer, claude, analysis: body.analysis };
-  if (next.analysis.auto && !analysisReady(next)) {
-    throw new TrackerError("The automatic analysis needs the organizer connection and the Claude token.");
-  }
   writeSettings(dataDir, next);
   return settingsView(next);
 }

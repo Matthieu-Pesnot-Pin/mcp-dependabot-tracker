@@ -1,12 +1,13 @@
-import type { AnalysisReport, Operation, Repair, StepName, StepState, Vulnerability } from '@shared/schemas/model.schema'
+import type { Operation, Repair, StepName, StepState, Vulnerability } from '@shared/schemas/model.schema'
 import { ACTIVE_STATUSES } from '@shared/schemas/model.schema'
 import { useState, type ReactNode } from 'react'
-import { ClaudeSessions } from '../components/ClaudeSessions'
+import { ClaudeSession } from '../components/ClaudeSession'
 import { Icon, type IconName } from '../components/Icon'
+import { MergedActions } from '../components/MergedActions'
 import { usePolling } from '../hooks/usePolling'
 import { showError } from '../store/useNotice'
 import { api } from '../utils/api'
-import { clockTime, fromNpmSeverity, plural, projectPrefix, relativeTime, SCOPE_LABELS, SEVERITY_LABELS } from '../utils/format'
+import { clockTime, fromNpmSeverity, plural, projectPrefix, SCOPE_LABELS, SEVERITY_LABELS } from '../utils/format'
 import { hrefs } from '../utils/router'
 
 /** Relecture rapide pendant l'opération ; plus aucune une fois terminée. */
@@ -18,15 +19,10 @@ const HISTORY_POLL_MS = 10_000
 /** Onglets de l'écran d'une opération. */
 type OperationTab = 'steps' | 'claude' | 'log'
 
-/** Relecture des remarques de la tâche pendant que les corrections par Claude attendent. */
-const REMARKS_POLL_MS = 10_000
-
 const STEP_LABELS: Record<StepName, { text: string; mono: boolean }> = {
   clone: { text: 'Cloner le dépôt', mono: false },
   audit: { text: 'npm audit', mono: true },
   fix: { text: 'npm audit fix', mono: true },
-  analysis: { text: 'Analyse par Claude', mono: false },
-  force: { text: 'npm audit fix --force', mono: true },
   repair: { text: 'Corrections par Claude', mono: false },
   push: { text: 'Commit et push', mono: false },
 }
@@ -63,18 +59,13 @@ function unfixable(operation: Operation): Vulnerability[] {
 
 /** Étape qui porte les vulnérabilités sans correctif : le dernier audit exécuté. */
 function lastAuditedStep(operation: Operation): StepName | null {
-  return (['force', 'fix', 'audit'] as const).find((step) => operation.steps[step] === 'done') ?? null
+  return (['repair', 'fix', 'audit'] as const).find((step) => operation.steps[step] === 'done') ?? null
 }
 
-/** Pourquoi une étape a été passée : décision de l'utilisateur, ou rien à faire. */
+/** Pourquoi une étape a été passée : rien à faire, ou opération arrêtée avant. */
 function skippedReason(operation: Operation, step: StepName): string {
   if (operation.status === 'cancelled' || operation.steps.fix !== 'done') return 'ignorée'
-  if (step === 'force' && operation.forceCandidates.length === 0) {
-    return operation.counts.afterFix === 0 ? 'rien à corriger' : 'aucune correction possible'
-  }
-  if (step === 'force' && operation.analysis?.report && !operation.analysis.report.force.recommended) return 'passé · déconseillé par Claude'
-  if (step === 'force') return 'passé'
-  if (step === 'repair' && (operation.counts.afterForce ?? operation.counts.afterFix) === 0) return 'rien à corriger'
+  if (step === 'repair' && operation.counts.afterFix === 0) return 'rien à corriger'
   if (step === 'push' && operation.changes.length === 0 && !operation.repair?.commit) return 'rien à pousser'
   return 'ignorée'
 }
@@ -88,7 +79,7 @@ function sessionProgress(session: { startedAt: string; turns: number }): string 
 /** Résultat des corrections par Claude : vulnérabilités corrigées et fichiers modifiés. */
 function repairResult(operation: Operation, repair: Repair): string | null {
   if (!repair.report) return null
-  const fixed = fixedText(operation.counts.afterForce ?? operation.counts.afterFix, operation.counts.afterRepair)
+  const fixed = fixedText(operation.counts.afterFix, operation.counts.afterRepair)
   const files = repair.report.changes.length
   return [fixed, files > 0 ? plural(files, 'fichier modifié', 'fichiers modifiés') : 'aucun fichier modifié'].filter(Boolean).join(' · ')
 }
@@ -96,18 +87,16 @@ function repairResult(operation: Operation, repair: Repair): string | null {
 /** Résumé d'une étape terminée, aligné à droite de sa ligne. */
 function stepResult(operation: Operation, step: StepName): ReactNode {
   const state = operation.steps[step]
-  if (step === 'analysis' && state === 'running' && operation.analysis) return sessionProgress(operation.analysis)
   if (step === 'repair' && state === 'running' && operation.repair) return sessionProgress(operation.repair)
   if (state === 'skipped') return skippedReason(operation, step)
+  if (step === 'repair' && state === 'failed') return 'échouées · corrections de npm audit fix seules'
   if (state !== 'done') return null
-  const { initial, afterFix, afterForce } = operation.counts
+  const { initial, afterFix } = operation.counts
   switch (step) {
     case 'audit':
       return initial === null ? null : plural(initial, 'vulnérabilité')
     case 'fix':
       return fixedText(initial, afterFix)
-    case 'force':
-      return fixedText(afterFix, afterForce)
     case 'repair':
       return operation.repair ? (
         <>
@@ -122,13 +111,6 @@ function stepResult(operation: Operation, step: StepName): ReactNode {
             </>
           )}
         </>
-      ) : null
-    case 'analysis':
-      return operation.analysis?.task ? (
-        <a className="link task-link" href={operation.analysis.task.url} target="_blank" rel="noreferrer" title={operation.analysis.task.title}>
-          <span className="task-link-text">Tâche « {operation.analysis.task.title} »</span>
-          <Icon name="external-link" size={14} />
-        </a>
       ) : null
     case 'push':
       return operation.pullRequest ? (
@@ -154,7 +136,7 @@ function ChangesList({ operation }: { operation: Operation }) {
   )
 }
 
-/** Dernières actions de Claude pendant une session, la plus récente en clair. */
+/** Dernières actions de Claude pendant la session, la plus récente en clair. */
 function ClaudeActivity({ activity, hint }: { activity: string[]; hint: string }) {
   return (
     <div className="step-body">
@@ -170,256 +152,52 @@ function ClaudeActivity({ activity, hint }: { activity: string[]; hint: string }
   )
 }
 
-/** Avis de Claude sur `--force`, et ce qu'il juge urgent de corriger à la main. */
-function ClaudeVerdict({ report }: { report: AnalysisReport }) {
-  return (
-    <div className="verdict">
-      <p className="verdict-title">
-        <Icon name="sparkles" size={14} />
-        {report.force.recommended ? 'Claude recommande le --force' : 'Claude déconseille le --force'}
-      </p>
-      <p className="verdict-text">{report.force.reason}</p>
-      {report.urgent.length > 0 && (
-        <ul className="verdict-urgent">
-          {report.urgent.map((item) => (
-            <li key={item.package}>
-              <span className="mono">{item.package}</span> — {item.reason}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-/** Décision sur `npm audit fix --force` : les montées majeures en jeu, l'avis de Claude s'il a analysé, appliquer ou passer. */
-function ForceDecision({ operation, onDone }: { operation: Operation; onDone: () => void }) {
-  const [busy, setBusy] = useState(false)
-  const count = operation.forceCandidates.reduce((total, candidate) => total + candidate.vulnerabilities, 0)
-  const report = operation.analysis?.report ?? null
-  const skipFirst = report !== null && !report.force.recommended
-
-  async function decide(apply: boolean) {
-    setBusy(true)
-    try {
-      await api.decideForce(operation.id, apply)
-      onDone()
-    } catch (err) {
-      showError(err)
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="step-body">
-      <p className="muted">
-        {count > 1 ? `${count} vulnérabilités nécessitent` : 'Une vulnérabilité nécessite'} une version majeure :
-      </p>
-      <ul className="candidates mono">
-        {operation.forceCandidates.map((candidate) => (
-          <li key={`${candidate.project}/${candidate.name}`}>
-            {projectPrefix(candidate.project)}
-            {candidate.name} {candidate.from ?? '?'} → {candidate.to}
-          </li>
-        ))}
-      </ul>
-      {report && <ClaudeVerdict report={report} />}
-      <div className={`step-actions${skipFirst ? ' step-actions-reversed' : ''}`}>
-        <button type="button" className={`button ${skipFirst ? 'button-secondary' : 'button-primary'}`} disabled={busy} onClick={() => void decide(true)}>
-          Appliquer --force
-        </button>
-        <button type="button" className={`button ${skipFirst ? 'button-primary' : 'button-secondary'}`} disabled={busy} onClick={() => void decide(false)}>
-          Passer
-        </button>
-      </div>
-    </div>
-  )
-}
-
-/**
- * Corrections par Claude en attente : les remarques laissées sur la tâche de
- * l'analyse, relues régulièrement, puis lancer les corrections ou passer.
- */
-function RepairLauncher({ operation, onDone }: { operation: Operation; onDone: () => void }) {
-  const remarks = usePolling(`remarks:${operation.id}`, () => api.getRemarks(operation.id), REMARKS_POLL_MS)
-  const [busy, setBusy] = useState(false)
-  const task = operation.analysis?.task ?? null
-  const comments = remarks.data?.remarks ?? []
-
-  async function decide(run: boolean) {
-    setBusy(true)
-    try {
-      await api.decideRepair(operation.id, run)
-      onDone()
-    } catch (err) {
-      showError(err)
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="step-body">
-      <p className="muted">Claude relit la tâche et vos remarques, corrige le code ou force des versions dans le clone, lance les tests, puis fait un commit.</p>
-      <div className="verdict remarks">
-        <p className="remarks-head">
-          <Icon name="message-square" size={14} />
-          <span className="remarks-count">
-            {remarks.error ? 'Remarques illisibles' : !remarks.data ? 'Lecture des remarques…' : comments.length === 0 ? 'Aucune remarque sur la tâche' : plural(comments.length, 'remarque sur la tâche', 'remarques sur la tâche')}
-          </span>
-          {task && (
-            <a className="link task-link" href={task.url} target="_blank" rel="noreferrer">
-              Commenter la tâche
-              <Icon name="external-link" size={12} />
-            </a>
-          )}
-        </p>
-        {remarks.error && <p className="error-text remarks-note">{remarks.error}</p>}
-        {remarks.data && comments.length === 0 && <p className="remarks-note">Sans remarque, Claude suit son analyse.</p>}
-        {comments.length > 0 && (
-          <ul className="remarks-list">
-            {comments.map((comment, index) => (
-              <li key={`${comment.createdAt}-${index}`}>
-                <p className="remarks-body">{comment.body}</p>
-                <p className="remarks-meta">
-                  {comment.author} · {relativeTime(comment.createdAt)}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      <div className="step-actions">
-        <button type="button" className="button button-primary" disabled={busy} onClick={() => void decide(true)}>
-          <Icon name="sparkles" />
-          Lancer les corrections
-        </button>
-        <button type="button" className="button button-secondary" disabled={busy} onClick={() => void decide(false)}>
-          {operation.changes.length > 0 ? 'Passer au push' : 'Passer'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
 const TEST_ICONS: Record<'passed' | 'failed' | 'not_run', { icon: IconName; className: string }> = {
   passed: { icon: 'circle-check', className: 'text-ok' },
   failed: { icon: 'circle-x', className: 'error-text' },
   not_run: { icon: 'circle-minus', className: 'muted' },
 }
 
-/** Ce que Claude a changé : résumé, fichiers, tests, audit et lien vers la sous-tâche du rapport détaillé. */
+/** Ce que Claude a changé : résumé, fichiers, tests, audit et lien vers la tâche du rapport. */
 function RepairSummary({ operation, repair }: { operation: Operation; repair: Repair }) {
   const report = repair.report!
   const tests = TEST_ICONS[report.tests.outcome]
   const remaining = operation.counts.afterRepair
   return (
-    <div className="verdict repair-summary">
-      <p className="verdict-title">
-        <Icon name="sparkles" size={14} />
-        Ce que Claude a changé
-      </p>
-      <p className="verdict-text">{report.summary}</p>
-      {report.changes.length > 0 && (
-        <ul className="repair-changes">
-          {report.changes.map((change) => (
-            <li key={change.file}>
-              <span className="mono">{change.file}</span>
-              <span className="muted">{change.change}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <p className="repair-line">
-        <Icon name={tests.icon} size={12} className={tests.className} />
-        {report.tests.outcome === 'not_run' ? 'Tests non lancés' : report.tests.outcome === 'passed' ? 'Tests réussis' : 'Tests en échec'} — {report.tests.detail}
-      </p>
-      <p className="repair-line">
-        <Icon name={remaining === 0 ? 'circle-check' : 'circle-alert'} size={12} className={remaining === 0 ? 'text-ok' : 'text-warning'} />
-        npm audit après corrections : {remaining === null ? 'non relancé' : remaining === 0 ? 'aucune vulnérabilité' : plural(remaining, 'vulnérabilité')}
-        {repair.task && (
-          <>
-            {' · '}
-            <a className="link task-link" href={repair.task.url} target="_blank" rel="noreferrer">
-              rapport détaillé {repair.task.key}
-              <Icon name="external-link" size={12} />
-            </a>
-          </>
-        )}
-      </p>
-    </div>
-  )
-}
-
-/** Commits de la branche, en clair : `2 commits, dont celui de Claude`. */
-function commitsText(repair: Repair): string {
-  const count = (repair.auditCommit ? 1 : 0) + (repair.commit ? 1 : 0)
-  if (!repair.commit) return plural(count, 'commit')
-  return count === 1 ? 'le commit de Claude' : `${plural(count, 'commit')}, dont celui de Claude`
-}
-
-/**
- * Push : le rapport de Claude s'il a corrigé, le message de commit (titre de
- * la pull request quand les commits sont déjà faits), la branche, les
- * changements repliés et le bouton principal ; après Claude, le relancer.
- */
-function PushForm({ operation, onDone }: { operation: Operation; onDone: () => void }) {
-  const [message, setMessage] = useState(operation.commitMessage)
-  const [showChanges, setShowChanges] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const repair = operation.repair?.report ? operation.repair : null
-
-  async function rerun() {
-    setBusy(true)
-    try {
-      await api.decideRepair(operation.id, true)
-      onDone()
-    } catch (err) {
-      showError(err)
-      setBusy(false)
-    }
-  }
-
-  async function push() {
-    if (message.trim() === '') return
-    setBusy(true)
-    try {
-      await api.push(operation.id, message.trim())
-      onDone()
-    } catch (err) {
-      showError(err)
-      setBusy(false)
-    }
-  }
-
-  return (
     <div className="step-body">
-      {repair && <RepairSummary operation={operation} repair={repair} />}
-      <input
-        className={`input mono commit-input${repair ? ' commit-input-spaced' : ''}`}
-        value={message}
-        onChange={(event) => setMessage(event.target.value)}
-        aria-label={operation.repair ? 'Titre de la pull request' : 'Message de commit'}
-        spellCheck={false}
-      />
-      <p className="hint">
-        Nouvelle branche {operation.branch}
-        {operation.repair && ` · ${commitsText(operation.repair)}`} ·{' '}
-        <button type="button" className="link" onClick={() => setShowChanges(!showChanges)}>
-          {showChanges ? 'masquer les changements' : 'voir les changements'}
-        </button>
-      </p>
-      {showChanges && <ChangesList operation={operation} />}
-      <div className="step-actions">
-        <button type="button" className="button button-primary" disabled={busy || message.trim() === ''} onClick={() => void push()}>
-          <Icon name="upload" />
-          Pousser et ouvrir la PR
-        </button>
-        {repair && (
-          <button type="button" className="button button-secondary" disabled={busy} onClick={() => void rerun()}>
-            <Icon name="rotate-cw" />
-            Relancer avec mes remarques
-          </button>
+      <div className="verdict repair-summary">
+        <p className="verdict-title">
+          <Icon name="sparkles" size={14} />
+          Ce que Claude a changé
+        </p>
+        <p className="verdict-text">{report.summary}</p>
+        {report.changes.length > 0 && (
+          <ul className="repair-changes">
+            {report.changes.map((change) => (
+              <li key={change.file}>
+                <span className="mono">{change.file}</span>
+                <span className="muted">{change.change}</span>
+              </li>
+            ))}
+          </ul>
         )}
+        <p className="repair-line">
+          <Icon name={tests.icon} size={12} className={tests.className} />
+          {report.tests.outcome === 'not_run' ? 'Tests non lancés' : report.tests.outcome === 'passed' ? 'Tests réussis' : 'Tests en échec'} — {report.tests.detail}
+        </p>
+        <p className="repair-line">
+          <Icon name={remaining === 0 ? 'circle-check' : 'circle-alert'} size={12} className={remaining === 0 ? 'text-ok' : 'text-warning'} />
+          npm audit après corrections : {remaining === null ? 'non relancé' : remaining === 0 ? 'aucune vulnérabilité' : plural(remaining, 'vulnérabilité')}
+          {repair.task && (
+            <>
+              {' · '}
+              <a className="link task-link" href={repair.task.url} target="_blank" rel="noreferrer">
+                rapport {repair.task.key}
+                <Icon name="external-link" size={12} />
+              </a>
+            </>
+          )}
+        </p>
       </div>
     </div>
   )
@@ -443,72 +221,50 @@ function UnfixableList({ vulnerabilities }: { vulnerabilities: Vulnerability[] }
 }
 
 /**
- * Encart d'une correction poussée : il propose de marquer le dépôt « à
- * déployer » ; une fois marqué, il le dit et permet d'annuler la marque.
+ * Suite d'une correction poussée : la branche et ses changements, puis, tant
+ * que la pull request attend dans « PR en attente », la marquer fusionnée,
+ * avec ou sans passage « à déployer ».
  */
-function DeployOffer({ repoId }: { repoId: string }) {
-  const polled = usePolling(`repo:${repoId}`, () => api.getRepo(repoId), null)
-  const [busy, setBusy] = useState(false)
+function PushedInfo({ operation }: { operation: Operation }) {
+  const polled = usePolling(`repo:${operation.repoId}`, () => api.getRepo(operation.repoId), null)
+  const [showChanges, setShowChanges] = useState(false)
   const repo = polled.data?.repo
-  if (!repo || repo.deprecatedAt !== null) return null
-  const pending = repo.deployPendingAt !== null
-
-  async function toggle() {
-    setBusy(true)
-    try {
-      await (pending ? api.unmarkDeployPending(repoId) : api.markDeployPending(repoId))
-      polled.reload()
-    } catch (err) {
-      showError(err)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const pending = repo !== undefined && repo.deprecatedAt === null && repo.pullRequests.some((pull) => pull.number === operation.pullRequest?.number)
 
   return (
     <div className="step-body">
-      <div className="deploy-offer">
-        <Icon name="rocket" className="deploy-offer-icon" />
-        {pending ? (
-          <>
-            <span className="deploy-offer-text">
-              Marqué à déployer : le dépôt attend dans « <a className="link" href={hrefs.deploy()}>À déployer</a> ».
-            </span>
-            <button type="button" className="button button-secondary" onClick={() => void toggle()} disabled={busy}>
-              Annuler
-            </button>
-          </>
-        ) : (
-          <>
-            <span className="deploy-offer-text">Pas de déploiement automatique ? Marquez le dépôt pour le retrouver dans « À déployer ».</span>
-            <button type="button" className="button button-primary" onClick={() => void toggle()} disabled={busy}>
-              <Icon name="rocket" />
-              Marquer à déployer
-            </button>
-          </>
-        )}
-      </div>
+      <p className="hint">
+        Branche {operation.branch} ·{' '}
+        <button type="button" className="link" onClick={() => setShowChanges(!showChanges)}>
+          {showChanges ? 'masquer les changements' : 'voir les changements'}
+        </button>
+      </p>
+      {showChanges && <ChangesList operation={operation} />}
+      {pending && (
+        <div className="merged-offer">
+          <Icon name="git-pull-request" className="merged-offer-icon" />
+          <span className="merged-offer-text">
+            La pull request attend dans « <a className="link" href={hrefs.pulls()}>PR en attente</a> ».
+          </span>
+          <MergedActions repoId={operation.repoId} onDone={polled.reload} />
+        </div>
+      )}
     </div>
   )
 }
 
-function StepRow({ operation, step, onDone }: { operation: Operation; step: StepName; onDone: () => void }) {
+function StepRow({ operation, step }: { operation: Operation; step: StepName }) {
   const [showUnfixable, setShowUnfixable] = useState(false)
   const state = operation.steps[step]
-  const waitingHere =
-    (operation.status === 'waiting_force' && step === 'force') ||
-    (operation.status === 'waiting_repair' && step === 'repair') ||
-    (operation.status === 'waiting_push' && step === 'push')
-  const failure = step === 'analysis' ? (operation.analysis?.error ?? null) : step === 'repair' ? (operation.repair?.error ?? null) : operation.error
-  const failedHere = (state === 'failed' || step === 'repair') && failure
+  const failure = step === 'repair' ? (operation.repair?.error ?? null) : operation.error
+  const failedHere = state === 'failed' && failure
   const label = STEP_LABELS[step]
-  const icon: IconName = waitingHere ? (step === 'force' ? 'circle-alert' : 'circle-dot') : STEP_ICONS[state]
   const withoutFix = lastAuditedStep(operation) === step ? unfixable(operation) : []
 
   return (
-    <div className={`step step-${state}${waitingHere ? ' step-current' : ''}`}>
+    <div className={`step step-${state}`}>
       <div className="step-line">
-        <Icon name={icon} className={`step-icon${state === 'running' ? ' spin' : ''}${waitingHere && step === 'force' ? ' text-warning' : ''}`} />
+        <Icon name={STEP_ICONS[state]} className={`step-icon${state === 'running' ? ' spin' : ''}`} />
         <span className={`step-label${label.mono ? ' mono' : ''}`}>{label.text}</span>
         <span className="step-result">
           {stepResult(operation, step)}
@@ -523,20 +279,11 @@ function StepRow({ operation, step, onDone }: { operation: Operation; step: Step
         </span>
       </div>
       {showUnfixable && withoutFix.length > 0 && <UnfixableList vulnerabilities={withoutFix} />}
-      {step === 'analysis' && state === 'running' && operation.analysis && (
-        <ClaudeActivity activity={operation.analysis.activity} hint="Le rapport et la tâche Organizer arrivent à la fin de l'analyse." />
-      )}
       {step === 'repair' && state === 'running' && operation.repair && (
-        <ClaudeActivity activity={operation.repair.activity} hint="Le commit et le rapport arrivent à la fin des corrections." />
+        <ClaudeActivity activity={operation.repair.activity} hint="Claude analyse et corrige ; son rapport arrive dans l'organizer à la fin de la session." />
       )}
-      {step === 'analysis' && state === 'done' && operation.analysis?.report && <p className="step-body hint">{operation.analysis.report.summary}</p>}
-      {step === 'repair' && state === 'done' && operation.status !== 'waiting_push' && operation.repair?.report && (
-        <p className="step-body hint">{operation.repair.report.summary}</p>
-      )}
-      {operation.status === 'waiting_force' && step === 'force' && <ForceDecision operation={operation} onDone={onDone} />}
-      {operation.status === 'waiting_repair' && step === 'repair' && <RepairLauncher operation={operation} onDone={onDone} />}
-      {operation.status === 'waiting_push' && step === 'push' && <PushForm key={operation.id} operation={operation} onDone={onDone} />}
-      {step === 'push' && state === 'done' && operation.pullRequest && <DeployOffer repoId={operation.repoId} />}
+      {step === 'repair' && state === 'done' && operation.repair?.report && <RepairSummary operation={operation} repair={operation.repair} />}
+      {step === 'push' && state === 'done' && operation.pullRequest && <PushedInfo operation={operation} />}
       {failedHere && <p className="step-body error-text pre">{failure}</p>}
     </div>
   )
@@ -567,7 +314,7 @@ function OperationPager({ repoId, operationId }: { repoId: string; operationId: 
 
 /**
  * Écran d'une opération en trois onglets : ses étapes, la seule étape en cours
- * dépliée ; les sessions de Claude ; le journal. Les flèches passent aux autres
+ * dépliée ; la session de Claude ; le journal. Les flèches passent aux autres
  * opérations du dépôt.
  */
 export function OperationScreen({ repoId, operationId }: { repoId: string; operationId: string }) {
@@ -591,7 +338,7 @@ export function OperationScreen({ repoId, operationId }: { repoId: string; opera
   const steps: StepName[] =
     operation.kind === 'audit'
       ? ['clone', 'audit']
-      : ['clone', 'audit', 'fix', ...(operation.analysis ? (['analysis'] as const) : []), 'force', ...(operation.analysis?.task ? (['repair'] as const) : []), 'push']
+      : ['clone', 'audit', 'fix', 'repair', 'push']
 
   async function cancel() {
     try {
@@ -631,10 +378,9 @@ export function OperationScreen({ repoId, operationId }: { repoId: string; opera
         <button type="button" className={`tab${tab === 'steps' ? ' is-active' : ''}`} onClick={() => setTab('steps')}>
           Étapes
         </button>
-        {operation.sessions.length > 0 && (
+        {operation.repair && (
           <button type="button" className={`tab${tab === 'claude' ? ' is-active' : ''}`} onClick={() => setTab('claude')}>
             Claude
-            <span className="tab-count">{operation.sessions.length}</span>
           </button>
         )}
         <button type="button" className={`tab${tab === 'log' ? ' is-active' : ''}`} onClick={() => setTab('log')}>
@@ -646,14 +392,14 @@ export function OperationScreen({ repoId, operationId }: { repoId: string; opera
         <>
           <div className="panel steps">
             {steps.map((step) => (
-              <StepRow key={step} operation={operation} step={step} onDone={polled.reload} />
+              <StepRow key={step} operation={operation} step={step} />
             ))}
           </div>
           {operation.error && !Object.values(operation.steps).includes('failed') && <p className="banner banner-error pre">{operation.error}</p>}
         </>
       )}
 
-      {tab === 'claude' && operation.sessions.length > 0 && <ClaudeSessions sessions={operation.sessions} active={isActive(operation)} />}
+      {tab === 'claude' && operation.repair && <ClaudeSession operation={operation} repair={operation.repair} active={isActive(operation)} />}
 
       {tab === 'log' && (
         <pre className="log mono">

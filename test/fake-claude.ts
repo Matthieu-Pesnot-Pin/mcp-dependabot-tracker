@@ -12,13 +12,13 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
  *   `slow`     session qui ne se termine pas d'elle-même ;
  *   `broken`   corrections qui modifient le clone puis échouent ;
  *   `idle`     corrections qui ne modifient rien ;
+ *   `red`      corrections dont les tests échouent ;
  *   tout autre token : tâche créée, assignée et taguée selon la consigne.
- * Avec `--mcp-config`, il appelle le faux organizer avec l'adresse et le token
- * de la configuration ; sans, il répond simplement. Une consigne de corrections
- * lit les remarques de la tâche de l'analyse, écrit `src/fixed.js` et un
- * fichier dans `node_modules`, appelle l'outil `npm_ls` du serveur `npm` de la
+ * Avec `--mcp-config`, il écrit `src/fixed.js` et un fichier dans
+ * `node_modules`, appelle l'outil `npm_ls` du serveur `npm` de la
  * configuration et note sa réponse dans `<CLAUDE_CONFIG_DIR>/npm-tools.txt`,
- * puis crée la sous-tâche du rapport, ou reprend celle du passage précédent.
+ * puis crée la tâche du rapport sur le faux organizer, avec l'adresse et le
+ * token de la configuration ; sans, il répond simplement.
  */
 
 const args = process.argv.slice(2);
@@ -67,27 +67,7 @@ async function main() {
   const prompt = option("-p") ?? "";
   const ownerId = /member id ([^)\s]+)\)/.exec(prompt)?.[1] ?? "";
   const tag = /set its tags to exactly \["([^"]+)"\]/.exec(prompt)?.[1] ?? "";
-  if (prompt.startsWith("You fix the npm vulnerabilities")) return repair(url, organizerToken, prompt, ownerId, tag, servers.npm);
-
-  emit({ type: "assistant", message: { id: "m-1", content: [{ type: "tool_use", name: "Read", input: { file_path: path.join(process.cwd(), "package.json") } }] } });
-  emit({ type: "assistant", message: { id: "m-2", content: [{ type: "text", text: "nth-check sert à css-select ; la montée majeure est sans risque." }] } });
-  const { task } = await call(url, organizerToken, "POST", "tasks", { title: "Monter nth-check en v3", description: "Rapport" });
-  emit({ type: "assistant", message: { id: "m-3", content: [{ type: "tool_use", name: "mcp__organizer__create_task", input: {} }] } });
-  await call(url, organizerToken, "PUT", `tasks/${task.key}/assignees`, { assignees: [ownerId] });
-  if (token !== "untagged") await call(url, organizerToken, "PUT", `tasks/${task.key}/tags`, { tags: [tag] });
-  emit({
-    type: "result",
-    subtype: "success",
-    is_error: false,
-    num_turns: 3,
-    result: "done",
-    structured_output: {
-      task: task.key,
-      summary: "nth-check n'est utilisé qu'à la compilation.",
-      urgent: [],
-      force: { recommended: true, reason: "La v3 garde l'API utilisée." },
-    },
-  });
+  await repair(url, organizerToken, ownerId, tag, servers.npm);
 }
 
 /** Appelle un outil d'un serveur MCP stdio de la configuration et rend le texte de sa réponse. */
@@ -102,30 +82,25 @@ async function callMcpTool(server: { command: string; args: string[] }, name: st
   }
 }
 
-async function repair(url: string, organizerToken: string, prompt: string, ownerId: string, tag: string, npm: { command: string; args: string[] }) {
-  const analysisTask = /Read the organizer task (\S+) with get_task/.exec(prompt)?.[1] ?? "";
-  const previous = /your previous report, task ([^\s,]+), with update_task/.exec(prompt)?.[1] ?? null;
-  const { comments } = await call(url, organizerToken, "GET", `tasks/${analysisTask}`);
-  const remarks = comments.map((comment: { body: string }) => comment.body);
-  emit({ type: "assistant", message: { id: "m-1", content: [{ type: "tool_use", name: "mcp__organizer__get_task", input: {} }] } });
+async function repair(url: string, organizerToken: string, ownerId: string, tag: string, npm: { command: string; args: string[] }) {
+  emit({ type: "assistant", message: { id: "m-1", content: [{ type: "tool_use", name: "Read", input: { file_path: path.join(process.cwd(), "package.json") } }] } });
+  emit({ type: "assistant", message: { id: "m-2", content: [{ type: "text", text: "nth-check sert à css-select ; je le monte en v3." }] } });
   if (token !== "idle") {
     fs.mkdirSync("src", { recursive: true });
-    fs.writeFileSync(path.join("src", "fixed.js"), `// ${remarks.join(" / ")}\n`);
+    fs.writeFileSync(path.join("src", "fixed.js"), "// correctif\n");
   }
   fs.mkdirSync("node_modules", { recursive: true });
   fs.writeFileSync(path.join("node_modules", "installed.txt"), "installed by npm ci\n");
-  emit({ type: "assistant", message: { id: "m-2", content: [{ type: "tool_use", name: "Edit", input: {} }] } });
+  emit({ type: "assistant", message: { id: "m-3", content: [{ type: "tool_use", name: "Edit", input: {} }] } });
   fs.writeFileSync(path.join(home, "npm-tools.txt"), await callMcpTool(npm, "npm_ls", { project: "", package: "lodash" }));
   if (token === "broken") {
     emit({ type: "result", subtype: "success", is_error: true, result: "The tests could not start", num_turns: 2 });
     process.exit(1);
   }
-  let key = previous;
-  if (!key) {
-    ({ task: { key } } = await call(url, organizerToken, "POST", "tasks", { title: "Rapport de développement — correctifs", description: "Rapport", parent: analysisTask }));
-    await call(url, organizerToken, "PUT", `tasks/${key}/assignees`, { assignees: [ownerId] });
-    await call(url, organizerToken, "PUT", `tasks/${key}/tags`, { tags: [tag] });
-  }
+  const { task } = await call(url, organizerToken, "POST", "tasks", { title: "Rapport de correction — nth-check en v3", description: "Rapport" });
+  emit({ type: "assistant", message: { id: "m-4", content: [{ type: "tool_use", name: "mcp__organizer__create_task", input: {} }] } });
+  await call(url, organizerToken, "PUT", `tasks/${task.key}/assignees`, { assignees: [ownerId] });
+  if (token !== "untagged") await call(url, organizerToken, "PUT", `tasks/${task.key}/tags`, { tags: [tag] });
   emit({
     type: "result",
     subtype: "success",
@@ -133,11 +108,11 @@ async function repair(url: string, organizerToken: string, prompt: string, owner
     num_turns: 4,
     result: "done",
     structured_output: {
-      task: key,
-      summary: `${remarks.length} remarque(s) prise(s) en compte.`,
+      task: task.key,
+      summary: "nth-check monté en v3.",
       changes: token === "idle" ? [] : [{ file: "src/fixed.js", change: "correctif appliqué" }],
       commitMessage: "fix(deps): apply the fixes by Claude",
-      tests: { outcome: "passed", detail: "Les tests passent." },
+      tests: token === "red" ? { outcome: "failed", detail: "Deux tests échouent." } : { outcome: "passed", detail: "Les tests passent." },
     },
   });
 }

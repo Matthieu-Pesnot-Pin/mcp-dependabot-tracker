@@ -5,9 +5,10 @@ import { useSyncExternalStore } from 'react'
  *   `#/`                                accueil, tous les dépôts suivis ;
  *   `#/c/<catégorie>`                   accueil, dépôts d'une catégorie ;
  *   `#/queue`                           accueil, file d'attente ;
+ *   `#/pulls`                           accueil, dépôts dont une PR attend ;
  *   `#/deploy`                          accueil, dépôts à déployer ;
  *   `#/deprecated`                      accueil, dépôts dépréciés ;
- *   `#/settings`                        réglages de l'analyse par Claude ;
+ *   `#/settings`                        réglages des corrections par Claude ;
  *   `#/r/<propriétaire>/<nom>`          écran du dépôt, ses alertes ;
  *   `#/r/<propriétaire>/<nom>/history`  écran du dépôt, son historique ;
  *   `#/r/<propriétaire>/<nom>/op/<id>`  écran d'une opération.
@@ -15,6 +16,7 @@ import { useSyncExternalStore } from 'react'
 export type Route =
   | { name: 'home'; categoryId: string | null }
   | { name: 'queue' }
+  | { name: 'pulls' }
   | { name: 'deploy' }
   | { name: 'deprecated' }
   | { name: 'settings' }
@@ -40,6 +42,7 @@ export function parseHash(hash: string): Route {
   if (segments.some((segment) => segment === null)) return { name: 'not_found', hash }
   if (segments.length === 2 && segments[0] === 'c') return { name: 'home', categoryId: segments[1] }
   if (segments.length === 1 && segments[0] === 'queue') return { name: 'queue' }
+  if (segments.length === 1 && segments[0] === 'pulls') return { name: 'pulls' }
   if (segments.length === 1 && segments[0] === 'deploy') return { name: 'deploy' }
   if (segments.length === 1 && segments[0] === 'deprecated') return { name: 'deprecated' }
   if (segments.length === 1 && segments[0] === 'settings') return { name: 'settings' }
@@ -69,8 +72,8 @@ function repoHash(repoId: string): string {
 /** Onglet de l'écran d'un dépôt. */
 export type RepoTab = 'alerts' | 'history'
 
-/** Onglet de l'accueil : une catégorie, tous les projets (`categoryId` null), la file d'attente, les dépôts à déployer, ou les dépôts dépréciés. */
-export type HomeTab = { kind: 'category'; categoryId: string | null } | { kind: 'queue' } | { kind: 'deploy' } | { kind: 'deprecated' }
+/** Onglet de l'accueil : une catégorie, tous les projets (`categoryId` null), la file d'attente, les PR en attente, les dépôts à déployer, ou les dépôts dépréciés. */
+export type HomeTab = { kind: 'category'; categoryId: string | null } | { kind: 'queue' } | { kind: 'pulls' } | { kind: 'deploy' } | { kind: 'deprecated' }
 
 /** Onglet affiché par l'accueil la dernière fois, où ramènent les retours depuis un dépôt. */
 let lastHomeTab: HomeTab = { kind: 'category', categoryId: null }
@@ -82,12 +85,14 @@ export function rememberHomeTab(tab: HomeTab) {
 export const hrefs = {
   home: (categoryId: string | null = null) => inPage(categoryId === null ? '#/' : `#/c/${encodeURIComponent(categoryId)}`),
   queue: () => inPage('#/queue'),
+  pulls: () => inPage('#/pulls'),
   deploy: () => inPage('#/deploy'),
   deprecated: () => inPage('#/deprecated'),
   settings: () => inPage('#/settings'),
   lastHome: () => {
     if (lastHomeTab.kind === 'category') return hrefs.home(lastHomeTab.categoryId)
     if (lastHomeTab.kind === 'queue') return hrefs.queue()
+    if (lastHomeTab.kind === 'pulls') return hrefs.pulls()
     if (lastHomeTab.kind === 'deploy') return hrefs.deploy()
     return hrefs.deprecated()
   },

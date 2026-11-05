@@ -89,7 +89,7 @@ test("the GUI adds a repository, syncs its paginated alerts and refuses bad inpu
   const added = await call("POST", "repos", { repository: "https://github.com/octo/demo" });
   assert.equal(added.status, 200, added.json.error);
   assert.equal(added.json.repo.id, "octo/demo");
-  assert.deepEqual(added.json.repo.rights, { audit: true, fix: false, force: false, push: false });
+  assert.deepEqual(added.json.repo.rights, { audit: true, fix: false, push: false });
   assert.deepEqual(added.json.repo.alerts.map((alert: { number: number }) => alert.number), [2, 1, 3]);
 
   assert.equal((await call("POST", "repos", { repository: "octo/demo" })).status, 409);
@@ -139,10 +139,10 @@ test("the agent reads the alerts and is held to its rights", async () => {
   const badScope = await client.callTool("run_audit", { repository: "octo/demo", scope: "dev" });
   assert.match(badScope.text, /"scope" must be one of production, all/);
 
-  const rights = await call("PUT", "repos/octo/demo/rights", { rights: { audit: true, fix: true, force: false, push: true } });
+  const rights = await call("PUT", "repos/octo/demo/rights", { rights: { audit: true, fix: true, push: true } });
   assert.equal(rights.status, 200, rights.json.error);
   const noForce = await client.callTool("fix_vulnerabilities", { repository: "octo/demo", force: true });
-  assert.match(noForce.text, /not allowed to run npm audit fix --force/);
+  assert.match(noForce.text, /Unknown field\(s\): force/);
   assert.equal((await call("PUT", "repos/octo/demo/rights", { rights: { audit: true } })).status, 400);
 });
 
@@ -312,7 +312,7 @@ test("the agent fixes and pushes; the result links to the operation in the GUI",
   assert.equal(fixed.isError, false, fixed.text);
   assert.match(fixed.text, /^npm audit fix on octo\/demo, production dependencies \(operation op-[a-z0-9-]+\): done\./);
   assert.match(fixed.text, /Vulnerabilities: 2 found, 1 left after npm audit fix/);
-  assert.match(fixed.text, /npm audit fix --force would upgrade: nth-check 1\.0\.2 → 3\.0\.1/);
+  assert.match(fixed.text, /nth-check \(\w+, fix needs a major upgrade\)/);
   assert.match(fixed.text, /Pull request #\d+: https:\/\/github\.com\/octo\/demo\/pull\/\d+ \(branch fix\/npm-audit-/);
   const link = new RegExp(`Open in the GUI: http://localhost:${port}#/r/octo/demo/op/(op-[a-z0-9-]+)`).exec(fixed.text);
   assert.ok(link, fixed.text);
@@ -325,7 +325,7 @@ test("the agent fixes and pushes; the result links to the operation in the GUI",
   assert.equal(repo.json.activeOperation, null);
 });
 
-test("the GUI runs a fix through the --force decision to the pull request", { skip }, async () => {
+test("the GUI runs a fix to the pull request without any decision, and the PR tab marks it merged", { skip }, async () => {
   assert.equal((await call("POST", "repos/octo/demo/operations", { scope: "dev" })).status, 400);
   const started = await call("POST", "repos/octo/demo/operations", { scope: "all" });
   assert.equal(started.status, 200, started.json.error);
@@ -334,24 +334,13 @@ test("the GUI runs a fix through the --force decision to the pull request", { sk
   assert.equal((await call("POST", "repos/octo/demo/operations", { scope: "all" })).status, 409);
 
   const read = async () => (await call("GET", `operations/${id}`)).json.operation;
-  const waitingForce = await waitFor("waiting_force", read, (op) => op.status === "waiting_force" || op.status === "failed");
-  assert.equal(waitingForce.status, "waiting_force", waitingForce.error);
-  assert.equal((await call("POST", `operations/${id}/push`, { commitMessage: "x" })).status, 409);
-  assert.equal((await call("POST", `operations/${id}/force`, {})).status, 400);
-
-  assert.equal((await call("POST", `operations/${id}/force`, { apply: true })).status, 200);
-  const waitingPush = await waitFor("waiting_push", read, (op) => op.status === "waiting_push" || op.status === "failed");
-  assert.equal(waitingPush.status, "waiting_push", waitingPush.error);
-
-  const home = await call("GET", "repos");
-  assert.equal(home.json.repos[0].activeOperation.id, id);
-
-  assert.equal((await call("POST", `operations/${id}/push`, { commitMessage: "fix(deps): from the GUI" })).status, 200);
   const done = await waitFor("done", read, (op) => op.status === "done" || op.status === "failed");
   assert.equal(done.status, "done", done.error);
-  assert.equal(done.counts.afterForce, 0);
+  assert.equal(done.steps.repair, "failed", "Claude is not configured on this server");
+  assert.match(done.repair.error, /need the organizer connection and the Claude token/);
   const pull = github.pulls.at(-1)!;
-  assert.equal(pull.title, "fix(deps): from the GUI");
+  assert.equal(pull.title, "fix(deps): resolve npm audit vulnerabilities");
+  assert.match(pull.body, /^> \[!WARNING\]\n> Claude Code could not fix the remaining vulnerabilities/);
   assert.equal(done.pullRequest.number, pull.number);
   assert.equal((await call("POST", `operations/${id}/cancel`)).status, 409);
   assert.equal((await call("GET", "operations/op-unknown")).status, 404);
@@ -359,9 +348,20 @@ test("the GUI runs a fix through the --force decision to the pull request", { sk
   const history = await call("GET", "repos/octo/demo/operations");
   assert.equal(history.status, 200, history.json.error);
   const latest = history.json.operations[0];
-  assert.deepEqual([latest.id, latest.status, latest.before, latest.after, latest.pullRequest.number], [id, "done", done.counts.initial, 0, pull.number]);
+  assert.deepEqual([latest.id, latest.status, latest.before, latest.after, latest.claude, latest.pullRequest.number], [id, "done", done.counts.initial, done.counts.afterFix, true, pull.number]);
   assert.ok(!("log" in latest), "the history leaves the log out");
   assert.equal((await call("GET", "repos/octo/unknown/operations")).status, 404);
+
+  const pending = (await call("GET", "repos/octo/demo")).json.repo;
+  assert.ok(pending.pullRequests.some((candidate: { number: number }) => candidate.number === pull.number));
+  assert.equal((await call("PUT", "repos/octo/demo/merged", {})).status, 400);
+  const merged = await call("PUT", "repos/octo/demo/merged", { deploy: true });
+  assert.equal(merged.status, 200, merged.json.error);
+  assert.deepEqual(merged.json.repo.pullRequests, []);
+  assert.ok(merged.json.repo.deployPendingAt, "merged, then to deploy");
+  const mergedOnly = await call("PUT", "repos/octo/demo/merged", { deploy: false });
+  assert.equal(mergedOnly.json.repo.deployPendingAt, merged.json.repo.deployPendingAt, "merging again keeps the deploy mark");
+  assert.equal((await call("PUT", "repos/octo/missing/merged", { deploy: false })).status, 404);
 });
 
 test("the server creates CLONE_DIR at launch and refuses to start without it", async () => {

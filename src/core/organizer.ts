@@ -17,7 +17,7 @@ export interface OrganizerConnection {
   token: string;
 }
 
-/** Espace du token et son propriétaire, à qui les tâches de l'analyse sont assignées. */
+/** Espace du token et son propriétaire, à qui les tâches de rapport de Claude sont assignées. */
 export interface OrganizerSpace {
   space: { id: string; name: string };
   owner: { id: string; name: string; email: string };

@@ -17,7 +17,7 @@ export default function App() {
   const closeAdd = useCallback(() => setAdding(false), [])
 
   let screen: ReactNode
-  const onHome = route.name === 'home' || route.name === 'queue' || route.name === 'deploy' || route.name === 'deprecated'
+  const onHome = route.name === 'home' || route.name === 'queue' || route.name === 'pulls' || route.name === 'deploy' || route.name === 'deprecated'
   if (onHome) {
     const tab: HomeTab = route.name === 'home' ? { kind: 'category', categoryId: route.categoryId } : { kind: route.name }
     screen = <HomeScreen tab={tab} adding={adding} onAdd={openAdd} onCloseAdd={closeAdd} />
@@ -44,7 +44,7 @@ export default function App() {
           <Icon name="settings" />
         </a>
         <SyncButton />
-        {route.name !== 'deploy' && (
+        {route.name !== 'deploy' && route.name !== 'pulls' && (
           <AuditAllButton
             target={
               route.name === 'queue'

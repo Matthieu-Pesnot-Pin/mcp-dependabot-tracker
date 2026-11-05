@@ -90,27 +90,18 @@ export function describeOperation(operation: Operation): string {
   if (operation.projects.length > 0) {
     lines.push(`- npm projects: ${operation.projects.map((project) => projectLabel(project) || "./").join(", ")}`);
   }
-  const { initial, afterFix, afterForce } = operation.counts;
+  const { initial, afterFix } = operation.counts;
   if (initial !== null) {
     const parts = [`${initial} found`];
     if (afterFix !== null) parts.push(`${afterFix} left after npm audit fix`);
-    if (afterForce !== null) parts.push(`${afterForce} left after npm audit fix --force`);
     lines.push(`- Vulnerabilities: ${parts.join(", ")}`);
   }
   if (operation.remaining.length > 0) {
     lines.push(
       `- Remaining: ${list(operation.remaining, (vulnerability) => {
-        const fix = vulnerability.fix === "none" ? "no fix" : vulnerability.fix === "major" ? "fix needs --force" : "fix available";
+        const fix = vulnerability.fix === "none" ? "no fix" : vulnerability.fix === "major" ? "fix needs a major upgrade" : "fix available";
         return `${projectLabel(vulnerability.project)}${vulnerability.name} (${vulnerability.severity}, ${fix})`;
       })}`
-    );
-  }
-  if (operation.forceCandidates.length > 0 && operation.steps.force !== "done") {
-    lines.push(
-      `- npm audit fix --force would upgrade: ${list(
-        operation.forceCandidates,
-        (candidate) => `${projectLabel(candidate.project)}${candidate.name} ${candidate.from ?? "?"} → ${candidate.to}`
-      )}`
     );
   }
   if (operation.changes.length > 0) {

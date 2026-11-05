@@ -3,12 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import test, { after, before } from "node:test";
 
-import { cancelOperation, decideForce, decideRepair, pushOperation, runAgentOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "../src/core/operations.js";
+import { cancelOperation, runAgentOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "../src/core/operations.js";
 import { addRepository, listRepoBranches, repoView, setBranch } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import type { GitHubConfig } from "../src/core/config.js";
-import { refreshAnalysisTask } from "../src/core/analysis.js";
-import { analysisRemarks } from "../src/core/repair.js";
+import { refreshReportTask } from "../src/core/repair.js";
 import type { Operation } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS, type Settings } from "../shared/schemas/settings.schema.js";
 import { FAKE_CLAUDE, FakeGitHub, FakeOrganizer, LocalRemotes, VULNERABLE_DEV_FIXTURE, VULNERABLE_FIXTURE, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
@@ -27,16 +26,16 @@ let github: FakeGitHub;
 let remotes: LocalRemotes;
 let ctx: OperationContext;
 let organizer: FakeOrganizer;
-/** Réglages lus par les opérations : l'analyse est désactivée sauf dans les tests qui l'activent. */
+/** Réglages lus par les opérations : Claude n'est configuré que dans les tests qui le règlent. */
 let settings: Settings = DEFAULT_SETTINGS;
 const errors: string[] = [];
 
-/** Réglages d'une analyse automatique avec le faux organizer et le token Claude `claudeToken`. */
-function analysisSettings(claudeToken: string, maxMinutes = 5): Settings {
+/** Réglages des corrections par Claude avec le faux organizer et le token Claude `claudeToken`. */
+function claudeSettings(claudeToken: string, maxMinutes = 5): Settings {
   return {
     organizer: { url: organizer.url, token: organizer.token, space: "Maintenance", owner: organizer.owner.name },
     claude: { token: claudeToken, savedAt: new Date().toISOString() },
-    analysis: { auto: true, maxTurns: 10, maxMinutes },
+    analysis: { maxTurns: 10, maxMinutes },
   };
 }
 
@@ -96,12 +95,12 @@ after(async () => {
 
 test("an agent audit reports the vulnerabilities of every npm project and deletes its clone", { skip }, async () => {
   const repoId = await newRepo();
-  const operation = await runAgentOperation(ctx, repoId, "audit", { scope: "production", force: false, push: false, commitMessage: "x" });
+  const operation = await runAgentOperation(ctx, repoId, "audit", { scope: "production", push: false, commitMessage: "x" });
   assert.equal(operation.status, "done", operation.error ?? "");
   assert.equal(operation.origin, "agent");
   assert.deepEqual(operation.projects, ["", "tools"]);
   assert.equal(operation.counts.initial, 4);
-  assert.deepEqual(operation.steps, { clone: "done", audit: "done", fix: "skipped", analysis: "skipped", force: "skipped", repair: "skipped", push: "skipped" });
+  assert.deepEqual(operation.steps, { clone: "done", audit: "done", fix: "skipped", repair: "skipped", push: "skipped" });
   assert.deepEqual(
     operation.remaining.map((v) => `${v.project}:${v.name}:${v.fix}`).sort(),
     [":lodash:available", ":nth-check:major", "tools:lodash:available", "tools:nth-check:major"]
@@ -109,74 +108,54 @@ test("an agent audit reports the vulnerabilities of every npm project and delete
   assert.equal(operation.workDir, null);
 });
 
-test("the GUI flow waits for the --force decision, then pushes a branch and opens the pull request", { skip }, async () => {
-  const repoId = await newRepo();
-  const started = startUserFix(ctx, repoId, "production");
-  assert.equal(started.status, "running");
-  assert.throws(() => startUserFix(ctx, repoId, "production"), /already in progress/);
-
-  const waitingForce = await waitStatus(started.id, ["waiting_force", "failed"]);
-  assert.equal(waitingForce.status, "waiting_force", waitingForce.error ?? "");
-  assert.equal(waitingForce.counts.initial, 4);
-  assert.equal(waitingForce.counts.afterFix, 2);
-  assert.deepEqual(
-    waitingForce.forceCandidates.map((c) => `${c.project}:${c.name}:${c.from}->${c.to}`),
-    [":nth-check:1.0.2->3.0.1", "tools:nth-check:1.0.2->3.0.1"]
-  );
-  assert.ok(waitingForce.workDir && fs.existsSync(waitingForce.workDir));
-  assert.equal(path.dirname(waitingForce.workDir), path.join(temp.dir, "clones"));
-  assert.throws(() => pushOperation(ctx, started.id, "msg"), /is waiting_force, not waiting_push/);
-
-  decideForce(ctx, started.id, true);
-  const waitingPush = await waitStatus(started.id, ["waiting_push", "failed"]);
-  assert.equal(waitingPush.status, "waiting_push", waitingPush.error ?? "");
-  assert.equal(waitingPush.counts.afterForce, 0);
-  assert.match(waitingPush.branch ?? "", /^fix\/npm-audit-\d{4}-\d{2}-\d{2}-\d{6}$/);
-  const changed = waitingPush.changes.map((c) => `${c.project}:${c.name}`);
-  for (const expected of [":lodash", ":nth-check", "tools:lodash", "tools:nth-check"]) assert.ok(changed.includes(expected), `${expected} in ${changed}`);
-
-  pushOperation(ctx, started.id, "fix(deps): bump vulnerable packages");
-  const done = await waitStatus(started.id, ["done", "failed"]);
-  assert.equal(done.status, "done", done.error ?? "");
-  assert.equal(done.steps.push, "done");
-  assert.equal(done.workDir, null);
-  assert.ok(waitingForce.workDir && !fs.existsSync(waitingForce.workDir));
-
+/** Sujets des commits de la branche poussée, du plus récent au plus ancien. */
+function pushedSubjects(repoId: string, branch: string): string[] {
   const [owner, name] = repoId.split("/");
-  const branch = done.branch!;
-  assert.ok(remotes.branches(owner, name).includes(branch));
-  assert.match(remotes.log(owner, name, branch).split("\n")[0], /^Tracker Bot <4242\+tracker-bot@users\.noreply\.github\.com>\|fix\(deps\): bump vulnerable packages$/);
-  const rootManifest = JSON.parse(remotes.show(owner, name, branch, "package.json"));
-  assert.match(rootManifest.dependencies["nth-check"], /^\^3\./);
-  const toolsLock = JSON.parse(remotes.show(owner, name, branch, "tools/package-lock.json"));
-  assert.notEqual(toolsLock.packages["node_modules/lodash"].version, "4.17.20");
+  return remotes.log(owner, name, branch).split("\n").filter(Boolean).map((line) => line.split("|")[1]);
+}
 
-  const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
-  assert.deepEqual({ head: pull.head, base: pull.base, title: pull.title }, { head: branch, base: "main", title: "fix(deps): bump vulnerable packages" });
-  assert.match(pull.body, /Vulnerabilities before: 4/);
-  assert.deepEqual(done.pullRequest, { number: pull.number, url: `https://github.com/${repoId}/pull/${pull.number}` });
-  assert.deepEqual(
-    ctx.store.getRepo(repoId).pullRequests.map((pending) => [pending.number, pending.branch]),
-    [[pull.number, branch]],
-    "the repository lists the pull request at once, before the next sync"
-  );
-});
-
-test("skipping --force keeps the major upgrade out, and cancelling a waiting operation deletes its clone", { skip }, async () => {
-  const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
+/** Correction lancée depuis la GUI avec le token Claude `token`, attendue jusqu'à sa fin. */
+async function automaticFix(token: string | null, files?: Record<string, string>): Promise<{ repoId: string; done: Operation }> {
+  settings = token === null ? DEFAULT_SETTINGS : claudeSettings(token);
+  const repoId = await newRepo(files ?? { ".": VULNERABLE_FIXTURE });
   const started = startUserFix(ctx, repoId, "production");
-  await waitStatus(started.id, ["waiting_force"]);
-  decideForce(ctx, started.id, false);
-  const waitingPush = await waitStatus(started.id, ["waiting_push", "failed"]);
-  assert.equal(waitingPush.steps.force, "skipped");
-  assert.deepEqual(waitingPush.changes.map((c) => c.name), ["lodash"]);
+  return { repoId, done: await waitStatus(started.id, ["done", "failed", "cancelled"]) };
+}
 
-  const cancelled = cancelOperation(ctx, started.id);
-  assert.equal(cancelled.status, "cancelled");
-  assert.equal(cancelled.steps.push, "skipped");
-  assert.equal(cancelled.workDir, null);
-  assert.ok(!fs.existsSync(waitingPush.workDir!));
-  assert.throws(() => cancelOperation(ctx, started.id), /already cancelled/);
+test("a fix from the GUI runs to the pull request without any decision; without Claude, the fixes of npm audit fix are pushed with a warning", { skip }, async () => {
+  try {
+    const repoId = await newRepo();
+    const started = startUserFix(ctx, repoId, "production");
+    assert.equal(started.status, "running");
+    assert.throws(() => startUserFix(ctx, repoId, "production"), /already in progress/);
+
+    const done = await waitStatus(started.id, ["done", "failed", "cancelled"]);
+    assert.equal(done.status, "done", done.error ?? "");
+    assert.deepEqual([done.counts.initial, done.counts.afterFix], [4, 2]);
+    assert.deepEqual(done.steps, { clone: "done", audit: "done", fix: "done", repair: "failed", push: "done" });
+    assert.match(done.repair?.error ?? "", /need the organizer connection and the Claude token/);
+    assert.equal(done.workDir, null);
+
+    const branch = done.branch!;
+    assert.deepEqual(pushedSubjects(repoId, branch), ["fix(deps): resolve npm audit vulnerabilities", "initial"]);
+    const [owner, name] = repoId.split("/");
+    assert.match(remotes.log(owner, name, branch).split("\n")[0], /^Tracker Bot <4242\+tracker-bot@users\.noreply\.github\.com>\|/);
+    const toolsLock = JSON.parse(remotes.show(owner, name, branch, "tools/package-lock.json"));
+    assert.notEqual(toolsLock.packages["node_modules/lodash"].version, "4.17.20");
+
+    const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
+    assert.deepEqual({ head: pull.head, base: pull.base, title: pull.title }, { head: branch, base: "main", title: "fix(deps): resolve npm audit vulnerabilities" });
+    assert.match(pull.body, /^> \[!WARNING\]\n> Claude Code could not fix the remaining vulnerabilities: .*\n> This pull request only holds the fixes of `npm audit fix`\./);
+    assert.match(pull.body, /Vulnerabilities before: 4/);
+    assert.deepEqual(done.pullRequest, { number: pull.number, url: `https://github.com/${repoId}/pull/${pull.number}` });
+    assert.deepEqual(
+      ctx.store.getRepo(repoId).pullRequests.map((pending) => [pending.number, pending.branch]),
+      [[pull.number, branch]],
+      "the repository lists the pull request at once, before the next sync"
+    );
+  } finally {
+    settings = DEFAULT_SETTINGS;
+  }
 });
 
 test("cancelling a running operation stops its command", { skip }, async () => {
@@ -184,217 +163,126 @@ test("cancelling a running operation stops its command", { skip }, async () => {
   const started = startUserFix(ctx, repoId, "production");
   const requested = cancelOperation(ctx, started.id);
   assert.equal(requested.cancelRequested, true);
-  const cancelled = await waitStatus(started.id, ["cancelled", "failed", "waiting_force"]);
+  const cancelled = await waitStatus(started.id, ["cancelled", "failed", "done"]);
   assert.equal(cancelled.status, "cancelled", cancelled.error ?? "");
   assert.equal(cancelled.workDir, null);
+  assert.throws(() => cancelOperation(ctx, started.id), /already cancelled/);
 });
 
-test("the automatic analysis has Claude read the clone, create the organizer task and give its opinion on --force", { skip }, async () => {
-  settings = analysisSettings("good-token");
+test("Claude analyses and fixes in one session, reports in one organizer task, and the pull request is opened at once", { skip }, async () => {
   try {
-    const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
-    const started = startUserFix(ctx, repoId, "production");
-    const waiting = await waitStatus(started.id, ["waiting_force", "failed"]);
-    assert.equal(waiting.status, "waiting_force", waiting.error ?? "");
-    assert.equal(waiting.steps.analysis, "done", waiting.analysis?.error ?? "");
-
-    const task = organizer.tasks.at(-1)!;
-    assert.deepEqual(task.tags, [repoId.split("/")[1]]);
-    assert.deepEqual(task.assigneeIds, [organizer.owner.id]);
-    assert.deepEqual(waiting.analysis?.task, { key: task.key, title: task.title, url: `${organizer.url}/#/task/${task.id}`, status: "todo" });
-    assert.deepEqual(waiting.analysis?.report?.force, { recommended: true, reason: "La v3 garde l'API utilisée." });
-    assert.equal(waiting.analysis?.turns, 3);
-    assert.deepEqual(waiting.analysis?.activity, ["Read package.json", "nth-check sert à css-select ; la montée majeure est sans risque.", "organizer create_task"]);
-    const [session] = waiting.sessions;
-    assert.deepEqual([waiting.sessions.length, session.kind, session.run, session.outcome, session.turns], [1, "analysis", 1, "done", 3]);
-    assert.deepEqual(session.events, [
-      { kind: "tool", text: "Read package.json" },
-      { kind: "text", text: "nth-check sert à css-select ; la montée majeure est sans risque." },
-      { kind: "tool", text: "organizer create_task" },
-    ]);
-    assert.deepEqual(session.tasks, [{ task: waiting.analysis?.task, role: "created" }]);
-    assert.deepEqual(session.analysisReport, waiting.analysis?.report);
-    assert.ok(session.endedAt);
-
-    const call = claudeCalls().at(-1)!;
-    assert.equal(fs.realpathSync(call.cwd), fs.realpathSync(path.join(waiting.workDir!, "repo")));
-    assert.equal(call.token, "good-token");
-    assert.ok(!call.env.includes("GITHUB_TOKEN"), "Claude Code never receives the GitHub token");
-    const option = (name: string) => call.args[call.args.indexOf(name) + 1];
-    assert.equal(option("--tools"), "Read,Grep,Glob");
-    assert.equal(option("--permission-mode"), "dontAsk");
-    assert.equal(option("--setting-sources"), "user");
-    assert.equal(option("--max-turns"), "10");
-    assert.equal(option("--allowedTools"), "mcp__organizer__create_task,mcp__organizer__set_assignees,mcp__organizer__set_tags,mcp__organizer__get_task");
-    assert.ok(call.args.includes("--strict-mcp-config"));
-    assert.ok(!fs.existsSync(option("--mcp-config")), "the MCP configuration, which holds the organizer token, is deleted after the session");
-
-    assert.equal(repoView(ctx.store, ctx.store.getRepo(repoId)).analysisTask?.key, task.key);
-    task.status = "done";
-    await refreshAnalysisTask(ctx.store, settings, repoId);
-    assert.equal(repoView(ctx.store, ctx.store.getRepo(repoId)).analysisTask, null);
-    cancelOperation(ctx, started.id);
-  } finally {
-    settings = DEFAULT_SETTINGS;
-  }
-});
-
-test("an analysis whose task misses the tag fails, and the operation still waits for the --force decision", { skip }, async () => {
-  settings = analysisSettings("untagged");
-  try {
-    const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
-    const started = startUserFix(ctx, repoId, "production");
-    const waiting = await waitStatus(started.id, ["waiting_force", "failed"]);
-    assert.equal(waiting.status, "waiting_force", waiting.error ?? "");
-    assert.equal(waiting.steps.analysis, "failed");
-    assert.match(waiting.analysis?.error ?? "", /^Task MNT-\d+ was created without the tag "demo-\d+"\.$/);
-    assert.equal(waiting.analysis?.task, null);
-    cancelOperation(ctx, started.id);
-  } finally {
-    settings = DEFAULT_SETTINGS;
-  }
-});
-
-test("cancelling an operation during the analysis stops Claude Code", { skip }, async () => {
-  settings = analysisSettings("slow");
-  try {
-    const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
-    const started = startUserFix(ctx, repoId, "production");
-    await waitFor(
-      "the analysis to start",
-      () => ctx.store.getOperation(started.id),
-      (operation) => (operation.analysis?.activity.length ?? 0) > 0
-    );
-    cancelOperation(ctx, started.id);
-    const cancelled = await waitStatus(started.id, ["cancelled", "failed", "waiting_force"]);
-    assert.equal(cancelled.status, "cancelled", cancelled.error ?? "");
-    assert.equal(cancelled.steps.analysis, "skipped");
-    assert.equal(cancelled.workDir, null);
-  } finally {
-    settings = DEFAULT_SETTINGS;
-  }
-});
-
-/** Correction lancée depuis la GUI, analysée par Claude, `--force` passé : elle attend les corrections par Claude. */
-async function waitingRepair(token: string): Promise<{ repoId: string; id: string; analysisTask: string }> {
-  settings = analysisSettings(token);
-  const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
-  const started = startUserFix(ctx, repoId, "production");
-  const waitingForce = await waitStatus(started.id, ["waiting_force", "failed"]);
-  assert.equal(waitingForce.status, "waiting_force", waitingForce.error ?? "");
-  decideForce(ctx, started.id, false);
-  const waiting = await waitStatus(started.id, ["waiting_repair", "waiting_push", "failed"]);
-  assert.equal(waiting.status, "waiting_repair", waiting.error ?? "");
-  return { repoId, id: started.id, analysisTask: waiting.analysis!.task!.key };
-}
-
-test("Claude fixes by hand after the user's remarks, in a commit of its own after npm audit fix, and runs again in place", { skip }, async () => {
-  try {
-    const { repoId, id, analysisTask } = await waitingRepair("good-token");
-    organizer.addComment(analysisTask, "Garde le thème sombre.");
-    const remarks = await analysisRemarks(settings, ctx.store.getOperation(id));
-    assert.deepEqual(remarks.remarks.map((remark) => [remark.author, remark.body]), [[organizer.owner.name, "Garde le thème sombre."]]);
-    assert.equal(remarks.task.key, analysisTask);
-
-    await decideRepair(ctx, id, true);
-    const first = await waitStatus(id, ["waiting_push", "waiting_repair", "failed"]);
-    assert.equal(first.status, "waiting_push", first.repair?.error ?? first.error ?? "");
-    assert.equal(first.steps.repair, "done");
-    const repair = first.repair!;
-    assert.equal(repair.report?.summary, "1 remarque(s) prise(s) en compte.");
+    const tasksBefore = organizer.tasks.length;
+    const { repoId, done } = await automaticFix("good-token");
+    assert.equal(done.status, "done", done.error ?? "");
+    assert.deepEqual(done.steps, { clone: "done", audit: "done", fix: "done", repair: "done", push: "done" });
+    const repair = done.repair!;
+    assert.equal(repair.error, null);
     assert.deepEqual(repair.report?.tests, { outcome: "passed", detail: "Les tests passent." });
     assert.ok(repair.auditCommit && repair.commit && repair.base === repair.auditCommit);
-    const report = organizer.tasks.find((task) => task.key === repair.task?.key)!;
-    assert.equal(report.parentKey, analysisTask);
-    assert.deepEqual([report.tags, report.assigneeIds], [[repoId.split("/")[1]], [organizer.owner.id]]);
-    assert.equal(first.counts.afterRepair, first.counts.afterFix, "the fake fixes nothing that npm audit sees");
-    const firstPass = first.sessions.at(-1)!;
-    assert.deepEqual(first.sessions.map((session) => [session.kind, session.run, session.outcome]), [["analysis", 1, "done"], ["repair", 1, "done"]]);
-    assert.deepEqual(firstPass.remarks.map((remark) => remark.body), ["Garde le thème sombre."], "the session keeps the remarks Claude was given");
-    assert.deepEqual(firstPass.tasks.map(({ task, role }) => [task.key, role]), [[analysisTask, "read"], [repair.task?.key, "created"]]);
-    assert.deepEqual([firstPass.commit, firstPass.remaining, firstPass.repairReport], [repair.commit, first.counts.afterRepair, repair.report]);
-    assert.ok(firstPass.events.some((event) => event.kind === "tool" && event.text === "organizer get_task"));
+    assert.equal(done.counts.afterRepair, done.counts.afterFix, "the fake fixes nothing that npm audit sees");
+    assert.equal(repair.turns, 4);
+    assert.deepEqual(repair.events.map((event) => event.text), [
+      "Read package.json",
+      "nth-check sert à css-select ; je le monte en v3.",
+      "Edit ",
+      "organizer create_task",
+    ]);
+    assert.deepEqual(repair.activity, ["nth-check sert à css-select ; je le monte en v3.", "Edit", "organizer create_task"]);
+
+    assert.equal(organizer.tasks.length, tasksBefore + 1, "one task holds the whole report");
+    const task = organizer.tasks.at(-1)!;
+    assert.deepEqual([task.tags, task.assigneeIds], [[repoId.split("/")[1]], [organizer.owner.id]]);
+    assert.deepEqual(repair.task, { key: task.key, title: task.title, url: `${organizer.url}/#/task/${task.id}`, status: "todo" });
 
     const call = claudeCalls().at(-1)!;
     const option = (name: string) => call.args[call.args.indexOf(name) + 1];
+    assert.equal(path.basename(call.cwd), "repo", "Claude works in the clone");
+    assert.equal(call.token, "good-token");
     assert.equal(option("--tools"), "Read,Grep,Glob,Edit,Write", "Claude has no shell");
-    assert.ok(option("--allowedTools").split(",").includes("mcp__npm__npm_test"));
+    assert.equal(option("--permission-mode"), "dontAsk");
+    assert.equal(option("--max-turns"), "10");
+    const allowed = option("--allowedTools").split(",");
+    assert.ok(allowed.includes("mcp__npm__npm_test") && allowed.includes("mcp__organizer__create_task"));
+    assert.ok(!allowed.includes("mcp__organizer__update_task"), "Claude creates its report, it never updates another task");
     assert.ok(!option("--allowedTools").includes("git"), "Claude never runs git");
     assert.deepEqual(JSON.parse(option("--settings")), { permissions: { blockWritesOutsideWorkingDirectories: true } });
+    assert.match(call.args[call.args.indexOf("-p") + 1], /titled in French "Rapport de correction — "/);
     const npmTools = fs.readFileSync(path.join(call.home, "npm-tools.txt"), "utf-8");
     assert.match(npmTools, /^\$ npm ls lodash --all  \(in \., exit code \d+\)/, "the npm commands of Claude run through the npm tools of the tracker");
-    assert.match(npmTools, /lodash/);
     assert.ok(call.env.includes("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"), "the commands of Claude do not receive its token");
-    assert.ok(!call.env.includes("GITHUB_TOKEN"));
-    assert.ok(!fs.existsSync(option("--mcp-config")));
+    assert.ok(!call.env.includes("GITHUB_TOKEN"), "Claude Code never receives the GitHub token");
+    assert.ok(!fs.existsSync(option("--mcp-config")), "the MCP configuration, which holds the organizer token, is deleted after the session");
 
-    organizer.addComment(analysisTask, "Ajoute un commentaire d'en-tête.");
-    await decideRepair(ctx, id, true);
-    const second = await waitStatus(id, ["waiting_push", "waiting_repair", "failed"]);
-    assert.equal(second.status, "waiting_push", second.repair?.error ?? second.error ?? "");
-    assert.equal(second.repair?.error, null);
-    assert.equal(second.repair?.runs, 2);
-    const secondPass = second.sessions.at(-1)!;
-    assert.deepEqual([second.sessions.length, secondPass.run, secondPass.remarks.length], [3, 2, 2], "every pass keeps its own session");
-    assert.equal(secondPass.tasks[1].role, "updated");
-    assert.equal(second.sessions[1].commit, repair.commit, "the first pass keeps its own commit");
-    assert.equal(second.repair?.task?.key, repair.task?.key, "a second pass updates the same report");
-    assert.equal(second.repair?.base, repair.base);
-    assert.notEqual(second.repair?.commit, repair.commit, "the second pass replaces the commit of the first one");
-    assert.match(claudeCalls().at(-1)!.args[claudeCalls().at(-1)!.args.indexOf("-p") + 1], new RegExp(`your previous report, task ${repair.task?.key}, with update_task`));
-
-    pushOperation(ctx, id, "fix(deps): resolve npm audit vulnerabilities");
-    const done = await waitStatus(id, ["done", "failed"]);
-    assert.equal(done.status, "done", done.error ?? "");
     const [owner, name] = repoId.split("/");
-    const subjects = remotes.log(owner, name, done.branch!).split("\n").filter(Boolean).map((line) => line.split("|")[1]);
-    assert.deepEqual(subjects, ["fix(deps): apply the fixes by Claude", "fix(deps): resolve npm audit vulnerabilities", "initial"]);
-    assert.equal(remotes.show(owner, name, done.branch!, "src/fixed.js"), "// Garde le thème sombre. / Ajoute un commentaire d'en-tête.\n");
+    assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): apply the fixes by Claude", "fix(deps): resolve npm audit vulnerabilities", "initial"]);
+    assert.equal(remotes.show(owner, name, done.branch!, "src/fixed.js"), "// correctif\n");
     assert.throws(() => remotes.show(owner, name, done.branch!, "node_modules/installed.txt"), "node_modules is never committed");
     const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
-    assert.match(pull.body, new RegExp(`Fixes by Claude Code, detailed in organizer task ${repair.task?.key}:`));
+    assert.doesNotMatch(pull.body, /WARNING/);
+    assert.match(pull.body, new RegExp(`Fixes by Claude Code, reported in organizer task ${task.key}:`));
     assert.match(pull.body, /- `src\/fixed\.js`: correctif appliqué/);
+
+    assert.equal(repoView(ctx.store, ctx.store.getRepo(repoId)).reportTask?.key, task.key);
+    task.status = "done";
+    await refreshReportTask(ctx.store, settings, repoId);
+    assert.equal(repoView(ctx.store, ctx.store.getRepo(repoId)).reportTask, null);
   } finally {
     settings = DEFAULT_SETTINGS;
   }
 });
 
-test("fixes by Claude that change nothing keep the commit of npm audit fix, ready to push", { skip }, async () => {
+test("fixes by Claude whose tests fail are pushed with a warning on top of the pull request", { skip }, async () => {
   try {
-    const { repoId, id } = await waitingRepair("idle");
-    await decideRepair(ctx, id, true);
-    const idle = await waitStatus(id, ["waiting_push", "waiting_repair", "done", "failed"]);
-    assert.equal(idle.status, "waiting_push", idle.repair?.error ?? idle.error ?? "");
-    assert.deepEqual([idle.repair?.commit, idle.repair?.report?.changes], [null, []]);
-    assert.deepEqual(idle.changes.map((change) => change.name), ["lodash"], "the changes still compare with the cloned commit");
-    pushOperation(ctx, id, "fix(deps): resolve npm audit vulnerabilities");
-    const done = await waitStatus(id, ["done", "failed"]);
+    const { repoId, done } = await automaticFix("red");
     assert.equal(done.status, "done", done.error ?? "");
-    const [owner, name] = repoId.split("/");
-    const subjects = remotes.log(owner, name, done.branch!).split("\n").filter(Boolean).map((line) => line.split("|")[1]);
-    assert.deepEqual(subjects, ["fix(deps): resolve npm audit vulnerabilities", "initial"]);
+    assert.equal(done.steps.repair, "done");
+    const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
+    assert.match(pull.body, /^> \[!WARNING\]\n> The tests failed after the fixes by Claude Code: Deux tests échouent\./);
   } finally {
     settings = DEFAULT_SETTINGS;
   }
 });
 
-test("fixes by Claude that fail leave the clone as it was, and the operation waits for them again", { skip }, async () => {
+test("fixes by Claude that change nothing push the commit of npm audit fix alone", { skip }, async () => {
   try {
-    const { id } = await waitingRepair("broken");
-    await decideRepair(ctx, id, true);
-    const failed = await waitStatus(id, ["waiting_repair", "waiting_push", "failed"]);
-    assert.equal(failed.status, "waiting_repair", failed.error ?? "");
-    assert.equal(failed.steps.repair, "failed");
-    assert.match(failed.repair?.error ?? "", /The tests could not start/);
-    const session = failed.sessions.at(-1)!;
-    assert.deepEqual([session.kind, session.outcome], ["repair", "failed"]);
-    assert.match(session.error ?? "", /The tests could not start/);
-    assert.ok(!fs.existsSync(path.join(failed.workDir!, "repo", "src", "fixed.js")), "the changes of the failed pass are dropped");
-    await decideRepair(ctx, id, false);
-    const skipped = await waitStatus(id, ["waiting_push", "done", "failed"]);
-    assert.equal(skipped.status, "waiting_push", skipped.error ?? "");
-    assert.equal(skipped.steps.repair, "skipped");
-    cancelOperation(ctx, id);
+    const { repoId, done } = await automaticFix("idle");
+    assert.equal(done.status, "done", done.error ?? "");
+    assert.deepEqual([done.repair?.commit, done.repair?.report?.changes], [null, []]);
+    assert.deepEqual(done.changes.map((change) => change.name), ["lodash"], "the changes still compare with the cloned commit");
+    assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): resolve npm audit vulnerabilities", "initial"]);
+  } finally {
+    settings = DEFAULT_SETTINGS;
+  }
+});
+
+test("fixes by Claude that fail are dropped, and the fixes of npm audit fix are still pushed", { skip }, async () => {
+  try {
+    for (const token of ["broken", "untagged"]) {
+      const { repoId, done } = await automaticFix(token);
+      assert.equal(done.status, "done", done.error ?? "");
+      assert.deepEqual([done.steps.repair, done.steps.push], ["failed", "done"]);
+      assert.match(done.repair?.error ?? "", token === "broken" ? /The tests could not start/ : /^Task MNT-\d+ was created without the tag "demo-\d+"\.$/);
+      const [owner, name] = repoId.split("/");
+      assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): resolve npm audit vulnerabilities", "initial"]);
+      assert.throws(() => remotes.show(owner, name, done.branch!, "src/fixed.js"), "the changes of the failed session are dropped");
+    }
+  } finally {
+    settings = DEFAULT_SETTINGS;
+  }
+});
+
+test("cancelling an operation while Claude works stops Claude Code", { skip }, async () => {
+  settings = claudeSettings("slow");
+  try {
+    const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
+    const started = startUserFix(ctx, repoId, "production");
+    await waitFor("Claude to start", () => ctx.store.getOperation(started.id), (operation) => (operation.repair?.activity.length ?? 0) > 0);
+    cancelOperation(ctx, started.id);
+    const cancelled = await waitStatus(started.id, ["cancelled", "failed", "done"]);
+    assert.equal(cancelled.status, "cancelled", cancelled.error ?? "");
+    assert.deepEqual([cancelled.steps.repair, cancelled.steps.push], ["skipped", "skipped"]);
+    assert.equal(cancelled.workDir, null);
+    assert.equal(cancelled.pullRequest, null);
   } finally {
     settings = DEFAULT_SETTINGS;
   }
@@ -402,36 +290,35 @@ test("fixes by Claude that fail leave the clone as it was, and the operation wai
 
 test("an agent fix without push reports the changes and pushes nothing", { skip }, async () => {
   const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
-  const operation = await runAgentOperation(ctx, repoId, "fix", { scope: "production", force: false, push: false, commitMessage: "x" });
+  const operation = await runAgentOperation(ctx, repoId, "fix", { scope: "production", push: false, commitMessage: "x" });
   assert.equal(operation.status, "done", operation.error ?? "");
-  assert.deepEqual(operation.steps, { clone: "done", audit: "done", fix: "done", analysis: "skipped", force: "skipped", repair: "skipped", push: "skipped" });
-  assert.equal(operation.forceCandidates.length, 1);
+  assert.deepEqual(operation.steps, { clone: "done", audit: "done", fix: "done", repair: "skipped", push: "skipped" });
   assert.deepEqual(operation.changes.map((c) => c.name), ["lodash"]);
   assert.equal(operation.pullRequest, null);
   const [owner, name] = repoId.split("/");
   assert.deepEqual(remotes.branches(owner, name), ["main"]);
 });
 
-test("an agent fix with force and push opens the pull request", { skip }, async () => {
+test("an agent fix with push opens the pull request", { skip }, async () => {
   const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
-  const operation = await runAgentOperation(ctx, repoId, "fix", { scope: "production", force: true, push: true, commitMessage: "chore: audit" });
+  const operation = await runAgentOperation(ctx, repoId, "fix", { scope: "production", push: true, commitMessage: "chore: audit" });
   assert.equal(operation.status, "done", operation.error ?? "");
-  assert.equal(operation.counts.afterForce, 0);
   assert.ok(operation.pullRequest);
   assert.equal(operation.origin, "agent");
+  assert.equal(github.pulls.find((candidate) => candidate.repo === repoId)?.title, "chore: audit");
 });
 
 test("a production fix leaves the devDependencies out, an audit of all dependencies sees them", { skip }, async () => {
   const repoId = await newRepo({ ".": VULNERABLE_DEV_FIXTURE });
-  const all = await runAgentOperation(ctx, repoId, "audit", { scope: "all", force: false, push: false, commitMessage: "x" });
+  const all = await runAgentOperation(ctx, repoId, "audit", { scope: "all", push: false, commitMessage: "x" });
   assert.equal(all.status, "done", all.error ?? "");
   assert.deepEqual(all.found.map((v) => v.name).sort(), ["lodash", "nth-check"]);
 
-  const fixed = await runAgentOperation(ctx, repoId, "fix", { scope: "production", force: true, push: true, commitMessage: "fix: production" });
+  const fixed = await runAgentOperation(ctx, repoId, "fix", { scope: "production", push: true, commitMessage: "fix: production" });
   assert.equal(fixed.status, "done", fixed.error ?? "");
   assert.equal(fixed.scope, "production");
   assert.deepEqual(fixed.found.map((v) => v.name), ["lodash"]);
-  assert.deepEqual([fixed.counts.afterFix, fixed.forceCandidates.length, fixed.steps.force], [0, 0, "skipped"]);
+  assert.equal(fixed.counts.afterFix, 0);
   assert.deepEqual(fixed.changes.map((c) => c.name), ["lodash"]);
   assert.ok(fixed.log.some((entry) => entry.text.startsWith("$ npm audit fix --omit=dev --package-lock-only")));
   const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
@@ -451,7 +338,7 @@ test("an operation clones the chosen branch and opens the pull request towards i
   await assert.rejects(setBranch(ctx.store, ctx.githubConfig(), repoId, "nope"), /Branch "nope" does not exist/);
   await setBranch(ctx.store, ctx.githubConfig(), repoId, "develop");
 
-  const operation = await runAgentOperation(ctx, repoId, "fix", { scope: "production", force: false, push: true, commitMessage: "fix: develop" });
+  const operation = await runAgentOperation(ctx, repoId, "fix", { scope: "production", push: true, commitMessage: "fix: develop" });
   assert.equal(operation.status, "done", operation.error ?? "");
   assert.equal(operation.baseBranch, "develop");
   const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
@@ -482,7 +369,7 @@ test("a repository without package-lock.json fails with an explicit error", asyn
   try {
     fs.writeFileSync(path.join(empty.dir, "README.md"), "nothing\n");
     const repoId = await newRepo({ "README.md": path.join(empty.dir, "README.md") });
-    const operation = await runAgentOperation(ctx, repoId, "audit", { scope: "production", force: false, push: false, commitMessage: "x" });
+    const operation = await runAgentOperation(ctx, repoId, "audit", { scope: "production", push: false, commitMessage: "x" });
     assert.equal(operation.status, "failed");
     assert.equal(operation.steps.clone, "failed");
     assert.match(operation.error ?? "", /No package-lock\.json is tracked in octo\/demo-\d+: npm audit needs a lockfile/);
@@ -495,7 +382,7 @@ test("a repository without package-lock.json fails with an explicit error", asyn
 test("a clone of an unknown remote fails and reports git's message", async () => {
   github.addRepo("octo", "ghost", "main", []);
   const repoId = (await addRepository(ctx.store, ctx.githubConfig(), "octo/ghost", null)).id;
-  const operation = await runAgentOperation(ctx, repoId, "audit", { scope: "production", force: false, push: false, commitMessage: "x" });
+  const operation = await runAgentOperation(ctx, repoId, "audit", { scope: "production", push: false, commitMessage: "x" });
   assert.equal(operation.status, "failed");
   assert.match(operation.error ?? "", /^git clone failed:/);
 });

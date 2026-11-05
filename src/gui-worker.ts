@@ -7,7 +7,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 
 import { IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
-import { AddRepoBodySchema, AuditAllBodySchema, CategoryBodySchema, ForceBodySchema, PushBodySchema, RepairBodySchema, ScopeBodySchema, SetBranchBodySchema, SetCategoryBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
+import { AddRepoBodySchema, AuditAllBodySchema, CategoryBodySchema, MergedBodySchema, ScopeBodySchema, SetBranchBodySchema, SetCategoryBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
 import { SaveSettingsBodySchema } from "../shared/schemas/settings.schema.js";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -267,6 +267,12 @@ app.put("/api/repos/:owner/:name/deploy-pending", (c) => forward(c, "MARK_DEPLOY
 
 app.delete("/api/repos/:owner/:name/deploy-pending", (c) => forward(c, "UNMARK_DEPLOY_PENDING", { repoId: repoId(c) }));
 
+app.put("/api/repos/:owner/:name/merged", async (c) => {
+  const read = await readBody(c, MergedBodySchema);
+  if ("response" in read) return read.response;
+  return forward(c, "MARK_PULL_REQUESTS_MERGED", { repoId: repoId(c), body: read.body });
+});
+
 app.put("/api/repos/:owner/:name/rights", async (c) => {
   const read = await readBody(c, SetRightsBodySchema);
   if ("response" in read) return read.response;
@@ -322,26 +328,6 @@ app.post("/api/repos/:owner/:name/operations", async (c) => {
 app.get("/api/repos/:owner/:name/operations", (c) => forward(c, "LIST_OPERATIONS", { repoId: repoId(c) }));
 
 app.get("/api/operations/:id", (c) => forward(c, "GET_OPERATION", { operationId: c.req.param("id") }));
-
-app.post("/api/operations/:id/force", async (c) => {
-  const read = await readBody(c, ForceBodySchema);
-  if ("response" in read) return read.response;
-  return forward(c, "DECIDE_FORCE", { operationId: c.req.param("id"), body: read.body });
-});
-
-app.post("/api/operations/:id/repair", async (c) => {
-  const read = await readBody(c, RepairBodySchema);
-  if ("response" in read) return read.response;
-  return forward(c, "DECIDE_REPAIR", { operationId: c.req.param("id"), body: read.body });
-});
-
-app.get("/api/operations/:id/remarks", (c) => forward(c, "GET_REMARKS", { operationId: c.req.param("id") }));
-
-app.post("/api/operations/:id/push", async (c) => {
-  const read = await readBody(c, PushBodySchema);
-  if ("response" in read) return read.response;
-  return forward(c, "PUSH_OPERATION", { operationId: c.req.param("id"), body: read.body });
-});
 
 app.post("/api/operations/:id/cancel", (c) => forward(c, "CANCEL_OPERATION", { operationId: c.req.param("id") }));
 

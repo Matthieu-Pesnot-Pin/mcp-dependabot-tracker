@@ -15,26 +15,23 @@ import { resolveLogDir } from "./core/log-dir.js";
 import { githubConfigured, readGitHubConfig } from "./core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
-import { cancelOperation, decideForce, decideRepair, pushOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "./core/operations.js";
+import { cancelOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "./core/operations.js";
 import { AuditAll } from "./core/audit-all.js";
-import { refreshAnalysisTask } from "./core/analysis.js";
-import { analysisRemarks } from "./core/repair.js";
+import { refreshReportTask } from "./core/repair.js";
 import { checkClaudeToken, packagedClaudeCommand, type ClaudeRuntime } from "./core/claude.js";
 import { OrganizerClient } from "./core/organizer.js";
 import { readSettings, saveSettings, settingsView, testOrganizer, type SettingsChecks } from "./core/settings.js";
 import { SaveSettingsBodySchema } from "../shared/schemas/settings.schema.js";
 import { AUDIT_SCOPES } from "../shared/schemas/model.schema.js";
-import { SYNC_INTERVAL_MS, addRepository, auditTargetRepos, queueCategory, queueRepository, unqueueRepository, markDeployPending, unmarkDeployPending,operationSummary, deprecateRepository, listAddableRepositories, restoreRepository, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
+import { SYNC_INTERVAL_MS, addRepository, auditTargetRepos, queueCategory, queueRepository, unqueueRepository, markDeployPending, unmarkDeployPending, markPullRequestsMerged, operationSummary, deprecateRepository, listAddableRepositories, restoreRepository, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
   AddRepoBodySchema,
   AlertRequestSchema,
   CategoryBodySchema,
   CategoryRequestSchema,
-  ForceBodySchema,
+  MergedBodySchema,
   OperationRequestSchema,
-  PushBodySchema,
-  RepairBodySchema,
   RepoRequestSchema,
   AuditAllBodySchema,
   ScopeBodySchema,
@@ -133,10 +130,10 @@ const INSTRUCTIONS = `mcp-dependabot-tracker follows the Dependabot alerts of Gi
 Concepts:
 - A **tracked repository** is a GitHub repository the user added in the GUI. Its open Dependabot alerts, and the pull requests the tracker opened that are not merged or closed yet, are read from GitHub and refreshed every 10 minutes.
 - A **deprecated repository** is one the user set aside in the GUI: it is neither synced nor audited, list_repositories leaves it out, and every tool refuses it until the user restores it.
-- **Rights**: for each repository, the user allows you to run npm audit (audit), npm audit fix (fix), npm audit fix --force (force) and to push the fixes (push). A tool refuses an action you are not allowed to do; only the user can change the rights.
+- **Rights**: for each repository, the user allows you to run npm audit (audit), npm audit fix (fix) and to push the fixes (push). A tool refuses an action you are not allowed to do; only the user can change the rights.
 - The **scope** of an audit is chosen at each launch: production (the default) runs npm audit and npm audit fix with --omit=dev, so the devDependencies are left out; all covers every dependency. Each Dependabot alert says whether its dependency is a runtime or a development one.
 - The **analysed branch** of a repository is chosen by the user in the GUI (the default branch unless changed). Dependabot alerts always describe the default branch; npm audit describes the analysed branch.
-- An **operation** runs in a temporary clone of the analysed branch, deleted at the end: npm audit in every directory that holds a package-lock.json, then npm audit fix with --package-lock-only and --ignore-scripts (lockfiles only, no install, no scripts), optionally --force, then a commit on a new branch fix/npm-audit-<date>-<time> and a pull request to the analysed branch.
+- An **operation** runs in a temporary clone of the analysed branch, deleted at the end: npm audit in every directory that holds a package-lock.json, then npm audit fix with --package-lock-only and --ignore-scripts (lockfiles only, no install, no scripts), then a commit on a new branch fix/npm-audit-<date>-<time> and a pull request to the analysed branch.
 
 Workflow:
 1. list_repositories to see the tracked repositories, their open alerts and your rights.
@@ -144,8 +141,7 @@ Workflow:
 3. run_audit to see what npm audit reports, or fix_vulnerabilities to fix, on the production dependencies unless the user asks for all of them: without push, nothing leaves the temporary clone and the result shows what the fixes would change; with push, the fixes are pushed and the pull request is opened.
 
 Rules:
-- An operation runs until it ends; one operation at a time per repository.
-- npm audit fix --force can install breaking major versions: use force only when the user asked for it.`;
+- An operation runs until it ends; one operation at a time per repository.`;
 
 const server = new Server({ name: "mcp-dependabot-tracker", version: APP_VERSION }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
 
@@ -242,6 +238,11 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
     case "UNMARK_DEPLOY_PENDING":
       return repoView(store, unmarkDeployPending(store, parseRequest(RepoRequestSchema, msg.data).repoId));
 
+    case "MARK_PULL_REQUESTS_MERGED": {
+      const { repoId } = parseRequest(RepoRequestSchema, msg.data);
+      return repoView(store, markPullRequestsMerged(store, repoId, parseRequest(MergedBodySchema, msg.data?.body).deploy));
+    }
+
     case "RESTORE_REPO":
       return repoView(store, await restoreRepository(store, readGitHubConfig(), parseRequest(RepoRequestSchema, msg.data).repoId));
 
@@ -309,24 +310,6 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
     case "GET_OPERATION": {
       store.failOrphanedOperations();
       return { operation: store.getOperation(parseRequest(OperationRequestSchema, msg.data).operationId) };
-    }
-
-    case "DECIDE_FORCE": {
-      const { operationId } = parseRequest(OperationRequestSchema, msg.data);
-      return { operation: decideForce(operations, operationId, parseRequest(ForceBodySchema, msg.data?.body).apply) };
-    }
-
-    case "DECIDE_REPAIR": {
-      const { operationId } = parseRequest(OperationRequestSchema, msg.data);
-      return { operation: await decideRepair(operations, operationId, parseRequest(RepairBodySchema, msg.data?.body).run) };
-    }
-
-    case "GET_REMARKS":
-      return await analysisRemarks(readSettings(dataDir), store.getOperation(parseRequest(OperationRequestSchema, msg.data).operationId));
-
-    case "PUSH_OPERATION": {
-      const { operationId } = parseRequest(OperationRequestSchema, msg.data);
-      return { operation: pushOperation(operations, operationId, parseRequest(PushBodySchema, msg.data?.body).commitMessage) };
     }
 
     case "CANCEL_OPERATION":
@@ -435,7 +418,7 @@ let syncing = false;
 
 /**
  * Relit les alertes des dépôts dont la dernière lecture date de plus de 10
- * minutes, et le statut de la tâche organizer de leur dernière analyse.
+ * minutes, et le statut de la tâche organizer du dernier rapport de Claude.
  */
 async function syncStaleRepos() {
   if (syncing || !githubConfigured()) return;
@@ -445,7 +428,7 @@ async function syncStaleRepos() {
     for (const repo of staleRepos(store, SYNC_INTERVAL_MS)) {
       const synced = await syncRepository(store, config, repo.id);
       if (synced.syncError) logger.warn(`Dependabot alerts of ${repo.id} not synced: ${synced.syncError}`);
-      await refreshAnalysisTask(store, readSettings(dataDir), repo.id).catch((err: any) =>
+      await refreshReportTask(store, readSettings(dataDir), repo.id).catch((err: any) =>
         logger.warn(`Organizer task of ${repo.id} not refreshed: ${err?.message ?? err}`)
       );
     }
@@ -470,7 +453,7 @@ const TOOLS = [
   {
     name: "list_repositories",
     description:
-      "List the tracked repositories that are not deprecated, with their category, their analysed branch, their open Dependabot alerts by severity, the time of the last sync, the rights the user gave you (audit, fix, force, push), the pull requests the tracker opened that are still open, and the operation in progress. Start here.",
+      "List the tracked repositories that are not deprecated, with their category, their analysed branch, their open Dependabot alerts by severity, the time of the last sync, the rights the user gave you (audit, fix, push), the pull requests the tracker opened that are still open, and the operation in progress. Start here.",
     inputSchema: {
       type: "object" as const,
       properties: { category: { type: "string", description: "Only list the repositories of this category, by name (case-insensitive). The user creates the categories in the GUI." } },
@@ -489,7 +472,7 @@ const TOOLS = [
   {
     name: "run_audit",
     description:
-      "Run npm audit on a temporary clone of the analysed branch, in every directory that holds a package-lock.json, and report the vulnerabilities with the fix npm proposes (none, within the declared ranges, or a major upgrade that needs --force). Needs the audit right. Nothing is changed; the clone is deleted.",
+      "Run npm audit on a temporary clone of the analysed branch, in every directory that holds a package-lock.json, and report the vulnerabilities with the fix npm proposes (none, within the declared ranges, or a major upgrade). Needs the audit right. Nothing is changed; the clone is deleted.",
     inputSchema: {
       type: "object" as const,
       properties: { repository: { type: "string", description: REPOSITORY_DOC }, scope: SCOPE_PROPERTY },
@@ -499,17 +482,13 @@ const TOOLS = [
   {
     name: "fix_vulnerabilities",
     description:
-      "Fix the npm vulnerabilities of a tracked repository in a temporary clone of its analysed branch: npm audit, then npm audit fix --package-lock-only --ignore-scripts, then optionally npm audit fix --force, then optionally a commit on a new branch fix/npm-audit-<date>-<time>, its push and a pull request to the analysed branch. " +
-      "Needs the fix right, plus the force right with force and the push right with push. Without push, nothing leaves the clone: the result reports what the fixes change. Waits until the operation ends and reports the vulnerabilities before and after, the updated packages and the pull request.",
+      "Fix the npm vulnerabilities of a tracked repository in a temporary clone of its analysed branch: npm audit, then npm audit fix --package-lock-only --ignore-scripts, then optionally a commit on a new branch fix/npm-audit-<date>-<time>, its push and a pull request to the analysed branch. " +
+      "Needs the fix right, plus the push right with push. Without push, nothing leaves the clone: the result reports what the fixes change. Waits until the operation ends and reports the vulnerabilities before and after, the updated packages and the pull request.",
     inputSchema: {
       type: "object" as const,
       properties: {
         repository: { type: "string", description: REPOSITORY_DOC },
         scope: SCOPE_PROPERTY,
-        force: {
-          type: "boolean",
-          description: "Also run npm audit fix --force when vulnerabilities remain that only a major upgrade fixes (default false). Breaking changes possible: only when the user asked for it.",
-        },
         push: { type: "boolean", description: "Commit the fixes on a new branch, push it and open a pull request (default false)." },
         commit_message: { type: "string", description: "Commit message, also the pull request title (first line). Default \"fix(deps): resolve npm audit vulnerabilities\"." },
       },

@@ -5,6 +5,7 @@ import type { Category, Repo } from '@shared/schemas/model.schema'
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { CategorySidebar } from '../components/CategorySidebar'
 import { Icon } from '../components/Icon'
+import { MergedActions } from '../components/MergedActions'
 import { SeverityPill } from '../components/Pill'
 import { Toggle } from '../components/Toggle'
 import { usePolling } from '../hooks/usePolling'
@@ -17,7 +18,6 @@ const POLL_MS = 3000
 
 /** Clés du navigateur qui retiennent la position des interrupteurs de l'accueil. */
 const ONLY_VULNERABLE_KEY = 'dependabot-tracker.only-vulnerable'
-const ONLY_PENDING_PR_KEY = 'dependabot-tracker.only-pending-pr'
 
 function readFlag(key: string): boolean {
   try {
@@ -89,16 +89,14 @@ function PendingPullRequests({ repo }: { repo: Repo }) {
   )
 }
 
-/** Message de l'accueil quand les interrupteurs écartent tous les dépôts de l'onglet, désigné par `where`. */
-function filteredOutMessage(onlyVulnerable: boolean, onlyPendingPr: boolean, where: string): string {
-  if (onlyVulnerable && onlyPendingPr) return `Aucun dépôt vulnérable avec une PR en attente ${where}.`
-  if (onlyPendingPr) return `Aucune PR en attente ${where}.`
+/** Message de l'accueil quand l'interrupteur écarte tous les dépôts de l'onglet, désigné par `where`. */
+function filteredOutMessage(where: string): string {
   return `Aucun dépôt vulnérable ${where}.`
 }
 
-/** Tâche organizer de la dernière analyse par Claude, tant qu'elle n'est pas terminée ; s'ouvre sur le site de l'organizer. */
+/** Tâche organizer du dernier rapport de Claude, tant qu'elle n'est pas terminée ; s'ouvre sur le site de l'organizer. */
 function AnalysisTaskNote({ view }: { view: RepoView }) {
-  const task = view.analysisTask
+  const task = view.reportTask
   if (!task) return null
   return (
     <a className="pr-note" href={task.url} target="_blank" rel="noreferrer" title={task.title}>
@@ -122,13 +120,12 @@ function AnalysisTaskNote({ view }: { view: RepoView }) {
 function repoStatus(view: RepoView): { note: ReactNode; pill: ReactNode } {
   const { repo, activeOperation, cleanAudit, cleanProductionAudit, auditFindings, unfixable } = view
   if (activeOperation) {
-    const analysing = activeOperation.steps.analysis === 'running'
     const repairing = activeOperation.steps.repair === 'running'
     return {
       note: (
         <span className="status status-busy">
           <Icon name="loader-circle" className="spin" />
-          {analysing ? 'Analyse par Claude…' : repairing ? 'Corrections par Claude…' : activeOperation.kind === 'audit' ? 'Audit en cours' : 'Correction en cours'}
+          {repairing ? 'Corrections par Claude…' : activeOperation.kind === 'audit' ? 'Audit en cours' : 'Correction en cours'}
         </span>
       ),
       pill: null,
@@ -401,6 +398,11 @@ function AddRepoModal({ categories, initialCategory, onClose }: { categories: Ca
   )
 }
 
+/** Date de la plus ancienne pull request en attente d'un dépôt. */
+function oldestPullRequest(view: RepoView): string {
+  return view.repo.pullRequests.map((pull) => pull.createdAt).sort()[0] ?? ''
+}
+
 /** Bouton de chaque ligne qui met le dépôt dans la file d'attente, ou l'en retire ; allumé tant que le dépôt y est. */
 function QueueToggle({ view, onDone }: { view: RepoView; onDone: () => void }) {
   const [busy, setBusy] = useState(false)
@@ -627,7 +629,9 @@ function DeprecatedList({ views, onChanged }: { views: RepoView[]; onChanged: ()
  * Accueil : la barre des catégories, et les dépôts de l'onglet choisi. Une
  * catégorie, ou tous les projets, liste ses dépôts non dépréciés du plus exposé
  * au moins exposé ; la file d'attente liste les siens dans l'ordre de leur
- * entrée, chacun avec « Traité » ; « À déployer » liste les dépôts marqués, dans
+ * entrée, chacun avec « Traité » ; « PR en attente » liste les dépôts dont une
+ * pull request du tracker attend, de la plus ancienne à la plus récente, chacun
+ * avec « Mergée » et « Mergée, à déployer » ; « À déployer » liste les dépôts marqués, dans
  * l'ordre de leur marque, chacun avec « Déployé » ; l'onglet « Dépréciés » liste les autres.
  */
 export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; adding: boolean; onCloseAdd: () => void; onAdd: () => void }) {
@@ -638,27 +642,38 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
   const category = categories.find((candidate) => candidate.id === categoryId) ?? null
   const unknownCategory = categoryId !== null && repos.data !== null && category === null
   const [onlyVulnerable, setOnlyVulnerable] = useStoredFlag(ONLY_VULNERABLE_KEY)
-  const [onlyPendingPr, setOnlyPendingPr] = useStoredFlag(ONLY_PENDING_PR_KEY)
   const allViews = repos.data?.repos ?? []
   const tracked = allViews.filter((view) => view.repo.deprecatedAt === null)
   const deprecated = allViews.filter((view) => view.repo.deprecatedAt !== null).sort((a, b) => b.repo.deprecatedAt!.localeCompare(a.repo.deprecatedAt!))
   const showingQueue = tab.kind === 'queue'
+  const showingPulls = tab.kind === 'pulls'
   const showingDeploy = tab.kind === 'deploy'
   const showingDeprecated = tab.kind === 'deprecated'
   const inCategory = showingQueue
     ? tracked.filter((view) => view.repo.queuedAt !== null).sort((a, b) => a.repo.queuedAt!.localeCompare(b.repo.queuedAt!))
-    : showingDeploy
-      ? tracked.filter((view) => view.repo.deployPendingAt !== null).sort((a, b) => a.repo.deployPendingAt!.localeCompare(b.repo.deployPendingAt!))
-      : tracked.filter((view) => categoryId === null || view.repo.categoryId === categoryId)
-  const views = inCategory.filter((view) => (!onlyVulnerable || isVulnerable(view)) && (!onlyPendingPr || view.repo.pullRequests.length > 0))
-  const where = showingQueue ? "dans la file d'attente" : showingDeploy ? 'parmi les dépôts à déployer' : categoryId === null ? 'parmi vos projets' : 'dans cette catégorie'
+    : showingPulls
+      ? tracked.filter((view) => view.repo.pullRequests.length > 0).sort((a, b) => oldestPullRequest(a).localeCompare(oldestPullRequest(b)))
+      : showingDeploy
+        ? tracked.filter((view) => view.repo.deployPendingAt !== null).sort((a, b) => a.repo.deployPendingAt!.localeCompare(b.repo.deployPendingAt!))
+        : tracked.filter((view) => categoryId === null || view.repo.categoryId === categoryId)
+  const views = inCategory.filter((view) => !onlyVulnerable || isVulnerable(view))
+  const where = showingQueue
+    ? "dans la file d'attente"
+    : showingPulls
+      ? 'parmi les PR en attente'
+      : showingDeploy
+        ? 'parmi les dépôts à déployer'
+        : categoryId === null
+          ? 'parmi vos projets'
+          : 'dans cette catégorie'
 
   useEffect(() => {
     if (showingDeprecated) rememberHomeTab({ kind: 'deprecated' })
     else if (showingQueue) rememberHomeTab({ kind: 'queue' })
+    else if (showingPulls) rememberHomeTab({ kind: 'pulls' })
     else if (showingDeploy) rememberHomeTab({ kind: 'deploy' })
     else if (!unknownCategory) rememberHomeTab({ kind: 'category', categoryId })
-  }, [showingDeprecated, showingQueue, showingDeploy, categoryId, unknownCategory])
+  }, [showingDeprecated, showingQueue, showingPulls, showingDeploy, categoryId, unknownCategory])
 
   if (showingDeprecated) {
     return (
@@ -681,13 +696,9 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
       {repos.data && <CategorySidebar categories={categories} views={tracked} deprecatedCount={deprecated.length} tab={tab} onChanged={repos.reload} />}
       <div className="page">
         <div className="home-head">
-          <h1 className="page-title">{showingQueue ? "File d'attente" : showingDeploy ? 'À déployer' : category ? category.name : 'Tous mes projets'}</h1>
+          <h1 className="page-title">{showingQueue ? "File d'attente" : showingPulls ? 'PR en attente' : showingDeploy ? 'À déployer' : category ? category.name : 'Tous mes projets'}</h1>
           <div className="filters">
             {category && inCategory.length > 0 && <QueueCategoryButton categoryId={category.id} views={inCategory} onDone={repos.reload} />}
-            <label className="filter">
-              PR en attente
-              <Toggle checked={onlyPendingPr} onChange={setOnlyPendingPr} label="PR en attente" />
-            </label>
             <label className="filter">
               Vulnérables seulement
               <Toggle checked={onlyVulnerable} onChange={setOnlyVulnerable} label="Vulnérables seulement" />
@@ -708,7 +719,7 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
         )}
         {repos.data && !unknownCategory && inCategory.length > 0 && views.length === 0 && (
           <div className="panel empty">
-            <p>{filteredOutMessage(onlyVulnerable, onlyPendingPr, where)}</p>
+            <p>{filteredOutMessage(where)}</p>
           </div>
         )}
         {repos.data && showingQueue && inCategory.length === 0 && (
@@ -716,12 +727,17 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
             <p>La file d'attente est vide : ajoutez-y un dépôt avec le bouton de file de sa ligne.</p>
           </div>
         )}
+        {repos.data && showingPulls && inCategory.length === 0 && (
+          <div className="panel empty">
+            <p>Aucune pull request en attente : une correction aboutie y place son dépôt jusqu'à la fusion.</p>
+          </div>
+        )}
         {repos.data && showingDeploy && inCategory.length === 0 && (
           <div className="panel empty">
             <p>Aucun dépôt à déployer : marquez-en un avec le bouton fusée de sa ligne, ou depuis l'écran du dépôt.</p>
           </div>
         )}
-        {repos.data && !showingQueue && !showingDeploy && !unknownCategory && inCategory.length === 0 && (
+        {repos.data && !showingQueue && !showingPulls && !showingDeploy && !unknownCategory && inCategory.length === 0 && (
           <div className="panel empty">
             <p>{categoryId === null ? 'Aucun dépôt suivi.' : 'Aucun dépôt dans cette catégorie.'}</p>
             <button type="button" className="button button-primary" onClick={onAdd}>
@@ -746,6 +762,8 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
                 actions={
                   showingQueue ? (
                     <DoneButton repoId={view.repo.id} onDone={repos.reload} />
+                  ) : showingPulls ? (
+                    <MergedActions repoId={view.repo.id} onDone={repos.reload} compact />
                   ) : showingDeploy ? (
                     <DeployedButton repoId={view.repo.id} onDone={repos.reload} />
                   ) : (

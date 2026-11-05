@@ -11,7 +11,6 @@ import { errorResult, optionalBoolean, optionalEnum, optionalString, rejectUnkno
 const RIGHT_LABELS: Record<Right, string> = {
   audit: "run npm audit",
   fix: "run npm audit fix",
-  force: "run npm audit fix --force",
   push: "push a branch and open a pull request",
 };
 
@@ -69,18 +68,16 @@ export async function runAudit(ctx: OperationContext, args: Args): Promise<Opera
   const repo = ctx.store.getRepo(requireString(args, "repository"));
   const scope = optionalEnum(args, "scope", AUDIT_SCOPES, DEFAULT_AUDIT_SCOPE);
   assertAllowed(repo, "audit");
-  return operationResult(await runAgentOperation(ctx, repo.id, "audit", { scope, force: false, push: false, commitMessage: DEFAULT_COMMIT_MESSAGE }));
+  return operationResult(await runAgentOperation(ctx, repo.id, "audit", { scope, push: false, commitMessage: DEFAULT_COMMIT_MESSAGE }));
 }
 
 export async function fixVulnerabilities(ctx: OperationContext, args: Args): Promise<OperationToolResult> {
-  rejectUnknownFields(args, ["repository", "scope", "force", "push", "commit_message"]);
+  rejectUnknownFields(args, ["repository", "scope", "push", "commit_message"]);
   const repo = ctx.store.getRepo(requireString(args, "repository"));
   const scope = optionalEnum(args, "scope", AUDIT_SCOPES, DEFAULT_AUDIT_SCOPE);
-  const force = optionalBoolean(args, "force", false);
   const push = optionalBoolean(args, "push", false);
   const commitMessage = optionalString(args, "commit_message") ?? DEFAULT_COMMIT_MESSAGE;
   assertAllowed(repo, "fix");
-  if (force) assertAllowed(repo, "force");
   if (push) assertAllowed(repo, "push");
-  return operationResult(await runAgentOperation(ctx, repo.id, "fix", { scope, force, push, commitMessage }));
+  return operationResult(await runAgentOperation(ctx, repo.id, "fix", { scope, push, commitMessage }));
 }

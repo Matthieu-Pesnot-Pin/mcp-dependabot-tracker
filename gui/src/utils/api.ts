@@ -1,4 +1,4 @@
-import type { AddableReposResponse, AppConfig, AuditAllResponse, AuditTarget, BranchesResponse, CategoriesResponse, OperationResponse, OperationsResponse, RemarksResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
+import type { AddableReposResponse, AppConfig, AuditAllResponse, AuditTarget, BranchesResponse, CategoriesResponse, OperationResponse, OperationsResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
 import type { AuditScope, Category, Rights } from '@shared/schemas/model.schema'
 import type { SaveSettingsBody, SettingsView } from '@shared/schemas/settings.schema'
 
@@ -69,6 +69,7 @@ export const api = {
   unqueueRepo: (repoId: string) => send<RepoView>('DELETE', `${repoPath(repoId)}/queued`),
   markDeployPending: (repoId: string) => send<RepoView>('PUT', `${repoPath(repoId)}/deploy-pending`),
   unmarkDeployPending: (repoId: string) => send<RepoView>('DELETE', `${repoPath(repoId)}/deploy-pending`),
+  markMerged: (repoId: string, deploy: boolean) => send<RepoView>('PUT', `${repoPath(repoId)}/merged`, { deploy }),
   listBranches:(repoId: string) => request<BranchesResponse>(`${repoPath(repoId)}/branches`),
   setBranch: (repoId: string, branch: string) => send<RepoView>('PUT', `${repoPath(repoId)}/branch`, { branch }),
   markAlertHandled: (repoId: string, number: number) => send<RepoView>('PUT', `${repoPath(repoId)}/alerts/${number}/handled`),
@@ -83,10 +84,6 @@ export const api = {
   startFix: (repoId: string, scope: AuditScope) => send<OperationResponse>('POST', `${repoPath(repoId)}/operations`, { scope }),
   getOperation: (id: string) => request<OperationResponse>(operationPath(id)),
   listOperations: (repoId: string) => request<OperationsResponse>(`${repoPath(repoId)}/operations`),
-  decideForce: (id: string, apply: boolean) => send<OperationResponse>('POST', `${operationPath(id)}/force`, { apply }),
-  decideRepair: (id: string, run: boolean) => send<OperationResponse>('POST', `${operationPath(id)}/repair`, { run }),
-  getRemarks: (id: string) => request<RemarksResponse>(`${operationPath(id)}/remarks`),
-  push: (id: string, commitMessage: string) => send<OperationResponse>('POST', `${operationPath(id)}/push`, { commitMessage }),
   cancel: (id: string) => send<OperationResponse>('POST', `${operationPath(id)}/cancel`),
   getSettings: () => request<SettingsView>('settings'),
   saveSettings: (body: SaveSettingsBody) => send<SettingsView>('PUT', 'settings', body),

@@ -23,7 +23,6 @@ const CONFIRM_MS = 4000
 const RIGHT_TEXTS: Record<Right, { label: string; description: string }> = {
   audit: { label: 'Audit', description: 'Cloner le dépôt et lancer npm audit' },
   fix: { label: 'Audit fix', description: 'Appliquer npm audit fix dans le clone' },
-  force: { label: 'Audit fix --force', description: 'Peut installer des versions majeures' },
   push: { label: 'Commit et push', description: 'Pousser sur une nouvelle branche et ouvrir la PR' },
 }
 
@@ -352,7 +351,7 @@ export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
           {activeOperation ? (
             <button type="button" className="button button-primary" onClick={() => navigate(hrefs.operation(repo.id, activeOperation.id))}>
               <Icon name="wrench" />
-              {activeOperation.kind === 'audit' ? "Voir l'audit en cours" : 'Reprendre la correction'}
+              {activeOperation.kind === 'audit' ? "Voir l'audit en cours" : 'Voir la correction en cours'}
             </button>
           ) : repo.deprecatedAt ? (
             <button

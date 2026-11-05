@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AUDIT_SCOPES, RightsSchema, type AlertSeverity, type AnalysisTask, type AuditScope, type Category, type Operation, type Remark, type Repo } from "./model.schema.js";
+import { AUDIT_SCOPES, RightsSchema, type AlertSeverity, type AuditScope, type Category, type Operation, type OrganizerTask, type Repo } from "./model.schema.js";
 
 /** Corps de `POST /api/repos` : `propriétaire/nom` ou lien GitHub, et la catégorie où le ranger (aucune par défaut). */
 export const AddRepoBodySchema = z.object({
@@ -58,19 +58,10 @@ export const AuditAllBodySchema = ScopeBodySchema.extend({ target: AuditTargetSc
 
 export type AuditAllBody = z.infer<typeof AuditAllBodySchema>;
 
-/** `apply` : lancer `npm audit fix --force` ; sinon l'étape est passée. */
-export const ForceBodySchema = z.object({ apply: z.boolean() });
+/** `deploy` : le dépôt passe aussi « à déployer », son déploiement n'étant pas automatique. */
+export const MergedBodySchema = z.object({ deploy: z.boolean() });
 
-export type ForceBody = z.infer<typeof ForceBodySchema>;
-
-/** `run` : lancer ou relancer les corrections par Claude ; sinon l'étape est passée. */
-export const RepairBodySchema = z.object({ run: z.boolean() });
-
-export type RepairBody = z.infer<typeof RepairBodySchema>;
-
-export const PushBodySchema = z.object({ commitMessage: z.string().trim().min(1) });
-
-export type PushBody = z.infer<typeof PushBodySchema>;
+export type MergedBody = z.infer<typeof MergedBodySchema>;
 
 /** Identifiant d'un dépôt dans une requête IPC. */
 export const RepoRequestSchema = z.object({ repoId: z.string().min(1) });
@@ -105,8 +96,8 @@ export interface CleanAudit {
  * qu'a trouvé le dernier audit de la branche par défaut alors que Dependabot ne
  * signale aucune alerte dans son périmètre ; `unfixable` les paquets pour lesquels le dernier audit n'a
  * trouvé aucune version corrigée, hors ceux marqués corrigés à la main ;
- * `analysisTask` la tâche organizer de la dernière analyse par Claude, tant
- * qu'elle n'est pas terminée.
+ * `reportTask` la tâche organizer du dernier rapport de Claude, tant qu'elle
+ * n'est pas terminée.
  */
 export interface RepoView {
   repo: Repo;
@@ -117,7 +108,7 @@ export interface RepoView {
   cleanProductionAudit: CleanAudit | null;
   auditFindings: AuditFindings | null;
   unfixable: string[];
-  analysisTask: AnalysisTask | null;
+  reportTask: OrganizerTask | null;
 }
 
 /**
@@ -161,8 +152,8 @@ export interface OperationResponse {
 /**
  * Ligne de l'historique d'un dépôt : une opération sans son journal ni le
  * déroulé de ses sessions. `after` est le nombre de vulnérabilités après la
- * dernière étape qui a audité ; `claudeRuns` le nombre de passages des
- * corrections par Claude.
+ * dernière étape qui a audité ; `claude` est vrai quand Claude a été lancé
+ * pour corriger.
  */
 export interface OperationSummary {
   id: string;
@@ -174,8 +165,7 @@ export interface OperationSummary {
   createdAt: string;
   before: number | null;
   after: number | null;
-  analysed: boolean;
-  claudeRuns: number;
+  claude: boolean;
   pullRequest: Operation["pullRequest"];
   error: string | null;
 }
@@ -183,12 +173,6 @@ export interface OperationSummary {
 /** Historique d'un dépôt, de l'opération la plus récente à la plus ancienne. */
 export interface OperationsResponse {
   operations: OperationSummary[];
-}
-
-/** Tâche de l'analyse d'une opération et ses commentaires récents, du plus ancien au plus récent. */
-export interface RemarksResponse {
-  task: AnalysisTask;
-  remarks: Remark[];
 }
 
 export interface AppConfig {
