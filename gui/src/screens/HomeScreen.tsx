@@ -2,7 +2,7 @@ import { pendingAlerts } from '@shared/alerts'
 import { searchRepositories } from '@shared/repo-search'
 import type { RepoView } from '@shared/schemas/api.schema'
 import type { Category, Repo } from '@shared/schemas/model.schema'
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { CategorySidebar } from '../components/CategorySidebar'
 import { Icon } from '../components/Icon'
 import { SeverityPill } from '../components/Pill'
@@ -110,83 +110,140 @@ function AnalysisTaskNote({ view }: { view: RepoView }) {
 }
 
 /**
- * État d'un dépôt en bout de ligne : une seule information, la plus utile. Des
- * alertes toutes corrigées à la main, ou un audit sans vulnérabilité plus
- * récent qu'elles, estompent leur pastille ; des vulnérabilités que l'audit a
- * trouvées sans alerte Dependabot ont leur propre pastille ; des paquets sans
- * version corrigée sont signalés devant elles.
+ * État d'un dépôt, en deux parties : `note`, l'information la plus utile, à la
+ * suite de la PR et de la tâche ; `pill`, la pastille d'alertes, devant les
+ * boutons de la ligne. Des alertes toutes corrigées à la main, ou un audit sans
+ * vulnérabilité plus récent qu'elles, estompent leur pastille ; des
+ * vulnérabilités que l'audit a trouvées sans alerte Dependabot ont leur propre
+ * pastille ; des paquets sans version corrigée sont signalés devant elles.
  */
-function RepoStatus({ view }: { view: RepoView }) {
+function repoStatus(view: RepoView): { note: ReactNode; pill: ReactNode } {
   const { repo, activeOperation, cleanAudit, auditFindings, unfixable } = view
   if (activeOperation) {
     const analysing = activeOperation.steps.analysis === 'running'
     const repairing = activeOperation.steps.repair === 'running'
-    return (
-      <span className="status status-busy">
-        <Icon name="loader-circle" className="spin" />
-        {analysing ? 'Analyse par Claude…' : repairing ? 'Corrections par Claude…' : activeOperation.kind === 'audit' ? 'Audit en cours' : 'Correction en cours'}
-      </span>
-    )
+    return {
+      note: (
+        <span className="status status-busy">
+          <Icon name="loader-circle" className="spin" />
+          {analysing ? 'Analyse par Claude…' : repairing ? 'Corrections par Claude…' : activeOperation.kind === 'audit' ? 'Audit en cours' : 'Correction en cours'}
+        </span>
+      ),
+      pill: null,
+    }
   }
   const pending = pendingAlerts(repo)
   const all = worstSeverity(repo.alerts)
   if (all && pending.length === 0) {
-    return (
-      <span className="status status-clean" title="Toutes les alertes sont marquées corrigées à la main.">
-        <Icon name="circle-check" className="text-ok" />
-        Corrigé à la main
+    return {
+      note: (
+        <span className="status status-clean" title="Toutes les alertes sont marquées corrigées à la main.">
+          <Icon name="circle-check" className="text-ok" />
+          Corrigé à la main
+        </span>
+      ),
+      pill: (
         <SeverityPill severity={all} faded>
           {plural(repo.alerts.length, 'alerte')}
         </SeverityPill>
-      </span>
-    )
+      ),
+    }
   }
   const worst = worstSeverity(pending)
   if (worst && cleanAudit) {
-    return (
-      <span className="status status-clean" title={`Le dernier audit (${SCOPE_LABELS[cleanAudit.scope]}) n'a trouvé aucune vulnérabilité : Dependabot n'a pas encore repassé.`}>
-        <Icon name="circle-check" className="text-ok" />
-        Audit OK le {dayAndTime(cleanAudit.at)}
+    return {
+      note: (
+        <span className="status status-clean" title={`Le dernier audit (${SCOPE_LABELS[cleanAudit.scope]}) n'a trouvé aucune vulnérabilité : Dependabot n'a pas encore repassé.`}>
+          <Icon name="circle-check" className="text-ok" />
+          Audit OK le {dayAndTime(cleanAudit.at)}
+        </span>
+      ),
+      pill: (
         <SeverityPill severity={worst} faded>
           {plural(pending.length, 'alerte')}
         </SeverityPill>
-      </span>
-    )
+      ),
+    }
   }
   if (worst) {
-    return (
-      <span className="status status-clean">
-        <UnfixableNote unfixable={unfixable} />
-        <SeverityPill severity={worst}>{plural(pending.length, 'alerte')}</SeverityPill>
-      </span>
-    )
+    return {
+      note: null,
+      pill: (
+        <>
+          <UnfixableNote unfixable={unfixable} />
+          <SeverityPill severity={worst}>{plural(pending.length, 'alerte')}</SeverityPill>
+        </>
+      ),
+    }
   }
   if (auditFindings) {
-    return (
-      <span
-        className="status status-clean"
-        title={`Dependabot ne signale aucune alerte, mais le dernier audit de la branche par défaut (${SCOPE_LABELS[auditFindings.scope]}) a trouvé des vulnérabilités : Dependabot n'a pas encore repassé.`}
-      >
-        <UnfixableNote unfixable={unfixable} />
-        <Icon name="triangle-alert" className="text-warning" />
-        Audit du {dayAndTime(auditFindings.at)}
-        <SeverityPill severity={auditFindings.severity}>{plural(auditFindings.count, 'vulnérabilité')}</SeverityPill>
-      </span>
-    )
+    return {
+      note: (
+        <span
+          className="status status-clean"
+          title={`Dependabot ne signale aucune alerte, mais le dernier audit de la branche par défaut (${SCOPE_LABELS[auditFindings.scope]}) a trouvé des vulnérabilités : Dependabot n'a pas encore repassé.`}
+        >
+          <Icon name="triangle-alert" className="text-warning" />
+          Audit du {dayAndTime(auditFindings.at)}
+        </span>
+      ),
+      pill: (
+        <>
+          <UnfixableNote unfixable={unfixable} />
+          <SeverityPill severity={auditFindings.severity}>{plural(auditFindings.count, 'vulnérabilité')}</SeverityPill>
+        </>
+      ),
+    }
   }
   if (repo.syncError) {
-    return (
-      <span className="status status-error" title={repo.syncError}>
-        <Icon name="circle-alert" />
-        Synchronisation impossible
-      </span>
-    )
+    return {
+      note: (
+        <span className="status status-error" title={repo.syncError}>
+          <Icon name="circle-alert" />
+          Synchronisation impossible
+        </span>
+      ),
+      pill: null,
+    }
   }
-  if (!repo.syncedAt) return <span className="status status-muted">Synchronisation…</span>
+  if (!repo.syncedAt) return { note: <span className="status status-muted">Synchronisation…</span>, pill: null }
+  return {
+    note: (
+      <span className="status status-muted">
+        <Icon name="circle-check" className="text-ok" />À jour
+      </span>
+    ),
+    pill: null,
+  }
+}
+
+/**
+ * Ligne d'un dépôt de l'accueil, sur deux niveaux : le nom seul sur la première
+ * ligne ; sur la seconde, la PR, la tâche et l'état à gauche, la pastille et
+ * les boutons à droite. Le chevron est centré sur la hauteur de la ligne.
+ */
+function RepoRow({ view, actions }: { view: RepoView; actions: ReactNode }) {
+  const { note, pill } = repoStatus(view)
   return (
-    <span className="status status-muted">
-      <Icon name="circle-check" className="text-ok" />À jour
-    </span>
+    <div className="row row-linked row-repo">
+      <div className="row-body">
+        <a className="row-title row-link" href={hrefs.repo(view.repo.id)}>
+          {view.repo.id}
+        </a>
+        <div className="row-details">
+          <div className="row-meta">
+            <PendingPullRequests repo={view.repo} />
+            <AnalysisTaskNote view={view} />
+            {note}
+          </div>
+          <div className="row-end">
+            {pill && <span className="row-status">{pill}</span>}
+            {actions}
+          </div>
+        </div>
+      </div>
+      <Icon name="chevron-right" className="row-chevron" />
+    </div>
   )
 }
 
@@ -598,23 +655,20 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
         {views.length > 0 && (
           <div className="panel list">
             {views.map((view) => (
-              <div key={view.repo.id} className="row row-linked">
-                <a className="row-title row-link" href={hrefs.repo(view.repo.id)}>
-                  {view.repo.id}
-                </a>
-                <PendingPullRequests repo={view.repo} />
-                <AnalysisTaskNote view={view} />
-                <RepoStatus view={view} />
-                {showingQueue ? (
-                  <DoneButton repoId={view.repo.id} onDone={repos.reload} />
-                ) : (
-                  <>
-                    <QueueToggle view={view} onDone={repos.reload} />
-                    <DeprecateButton repoId={view.repo.id} onDone={repos.reload} />
-                  </>
-                )}
-                <Icon name="chevron-right" className="row-chevron" />
-              </div>
+              <RepoRow
+                key={view.repo.id}
+                view={view}
+                actions={
+                  showingQueue ? (
+                    <DoneButton repoId={view.repo.id} onDone={repos.reload} />
+                  ) : (
+                    <>
+                      <QueueToggle view={view} onDone={repos.reload} />
+                      <DeprecateButton repoId={view.repo.id} onDone={repos.reload} />
+                    </>
+                  )
+                }
+              />
             ))}
           </div>
         )}

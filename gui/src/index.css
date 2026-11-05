@@ -651,8 +651,48 @@ code {
   margin-right: 6px;
 }
 
-.status-clean .pill {
-  margin-left: 20px;
+/* Ligne d'un dépôt sur deux niveaux : le nom au-dessus, les informations et les boutons en dessous. */
+.row-repo {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.row-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.row-details {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-height: 28px;
+}
+
+.row-meta {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 18px;
+  min-width: 0;
+}
+
+.row-end {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.row-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-right: 10px;
 }
 
 .unfixable-note {
