@@ -87,13 +87,15 @@ export interface CleanAudit {
 
 /**
  * Dernier audit d'un dépôt, quelle que soit sa branche : sa date, son
- * périmètre, la branche auditée, le nombre de vulnérabilités trouvées et la
- * plus haute gravité, null sans vulnérabilité.
+ * périmètre, la branche auditée, le nombre de vulnérabilités et la plus haute
+ * gravité, null sans vulnérabilité. `afterFix` : audit qui suit les corrections
+ * d'une opération, sur la branche de sa pull request.
  */
 export interface LastAudit {
   at: string;
   scope: AuditScope;
   branch: string;
+  afterFix: boolean;
   count: number;
   severity: AlertSeverity | null;
 }

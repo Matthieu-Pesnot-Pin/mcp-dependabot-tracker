@@ -15,7 +15,7 @@ import { resolveLogDir } from "./core/log-dir.js";
 import { githubConfigured, readGitHubConfig } from "./core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
-import { cancelOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "./core/operations.js";
+import { assertMergeAuditPossible, cancelOperation, runDefaultBranchAudit, startMergeAudit, startUserFix, type OperationContext } from "./core/operations.js";
 import { AuditAll } from "./core/audit-all.js";
 import { refreshReportTask } from "./core/repair.js";
 import { checkClaudeToken, packagedClaudeCommand, type ClaudeRuntime } from "./core/claude.js";
@@ -240,7 +240,12 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
 
     case "MARK_PULL_REQUESTS_MERGED": {
       const { repoId } = parseRequest(RepoRequestSchema, msg.data);
-      return repoView(store, markPullRequestsMerged(store, repoId, parseRequest(MergedBodySchema, msg.data?.body).deploy));
+      const { deploy } = parseRequest(MergedBodySchema, msg.data?.body);
+      const merged = store.getRepo(repoId).pullRequests.map((pull) => pull.number);
+      if (merged.length > 0) assertMergeAuditPossible(operations, repoId);
+      const repo = markPullRequestsMerged(store, repoId, deploy);
+      if (merged.length > 0) startMergeAudit(operations, repo.id, merged);
+      return repoView(store, repo);
     }
 
     case "RESTORE_REPO":

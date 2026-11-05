@@ -6,7 +6,7 @@ import test from "node:test";
 import { parseRepoRef } from "../src/core/repo-ref.js";
 import { nextPageUrl } from "../src/core/github.js";
 import { diffLockfiles, parseAuditReport, parseLockfile, parseNpmJson } from "../src/core/npm-audit.js";
-import { branchName, isTrackerBranch } from "../src/core/operations.js";
+import { branchName, isTrackerBranch, mergeAuditScope } from "../src/core/operations.js";
 import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
 import { AuditAll } from "../src/core/audit-all.js";
@@ -256,11 +256,33 @@ test("lastAudit sums up the latest audit, whatever its branch", () => {
       ...overrides,
     });
   assert.equal(lastAudit([]), null, "no audit");
-  assert.deepEqual(lastAudit([audited()]), { at: "2026-03-01T10:00:00.000Z", scope: "production", branch: "main", count: 2, severity: "high" });
+  assert.deepEqual(lastAudit([audited()]), { at: "2026-03-01T10:00:00.000Z", scope: "production", branch: "main", afterFix: false, count: 2, severity: "high" });
   const develop = audited({ id: "op-2", createdAt: "2026-03-02T10:00:00.000Z", baseBranch: "develop", found: [] });
-  assert.deepEqual(lastAudit([develop, audited()]), { at: "2026-03-02T10:00:00.000Z", scope: "production", branch: "develop", count: 0, severity: null });
+  assert.deepEqual(lastAudit([develop, audited()]), { at: "2026-03-02T10:00:00.000Z", scope: "production", branch: "develop", afterFix: false, count: 0, severity: null });
   const running = audited({ id: "op-3", status: "running", steps: { clone: "done", audit: "running", fix: "pending", repair: "pending", push: "pending" } });
   assert.equal(lastAudit([running, audited()])?.count, 2, "an audit still running does not count");
+  const fixed = audited({
+    id: "op-4",
+    kind: "fix",
+    updatedAt: "2026-03-01T10:20:00.000Z",
+    remaining: [{ project: "", name: "tar", severity: "low", fix: "none" }],
+    branch: "fix/npm-audit-2026-03-01-100000",
+    pullRequest: { number: 12, url: "https://github.com/octo/demo/pull/12" },
+  });
+  assert.deepEqual(
+    lastAudit([fixed]),
+    { at: "2026-03-01T10:20:00.000Z", scope: "production", branch: "fix/npm-audit-2026-03-01-100000", afterFix: true, count: 1, severity: "low" },
+    "a fix that opened a pull request reports the audit after its fixes"
+  );
+  assert.equal(lastAudit([{ ...fixed, pullRequest: null }])?.count, 2, "a fix without pull request changed nothing on GitHub");
+});
+
+test("mergeAuditScope audits a merge on the scope of the fix that opened the pull request", () => {
+  const fix = (id: string, number: number, scope: Operation["scope"]) => operation({ id, status: "done", scope, pullRequest: { number, url: `https://github.com/octo/demo/pull/${number}` } });
+  const operations = [fix("op-3", 14, "production"), fix("op-2", 12, "all"), operation({ id: "op-1", status: "done", scope: "production" })];
+  assert.equal(mergeAuditScope(operations, [12]), "all");
+  assert.equal(mergeAuditScope(operations, [12, 14]), "production", "the most recent fix wins");
+  assert.equal(mergeAuditScope(operations, [99]), "production", "a pull request opened by no recorded operation");
 });
 
 test("AuditAll audits three repositories at a time and reports those skipped or failed", async () => {

@@ -362,6 +362,11 @@ test("the GUI runs a fix to the pull request without any decision, and the PR ta
   const mergedOnly = await call("PUT", "repos/octo/demo/merged", { deploy: false });
   assert.equal(mergedOnly.json.repo.deployPendingAt, merged.json.repo.deployPendingAt, "merging again keeps the deploy mark");
   assert.equal((await call("PUT", "repos/octo/missing/merged", { deploy: false })).status, 404);
+
+  const operations = async () => (await call("GET", "repos/octo/demo/operations")).json.operations;
+  const afterMerge = await waitFor("audit after merge", operations, (ops) => ops[0].id !== id && ops[0].status !== "running");
+  assert.equal(afterMerge.length, history.json.operations.length + 1, "a single audit, the second merge had no pull request left");
+  assert.deepEqual([afterMerge[0].kind, afterMerge[0].status, afterMerge[0].scope, afterMerge[0].baseBranch], ["audit", "done", "all", "main"], afterMerge[0].error);
 });
 
 test("the server creates CLONE_DIR at launch and refuses to start without it", async () => {

@@ -51,19 +51,23 @@ export function sortRepos<T extends { repo: Repo; auditFindings?: AuditFindings 
 
 /**
  * Dernier audit, quelle que soit sa branche : sa date, son périmètre, la
- * branche auditée, le nombre de vulnérabilités trouvées et la plus haute
- * gravité. Null sans audit. `operations` va de la plus récente à la plus
- * ancienne.
+ * branche auditée, le nombre de vulnérabilités et la plus haute gravité. Pour
+ * une correction qui a ouvert une pull request, c'est l'audit qui suit ses
+ * corrections, sur la branche de la pull request (`afterFix` vrai). Null sans
+ * audit. `operations` va de la plus récente à la plus ancienne.
  */
 export function lastAudit(operations: Operation[]): LastAudit | null {
   const audited = operations.find((operation) => operation.steps.audit === "done");
   if (!audited) return null;
+  const afterFix = audited.pullRequest !== null && audited.branch !== null;
+  const vulnerabilities = afterFix ? audited.remaining : audited.found;
   return {
-    at: audited.createdAt,
+    at: afterFix ? audited.updatedAt : audited.createdAt,
     scope: audited.scope,
-    branch: audited.baseBranch,
-    count: audited.found.length,
-    severity: worstOf(audited.found.map((vulnerability) => fromNpmSeverity(vulnerability.severity))),
+    branch: afterFix ? audited.branch! : audited.baseBranch,
+    afterFix,
+    count: vulnerabilities.length,
+    severity: worstOf(vulnerabilities.map((vulnerability) => fromNpmSeverity(vulnerability.severity))),
   };
 }
 

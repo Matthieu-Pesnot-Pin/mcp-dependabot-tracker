@@ -611,6 +611,37 @@ export async function runDefaultBranchAudit(ctx: OperationContext, repoId: strin
 }
 
 /**
+ * Périmètre de l'audit qui suit la fusion des pull requests `numbers` : celui
+ * de la plus récente des corrections qui les ont ouvertes, ou la production,
+ * périmètre par défaut, quand aucune opération enregistrée ne les a ouvertes.
+ * `operations` va de la plus récente à la plus ancienne.
+ */
+export function mergeAuditScope(operations: Operation[], numbers: number[]): AuditScope {
+  return operations.find((operation) => operation.pullRequest !== null && numbers.includes(operation.pullRequest.number))?.scope ?? "production";
+}
+
+/**
+ * Vérifie que l'audit qui suit une fusion peut démarrer : token GitHub
+ * déclaré, aucune opération en cours sur le dépôt.
+ */
+export function assertMergeAuditPossible(ctx: OperationContext, repoId: string): void {
+  ctx.githubConfig();
+  const active = ctx.store.activeOperation(repoId);
+  if (active) throw new ConflictError(`An operation is in progress on ${repoId} (${active.id}): wait for it to finish or cancel it before marking its pull requests merged, so that the default branch can be audited.`);
+}
+
+/**
+ * Lance en arrière-plan l'audit de la branche par défaut après la fusion des
+ * pull requests `numbers` du tracker, pour que la liste reflète aussitôt la
+ * branche fusionnée, sans attendre Dependabot. Un échec en cours d'audit est
+ * enregistré dans l'opération.
+ */
+export function startMergeAudit(ctx: OperationContext, repoId: string, numbers: number[]): void {
+  const scope = mergeAuditScope(ctx.store.listOperations(repoId), numbers);
+  runDefaultBranchAudit(ctx, repoId, scope).catch((err: any) => ctx.logError(`Audit of ${repoId} after merge could not start: ${err?.message ?? err}`));
+}
+
+/**
  * Demande l'annulation d'une opération en cours, lue par le processus qui
  * l'exécute, qui arrête sa commande.
  */

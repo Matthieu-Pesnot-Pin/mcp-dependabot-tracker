@@ -152,8 +152,10 @@ function SecurityCell({ view }: { view: RepoView }) {
 
 /**
  * Colonne « Dernier audit » : l'opération en cours, sinon le résultat du
- * dernier audit et sa date ; « Prod. OK » pour un audit des seules dépendances
- * de production sans vulnérabilité. La branche et le périmètre sont en infobulle.
+ * dernier audit et sa date, celui qui suit les corrections pour une correction
+ * qui a ouvert une pull request ; « Prod. OK » pour un audit des seules
+ * dépendances de production sans vulnérabilité. La branche et le périmètre
+ * sont en infobulle.
  */
 function AuditCell({ view }: { view: RepoView }) {
   const { activeOperation, lastAudit } = view
@@ -176,7 +178,14 @@ function AuditCell({ view }: { view: RepoView }) {
   const clean = lastAudit.count === 0
   const result = clean ? (lastAudit.scope === 'production' ? 'Prod. OK' : 'OK') : plural(lastAudit.count, 'vulnérabilité')
   return (
-    <span className="cell-mark cell-shrink cell-audit" title={`Audit du ${dayAndTime(lastAudit.at)} : ${SCOPE_LABELS[lastAudit.scope]}, branche ${lastAudit.branch}.`}>
+    <span
+      className="cell-mark cell-shrink cell-audit"
+      title={
+        lastAudit.afterFix
+          ? `Audit du ${dayAndTime(lastAudit.at)}, après les corrections : ${SCOPE_LABELS[lastAudit.scope]}, branche ${lastAudit.branch} de la pull request, pas encore mergée.`
+          : `Audit du ${dayAndTime(lastAudit.at)} : ${SCOPE_LABELS[lastAudit.scope]}, branche ${lastAudit.branch}.`
+      }
+    >
       <Icon name={clean ? 'circle-check' : 'triangle-alert'} size={14} className={clean ? 'text-ok' : 'text-warning'} />
       <span className="cell-ellipsis">
         {result} · {shortDayAndTime(lastAudit.at)}
