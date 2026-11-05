@@ -54,7 +54,7 @@ export function processAlive(pid: number): boolean {
  * dans aucune, un fichier sans catégories n'en a aucune, un dépôt sans alerte
  * corrigée à la main n'en a aucune, un dépôt sans pull request en attente n'en
  * a aucune jusqu'à sa lecture suivante, un dépôt sans date de dépréciation
- * n'est pas déprécié. Une alerte sans date
+ * n'est pas déprécié, un dépôt sans date d'entrée dans la file n'y est pas. Une alerte sans date
  * d'émission prend celle de la lecture qui l'a rapportée, une alerte sans
  * portée n'en a aucune ; la lecture suivante les remplace par les vraies.
  */
@@ -70,6 +70,7 @@ function normalizeReposFile(file: any): unknown {
       handledAlerts: repo?.handledAlerts ?? [],
       pullRequests: repo?.pullRequests ?? [],
       deprecatedAt: repo?.deprecatedAt ?? null,
+      queuedAt: repo?.queuedAt ?? null,
       alerts: Array.isArray(repo?.alerts)
         ? repo.alerts.map((alert: any) => ({ ...alert, createdAt: alert?.createdAt ?? repo.syncedAt ?? repo.addedAt, scope: alert?.scope ?? null }))
         : repo?.alerts,

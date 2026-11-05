@@ -215,6 +215,46 @@ function HandledAlerts({ view, onChanged }: { view: RepoView; onChanged: () => v
  * onglets, la correction et les droits de l'agent ; un dépôt déprécié ne se
  * corrige pas.
  */
+/**
+ * Bouton de file d'attente de l'en-tête : « Traité » retire de la file un dépôt
+ * qui y est et ramène à la file ; « Ajouter à la file » y met un dépôt qui n'y
+ * est pas.
+ */
+function QueueButton({ view, onChanged }: { view: RepoView; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const repoId = view.repo.id
+  const queued = view.repo.queuedAt !== null
+
+  async function toggle() {
+    setBusy(true)
+    try {
+      if (queued) {
+        await api.unqueueRepo(repoId)
+        navigate(hrefs.queue())
+        return
+      }
+      await api.queueRepo(repoId)
+      onChanged()
+    } catch (err) {
+      showError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return queued ? (
+    <button type="button" className="button button-queued" onClick={() => void toggle()} disabled={busy} title="Retirer de la file d'attente">
+      <Icon name="list-check" />
+      Traité
+    </button>
+  ) : (
+    <button type="button" className="button button-secondary" onClick={() => void toggle()} disabled={busy}>
+      <Icon name="list-plus" />
+      Ajouter à la file
+    </button>
+  )
+}
+
 export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
   const polled = usePolling(`repo:${repoId}`, () => api.getRepo(repoId), POLL_MS)
   const history = usePolling(`history:${repoId}`, () => api.listOperations(repoId), POLL_MS)
@@ -269,6 +309,7 @@ export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
           </div>
         </div>
         <div className="page-actions">
+          {!repo.deprecatedAt && <QueueButton view={view} onChanged={polled.reload} />}
           <button type="button" className="button button-secondary" onClick={() => setDrawer(true)}>
             <Icon name="bot" />
             Agent

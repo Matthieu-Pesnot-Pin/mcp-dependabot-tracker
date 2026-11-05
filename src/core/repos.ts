@@ -1,6 +1,6 @@
 import { alertsInScope, fromNpmSeverity, pendingAlerts, worstOf } from "../../shared/alerts.js";
 import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type AnalysisTask, type Category, type HandledAlert, type Operation, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
-import type { AuditFindings, CleanAudit, OperationSummary, RepoView } from "../../shared/schemas/api.schema.js";
+import type { AuditFindings, AuditTarget, CleanAudit, OperationSummary, RepoView } from "../../shared/schemas/api.schema.js";
 import { latestAnalysed } from "./analysis.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, NotFoundError } from "./errors.js";
@@ -213,11 +213,45 @@ export async function syncAllRepositories(store: Store, config: GitHubConfig): P
   await Promise.all(activeRepos(store).map((repo) => syncRepository(store, config, repo.id)));
 }
 
-/** Marque le dépôt déprécié ; sans effet s'il l'est déjà, refusé pendant une opération en cours. */
+/** Marque le dépôt déprécié et le retire de la file d'attente ; sans effet s'il l'est déjà, refusé pendant une opération en cours. */
 export function deprecateRepository(store: Store, repoId: string): Repo {
   const repo = store.getRepo(repoId);
   if (store.activeOperation(repo.id)) throw new ConflictError(`An operation is in progress on ${repo.id}: wait for it to finish or cancel it before deprecating the repository.`);
-  return store.updateRepo(repo.id, (current) => (current.deprecatedAt === null ? { ...current, deprecatedAt: new Date().toISOString() } : current));
+  return store.updateRepo(repo.id, (current) => (current.deprecatedAt === null ? { ...current, deprecatedAt: new Date().toISOString(), queuedAt: null } : current));
+}
+
+/** Met le dépôt dans la file d'attente ; sans effet s'il y est déjà, refusé pour un dépôt déprécié. */
+export function queueRepository(store: Store, repoId: string): Repo {
+  assertNotDeprecated(store.getRepo(repoId));
+  return store.updateRepo(repoId, (current) => (current.queuedAt === null ? { ...current, queuedAt: new Date().toISOString() } : current));
+}
+
+/** Met dans la file d'attente les dépôts non dépréciés de la catégorie qui n'y sont pas encore ; une catégorie inconnue est refusée. */
+export function queueCategory(store: Store, categoryId: string): void {
+  store.getCategory(categoryId);
+  for (const repo of activeRepos(store)) {
+    if (repo.categoryId === categoryId && repo.queuedAt === null) queueRepository(store, repo.id);
+  }
+}
+
+/** Retire le dépôt de la file d'attente ; sans effet s'il n'y est pas. */
+export function unqueueRepository(store: Store, repoId: string): Repo {
+  return store.updateRepo(repoId, (current) => ({ ...current, queuedAt: null }));
+}
+
+/** Dépôts non dépréciés visés par « Auditer tout » ; une catégorie inconnue est refusée. */
+export function auditTargetRepos(store: Store, target: AuditTarget): Repo[] {
+  if (target.kind === "queue") return queuedRepos(store);
+  if (target.kind === "all") return activeRepos(store);
+  store.getCategory(target.categoryId);
+  return activeRepos(store).filter((repo) => repo.categoryId === target.categoryId);
+}
+
+/** Dépôts de la file d'attente qui ne sont pas dépréciés, dans l'ordre de leur entrée dans la file. */
+export function queuedRepos(store: Store): Repo[] {
+  return activeRepos(store)
+    .filter((repo) => repo.queuedAt !== null)
+    .sort((a, b) => a.queuedAt!.localeCompare(b.queuedAt!));
 }
 
 /** Retire la marque « déprécié », puis relit aussitôt les alertes du dépôt ; il retrouve sa catégorie. */
@@ -247,6 +281,7 @@ export async function addRepository(store: Store, config: GitHubConfig, input: s
     syncedAt: null,
     syncError: null,
     deprecatedAt: null,
+    queuedAt: null,
   });
   return syncRepository(store, config, remote.fullName);
 }

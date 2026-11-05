@@ -17,8 +17,9 @@ export default function App() {
   const closeAdd = useCallback(() => setAdding(false), [])
 
   let screen: ReactNode
-  if (route.name === 'home' || route.name === 'deprecated') {
-    const tab: HomeTab = route.name === 'deprecated' ? { kind: 'deprecated' } : { kind: 'category', categoryId: route.categoryId }
+  const onHome = route.name === 'home' || route.name === 'queue' || route.name === 'deprecated'
+  if (onHome) {
+    const tab: HomeTab = route.name === 'home' ? { kind: 'category', categoryId: route.categoryId } : { kind: route.name }
     screen = <HomeScreen tab={tab} adding={adding} onAdd={openAdd} onCloseAdd={closeAdd} />
   } else if (route.name === 'settings') {
     screen = <SettingsScreen />
@@ -37,13 +38,21 @@ export default function App() {
   }
 
   const action =
-    route.name === 'home' || route.name === 'deprecated' ? (
+    onHome ? (
       <>
         <a className="button button-secondary button-icon" href={hrefs.settings()} aria-label="Réglages" title="Réglages">
           <Icon name="settings" />
         </a>
         <SyncButton />
-        <AuditAllButton categoryId={route.name === 'home' ? route.categoryId : null} />
+        <AuditAllButton
+          target={
+            route.name === 'queue'
+              ? { kind: 'queue' }
+              : route.name === 'home' && route.categoryId !== null
+                ? { kind: 'category', categoryId: route.categoryId }
+                : { kind: 'all' }
+          }
+        />
         <button type="button" className="button button-primary" onClick={openAdd}>
           <Icon name="plus" />
           Ajouter un dépôt

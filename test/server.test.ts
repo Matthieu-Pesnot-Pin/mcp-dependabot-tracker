@@ -215,6 +215,36 @@ test("the GUI syncs every repository now, with the pull requests the tracker ope
   assert.deepEqual(after.json.repos.find((view: { repo: { id: string } }) => view.repo.id === "octo/demo").repo.pullRequests, []);
 });
 
+test("the GUI queues repositories one by one or a whole category, and marks them done", async () => {
+  const category = await call("POST", "categories", { name: "Queue" });
+  assert.equal(category.status, 200, category.json.error);
+  assert.equal((await call("POST", "repos", { repository: "octo/extra-3", categoryId: category.json.id })).status, 200);
+  assert.equal((await call("POST", "repos", { repository: "octo/extra-2" })).status, 200);
+  assert.equal((await call("PUT", "categories/missing/queued")).status, 404);
+  const queuedCategory = await call("PUT", `categories/${category.json.id}/queued`);
+  assert.equal(queuedCategory.status, 200, queuedCategory.json.error);
+  const queuedIds = queuedCategory.json.repos.filter((view: { repo: { queuedAt: string | null } }) => view.repo.queuedAt !== null).map((view: { repo: { id: string } }) => view.repo.id);
+  assert.deepEqual(queuedIds, ["octo/extra-3"], "only the repositories of the category join the queue");
+  const queued = await call("PUT", "repos/octo/extra-3/queued");
+  assert.equal(queued.status, 200, queued.json.error);
+  assert.ok(queued.json.repo.queuedAt);
+  assert.equal((await call("PUT", "repos/octo/extra-3/queued")).json.repo.queuedAt, queued.json.repo.queuedAt, "queuing twice keeps the first date");
+  assert.equal((await call("PUT", "repos/octo/missing/queued")).status, 404);
+
+
+  const done = await call("DELETE", "repos/octo/extra-3/queued");
+  assert.equal(done.status, 200, done.json.error);
+  assert.equal(done.json.repo.queuedAt, null);
+
+  assert.equal((await call("PUT", "repos/octo/extra-2/queued")).status, 200);
+  assert.equal((await call("PUT", "repos/octo/extra-2/deprecated")).json.repo.queuedAt, null, "deprecating leaves the queue");
+  assert.equal((await call("PUT", "repos/octo/extra-2/queued")).status, 409, "a deprecated repository cannot be queued");
+
+  assert.equal((await call("DELETE", "repos/octo/extra-3")).status, 200);
+  assert.equal((await call("DELETE", "repos/octo/extra-2")).status, 200);
+  assert.equal((await call("DELETE", `categories/${category.json.id}`)).status, 200);
+});
+
 test("the GUI deprecates a repository: no sync, no audit, hidden from the agent, until restored", async () => {
   assert.equal((await call("POST", "repos", { repository: "octo/extra-2" })).status, 200);
   const deprecated = await call("PUT", "repos/octo/extra-2/deprecated");
@@ -244,12 +274,12 @@ test("the GUI audits every repository; the agent sees what Dependabot misses", {
   assert.equal((await call("POST", "repos", { repository: "octo/quiet" })).status, 200);
   assert.deepEqual((await call("GET", "audit-all")).json, { auditAll: null });
   assert.equal((await call("POST", "audit-all")).status, 400, "the scope is required");
-  assert.equal((await call("POST", "audit-all", { scope: "production" })).status, 400, "the category is required");
-  assert.equal((await call("POST", "audit-all", { scope: "production", categoryId: "missing" })).status, 404);
-  const started = await call("POST", "audit-all", { scope: "production", categoryId: null });
+  assert.equal((await call("POST", "audit-all", { scope: "production" })).status, 400, "the target is required");
+  assert.equal((await call("POST", "audit-all", { scope: "production", target: { kind: "category", categoryId: "missing" } })).status, 404);
+  const started = await call("POST", "audit-all", { scope: "production", target: { kind: "all" } });
   assert.equal(started.status, 200, started.json.error);
-  assert.deepEqual([started.json.auditAll.running, started.json.auditAll.scope, started.json.auditAll.categoryId], [true, "production", null]);
-  assert.equal((await call("POST", "audit-all", { scope: "production", categoryId: null })).status, 409);
+  assert.deepEqual([started.json.auditAll.running, started.json.auditAll.scope, started.json.auditAll.target], [true, "production", { kind: "all" }]);
+  assert.equal((await call("POST", "audit-all", { scope: "production", target: { kind: "all" } })).status, 409);
   const finished = await waitFor("the audit of every repository", () => call("GET", "audit-all"), (response) => response.json.auditAll.running === false);
   const { total, done, skipped, failed } = finished.json.auditAll;
   assert.deepEqual({ done, skipped, failed }, { done: total, skipped: [], failed: [] });

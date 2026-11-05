@@ -89,9 +89,8 @@ function PendingPullRequests({ repo }: { repo: Repo }) {
   )
 }
 
-/** Message de l'accueil quand les interrupteurs écartent tous les dépôts. */
-function filteredOutMessage(onlyVulnerable: boolean, onlyPendingPr: boolean, inCategory: boolean): string {
-  const where = inCategory ? 'dans cette catégorie' : 'parmi vos projets'
+/** Message de l'accueil quand les interrupteurs écartent tous les dépôts de l'onglet, désigné par `where`. */
+function filteredOutMessage(onlyVulnerable: boolean, onlyPendingPr: boolean, where: string): string {
   if (onlyVulnerable && onlyPendingPr) return `Aucun dépôt vulnérable avec une PR en attente ${where}.`
   if (onlyPendingPr) return `Aucune PR en attente ${where}.`
   return `Aucun dépôt vulnérable ${where}.`
@@ -334,6 +333,94 @@ function AddRepoModal({ categories, initialCategory, onClose }: { categories: Ca
   )
 }
 
+/** Bouton de chaque ligne qui met le dépôt dans la file d'attente, ou l'en retire ; allumé tant que le dépôt y est. */
+function QueueToggle({ view, onDone }: { view: RepoView; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const repoId = view.repo.id
+  const queued = view.repo.queuedAt !== null
+
+  async function toggle() {
+    setBusy(true)
+    try {
+      await (queued ? api.unqueueRepo(repoId) : api.queueRepo(repoId))
+      onDone()
+    } catch (err) {
+      showError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const label = queued ? "Retirer de la file d'attente" : "Ajouter à la file d'attente"
+  return (
+    <button
+      type="button"
+      className={`row-action row-action-queue${queued ? ' is-on' : ''}`}
+      onClick={() => void toggle()}
+      disabled={busy}
+      title={label}
+      aria-label={`${label} : ${repoId}`}
+      aria-pressed={queued}
+    >
+      <Icon name={queued ? 'list-check' : 'list-plus'} size={14} />
+    </button>
+  )
+}
+
+/** Bouton d'une catégorie qui met tous ses dépôts dans la file d'attente ; inactif quand ils y sont tous. */
+function QueueCategoryButton({ categoryId, views, onDone }: { categoryId: string; views: RepoView[]; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const remaining = views.filter((view) => view.repo.queuedAt === null).length
+
+  async function queueAll() {
+    setBusy(true)
+    try {
+      await api.queueCategory(categoryId)
+      onDone()
+    } catch (err) {
+      showError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      className="button button-secondary row-button"
+      onClick={() => void queueAll()}
+      disabled={busy || remaining === 0}
+      title={remaining === 0 ? "Tous les dépôts de la catégorie sont dans la file d'attente." : `${plural(remaining, 'dépôt')} à ajouter à la file d'attente`}
+    >
+      <Icon name="list-plus" size={14} />
+      Tout ajouter à la file
+    </button>
+  )
+}
+
+/** Bouton « Traité » d'une ligne de la file d'attente : il retire le dépôt de la file. */
+function DoneButton({ repoId, onDone }: { repoId: string; onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+
+  async function done() {
+    setBusy(true)
+    try {
+      await api.unqueueRepo(repoId)
+      onDone()
+    } catch (err) {
+      showError(err)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <button type="button" className="button button-secondary row-button" onClick={() => void done()} disabled={busy} title="Retirer de la file d'attente">
+      <Icon name="check" size={14} />
+      Traité
+    </button>
+  )
+}
+
 /** Bouton de chaque ligne qui marque le dépôt déprécié ; il ne reste alors que dans l'onglet « Dépréciés ». */
 function DeprecateButton({ repoId, onDone }: { repoId: string; onDone: () => void }) {
   const [busy, setBusy] = useState(false)
@@ -414,7 +501,8 @@ function DeprecatedList({ views, onChanged }: { views: RepoView[]; onChanged: ()
 /**
  * Accueil : la barre des catégories, et les dépôts de l'onglet choisi. Une
  * catégorie, ou tous les projets, liste ses dépôts non dépréciés du plus exposé
- * au moins exposé ; l'onglet « Dépréciés » liste les autres.
+ * au moins exposé ; la file d'attente liste les siens dans l'ordre de leur
+ * entrée, chacun avec « Traité » ; l'onglet « Dépréciés » liste les autres.
  */
 export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; adding: boolean; onCloseAdd: () => void; onAdd: () => void }) {
   const repos = usePolling('repos', api.listRepos, POLL_MS)
@@ -428,14 +516,19 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
   const allViews = repos.data?.repos ?? []
   const tracked = allViews.filter((view) => view.repo.deprecatedAt === null)
   const deprecated = allViews.filter((view) => view.repo.deprecatedAt !== null).sort((a, b) => b.repo.deprecatedAt!.localeCompare(a.repo.deprecatedAt!))
-  const inCategory = tracked.filter((view) => categoryId === null || view.repo.categoryId === categoryId)
-  const views = inCategory.filter((view) => (!onlyVulnerable || isVulnerable(view)) && (!onlyPendingPr || view.repo.pullRequests.length > 0))
+  const showingQueue = tab.kind === 'queue'
   const showingDeprecated = tab.kind === 'deprecated'
+  const inCategory = showingQueue
+    ? tracked.filter((view) => view.repo.queuedAt !== null).sort((a, b) => a.repo.queuedAt!.localeCompare(b.repo.queuedAt!))
+    : tracked.filter((view) => categoryId === null || view.repo.categoryId === categoryId)
+  const views = inCategory.filter((view) => (!onlyVulnerable || isVulnerable(view)) && (!onlyPendingPr || view.repo.pullRequests.length > 0))
+  const where = showingQueue ? "dans la file d'attente" : categoryId === null ? 'parmi vos projets' : 'dans cette catégorie'
 
   useEffect(() => {
     if (showingDeprecated) rememberHomeTab({ kind: 'deprecated' })
+    else if (showingQueue) rememberHomeTab({ kind: 'queue' })
     else if (!unknownCategory) rememberHomeTab({ kind: 'category', categoryId })
-  }, [showingDeprecated, categoryId, unknownCategory])
+  }, [showingDeprecated, showingQueue, categoryId, unknownCategory])
 
   if (showingDeprecated) {
     return (
@@ -458,8 +551,9 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
       {repos.data && <CategorySidebar categories={categories} views={tracked} deprecatedCount={deprecated.length} tab={tab} onChanged={repos.reload} />}
       <div className="page">
         <div className="home-head">
-          <h1 className="page-title">{category ? category.name : 'Tous mes projets'}</h1>
+          <h1 className="page-title">{showingQueue ? "File d'attente" : category ? category.name : 'Tous mes projets'}</h1>
           <div className="filters">
+            {category && inCategory.length > 0 && <QueueCategoryButton categoryId={category.id} views={inCategory} onDone={repos.reload} />}
             <label className="filter">
               PR en attente
               <Toggle checked={onlyPendingPr} onChange={setOnlyPendingPr} label="PR en attente" />
@@ -484,10 +578,15 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
         )}
         {repos.data && !unknownCategory && inCategory.length > 0 && views.length === 0 && (
           <div className="panel empty">
-            <p>{filteredOutMessage(onlyVulnerable, onlyPendingPr, categoryId !== null)}</p>
+            <p>{filteredOutMessage(onlyVulnerable, onlyPendingPr, where)}</p>
           </div>
         )}
-        {repos.data && !unknownCategory && inCategory.length === 0 && (
+        {repos.data && showingQueue && inCategory.length === 0 && (
+          <div className="panel empty">
+            <p>La file d'attente est vide : ajoutez-y un dépôt avec le bouton de file de sa ligne.</p>
+          </div>
+        )}
+        {repos.data && !showingQueue && !unknownCategory && inCategory.length === 0 && (
           <div className="panel empty">
             <p>{categoryId === null ? 'Aucun dépôt suivi.' : 'Aucun dépôt dans cette catégorie.'}</p>
             <button type="button" className="button button-primary" onClick={onAdd}>
@@ -506,7 +605,14 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
                 <PendingPullRequests repo={view.repo} />
                 <AnalysisTaskNote view={view} />
                 <RepoStatus view={view} />
-                <DeprecateButton repoId={view.repo.id} onDone={repos.reload} />
+                {showingQueue ? (
+                  <DoneButton repoId={view.repo.id} onDone={repos.reload} />
+                ) : (
+                  <>
+                    <QueueToggle view={view} onDone={repos.reload} />
+                    <DeprecateButton repoId={view.repo.id} onDone={repos.reload} />
+                  </>
+                )}
                 <Icon name="chevron-right" className="row-chevron" />
               </div>
             ))}

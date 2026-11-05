@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react'
  * Écran désigné par le hash de l'URL :
  *   `#/`                                accueil, tous les dépôts suivis ;
  *   `#/c/<catégorie>`                   accueil, dépôts d'une catégorie ;
+ *   `#/queue`                           accueil, file d'attente ;
  *   `#/deprecated`                      accueil, dépôts dépréciés ;
  *   `#/settings`                        réglages de l'analyse par Claude ;
  *   `#/r/<propriétaire>/<nom>`          écran du dépôt, ses alertes ;
@@ -12,6 +13,7 @@ import { useSyncExternalStore } from 'react'
  */
 export type Route =
   | { name: 'home'; categoryId: string | null }
+  | { name: 'queue' }
   | { name: 'deprecated' }
   | { name: 'settings' }
   | { name: 'repo'; repoId: string; tab: RepoTab }
@@ -35,6 +37,7 @@ export function parseHash(hash: string): Route {
   if (segments.length === 0) return { name: 'home', categoryId: null }
   if (segments.some((segment) => segment === null)) return { name: 'not_found', hash }
   if (segments.length === 2 && segments[0] === 'c') return { name: 'home', categoryId: segments[1] }
+  if (segments.length === 1 && segments[0] === 'queue') return { name: 'queue' }
   if (segments.length === 1 && segments[0] === 'deprecated') return { name: 'deprecated' }
   if (segments.length === 1 && segments[0] === 'settings') return { name: 'settings' }
   const [section, owner, name, sub, operationId] = segments as string[]
@@ -63,8 +66,8 @@ function repoHash(repoId: string): string {
 /** Onglet de l'écran d'un dépôt. */
 export type RepoTab = 'alerts' | 'history'
 
-/** Onglet de l'accueil : une catégorie, tous les projets (`categoryId` null), ou les dépôts dépréciés. */
-export type HomeTab = { kind: 'category'; categoryId: string | null } | { kind: 'deprecated' }
+/** Onglet de l'accueil : une catégorie, tous les projets (`categoryId` null), la file d'attente, ou les dépôts dépréciés. */
+export type HomeTab = { kind: 'category'; categoryId: string | null } | { kind: 'queue' } | { kind: 'deprecated' }
 
 /** Onglet affiché par l'accueil la dernière fois, où ramènent les retours depuis un dépôt. */
 let lastHomeTab: HomeTab = { kind: 'category', categoryId: null }
@@ -75,9 +78,10 @@ export function rememberHomeTab(tab: HomeTab) {
 
 export const hrefs = {
   home: (categoryId: string | null = null) => inPage(categoryId === null ? '#/' : `#/c/${encodeURIComponent(categoryId)}`),
+  queue: () => inPage('#/queue'),
   deprecated: () => inPage('#/deprecated'),
   settings: () => inPage('#/settings'),
-  lastHome: () => (lastHomeTab.kind === 'deprecated' ? hrefs.deprecated() : hrefs.home(lastHomeTab.categoryId)),
+  lastHome: () => (lastHomeTab.kind === 'category' ? hrefs.home(lastHomeTab.categoryId) : lastHomeTab.kind === 'queue' ? hrefs.queue() : hrefs.deprecated()),
   repo: (repoId: string) => inPage(repoHash(repoId)),
   repoHistory: (repoId: string) => inPage(`${repoHash(repoId)}/history`),
   operation: (repoId: string, operationId: string) => inPage(`${repoHash(repoId)}/op/${encodeURIComponent(operationId)}`),

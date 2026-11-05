@@ -192,6 +192,17 @@ function CategoryItem({ category, views, active, onChanged }: { category: Catego
   )
 }
 
+/** Onglet de la file d'attente, avec le nombre de dépôts qu'elle contient. */
+function QueueLink({ count, active }: { count: number; active: boolean }) {
+  return (
+    <a className={`side-item${active ? ' is-active' : ''}`} href={hrefs.queue()} aria-current={active ? 'page' : undefined}>
+      <Icon name="list-todo" />
+      <span className="side-name">File d'attente</span>
+      {count > 0 && <span className="pill pill-small pill-pr">{count}</span>}
+    </a>
+  )
+}
+
 /** Onglet des dépôts dépréciés, avec leur nombre. */
 function DeprecatedLink({ count, active }: { count: number; active: boolean }) {
   return (
@@ -204,10 +215,10 @@ function DeprecatedLink({ count, active }: { count: number; active: boolean }) {
 }
 
 /**
- * Barre latérale de l'accueil : tous les dépôts, puis chaque catégorie, avec
- * le nombre de pull requests en attente et de vulnérabilités de leurs dépôts ;
- * la création se fait en place. L'onglet des dépôts dépréciés vient en dernier.
- * `views` exclut les dépôts dépréciés.
+ * Barre latérale de l'accueil : tous les dépôts, la file d'attente, puis chaque
+ * catégorie, avec le nombre de pull requests en attente et de vulnérabilités de
+ * leurs dépôts ; la création se fait en place. L'onglet des dépôts dépréciés
+ * vient en dernier. `views` exclut les dépôts dépréciés.
  */
 export function CategorySidebar({
   categories,
@@ -234,6 +245,7 @@ export function CategorySidebar({
   return (
     <nav className="sidebar" aria-label="Catégories">
       <SideLink href={hrefs.home()} icon="layers" label="Tous mes projets" views={views} active={selected === null} />
+      <QueueLink count={views.filter((view) => view.repo.queuedAt !== null).length} active={tab.kind === 'queue'} />
       <div className="side-divider" />
       {categories.map((category) => (
         <CategoryItem

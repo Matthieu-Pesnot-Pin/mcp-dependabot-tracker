@@ -450,6 +450,16 @@ code {
   color: var(--text);
 }
 
+.button-queued {
+  background: var(--brand-bg);
+  border: 1px solid #2a3160;
+  color: var(--accent-soft);
+}
+
+.button-queued:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
 .button-ghost {
   color: var(--muted);
   padding: 0 8px;
@@ -582,6 +592,20 @@ code {
 .row .row-action:hover {
   border-color: var(--idle);
   color: var(--text);
+}
+
+.row-action-queue {
+  margin-right: 0;
+}
+
+.row .row-action-queue.is-on {
+  background: var(--brand-bg);
+  border-color: transparent;
+  color: var(--accent-soft);
+}
+
+.row .row-action-queue.is-on:hover {
+  border-color: #2a3160;
 }
 
 .row-button.button {

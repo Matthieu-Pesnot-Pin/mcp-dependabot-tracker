@@ -1,3 +1,4 @@
+import type { AuditTarget } from '@shared/schemas/api.schema'
 import type { AuditScope } from '@shared/schemas/model.schema'
 import { useEffect, useRef, useState } from 'react'
 import { usePolling } from '../hooks/usePolling'
@@ -11,14 +12,20 @@ import { ScopeButton } from './ScopeButton'
 const RUNNING_POLL_MS = 1500
 const IDLE_POLL_MS = 5000
 
+/** Libellé du bouton selon les dépôts visés. */
+const TARGET_LABELS: Record<AuditTarget['kind'], string> = {
+  all: 'Auditer tout',
+  category: 'Auditer la catégorie',
+  queue: 'Auditer la file',
+}
+
 /**
- * Audite la branche par défaut des dépôts suivis de la catégorie `categoryId`,
- * ou de tous les dépôts suivis quand elle est `null`, sur le périmètre choisi
- * au lancement, avec la progression sur le bouton ; à la fin d'une série suivie
- * ici, un message dit combien de dépôts ont été audités, laissés de côté ou en
- * échec.
+ * Audite la branche par défaut des dépôts suivis de `target` (tous, une
+ * catégorie ou la file d'attente), sur le périmètre choisi au lancement, avec
+ * la progression sur le bouton ; à la fin d'une série suivie ici, un message
+ * dit combien de dépôts ont été audités, laissés de côté ou en échec.
  */
-export function AuditAllButton({ categoryId }: { categoryId: string | null }) {
+export function AuditAllButton({ target }: { target: AuditTarget }) {
   const [pollMs, setPollMs] = useState(IDLE_POLL_MS)
   const status = usePolling('audit-all', api.getAuditAll, pollMs)
   const [starting, setStarting] = useState(false)
@@ -45,7 +52,7 @@ export function AuditAllButton({ categoryId }: { categoryId: string | null }) {
   async function start(scope: AuditScope) {
     setStarting(true)
     try {
-      const { auditAll } = await api.startAuditAll(scope, categoryId)
+      const { auditAll } = await api.startAuditAll(scope, target)
       followedRef.current = auditAll?.startedAt ?? null
       status.reload()
     } catch (err) {
@@ -63,5 +70,5 @@ export function AuditAllButton({ categoryId }: { categoryId: string | null }) {
       </button>
     )
   }
-  return <ScopeButton variant="secondary" icon="scan-search" label={categoryId === null ? 'Auditer tout' : 'Auditer la catégorie'} disabled={starting} onLaunch={(scope) => void start(scope)} />
+  return <ScopeButton variant="secondary" icon="scan-search" label={TARGET_LABELS[target.kind]} disabled={starting} onLaunch={(scope) => void start(scope)} />
 }

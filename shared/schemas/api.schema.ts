@@ -44,8 +44,17 @@ export const ScopeBodySchema = z.object({ scope: z.enum(AUDIT_SCOPES) });
 
 export type ScopeBody = z.infer<typeof ScopeBodySchema>;
 
-/** Corps de `POST /api/audit-all` : le périmètre des audits et la catégorie des dépôts audités, `null` pour tous les dépôts. */
-export const AuditAllBodySchema = ScopeBodySchema.extend({ categoryId: z.string().min(1).nullable() });
+/** Dépôts visés par « Auditer tout » : tous les dépôts suivis, ceux d'une catégorie, ou ceux de la file d'attente. */
+export const AuditTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("all") }),
+  z.object({ kind: z.literal("category"), categoryId: z.string().min(1) }),
+  z.object({ kind: z.literal("queue") }),
+]);
+
+export type AuditTarget = z.infer<typeof AuditTargetSchema>;
+
+/** Corps de `POST /api/audit-all` : le périmètre des audits et les dépôts visés. */
+export const AuditAllBodySchema = ScopeBodySchema.extend({ target: AuditTargetSchema });
 
 export type AuditAllBody = z.infer<typeof AuditAllBodySchema>;
 
@@ -111,12 +120,12 @@ export interface RepoView {
  * Série « Auditer tout » : `done` dépôts traités sur `total`, dont ceux laissés
  * de côté parce qu'une opération y était en cours (`skipped`) et ceux dont
  * l'audit a échoué, avec la raison (`failed`) ; `scope` est le périmètre des
- * audits, `categoryId` la catégorie des dépôts audités (`null` : tous).
+ * audits, `target` les dépôts visés.
  */
 export interface AuditAllState {
   running: boolean;
   scope: AuditScope;
-  categoryId: string | null;
+  target: AuditTarget;
   startedAt: string;
   finishedAt: string | null;
   total: number;

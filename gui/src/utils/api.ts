@@ -1,4 +1,4 @@
-import type { AddableReposResponse, AppConfig, AuditAllResponse, BranchesResponse, CategoriesResponse, OperationResponse, OperationsResponse, RemarksResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
+import type { AddableReposResponse, AppConfig, AuditAllResponse, AuditTarget, BranchesResponse, CategoriesResponse, OperationResponse, OperationsResponse, RemarksResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
 import type { AuditScope, Category, Rights } from '@shared/schemas/model.schema'
 import type { SaveSettingsBody, SettingsView } from '@shared/schemas/settings.schema'
 
@@ -58,13 +58,15 @@ export const api = {
   listRepos: () => request<ReposResponse>('repos'),
   syncRepos: () => send<ReposResponse>('POST', 'sync'),
   getAuditAll: () => request<AuditAllResponse>('audit-all'),
-  startAuditAll: (scope: AuditScope, categoryId: string | null) => send<AuditAllResponse>('POST', 'audit-all', { scope, categoryId }),
+  startAuditAll: (scope: AuditScope, target: AuditTarget) => send<AuditAllResponse>('POST', 'audit-all', { scope, target }),
   listAddableRepos: () => request<AddableReposResponse>('github/repos'),
   getRepo: (repoId: string) => request<RepoView>(repoPath(repoId)),
   addRepo: (repository: string, categoryId: string | null) => send<RepoView>('POST', 'repos', { repository, categoryId }),
   removeRepo: (repoId: string) => send<{ removed: true }>('DELETE', repoPath(repoId)),
   deprecateRepo: (repoId: string) => send<RepoView>('PUT', `${repoPath(repoId)}/deprecated`),
   restoreRepo: (repoId: string) => send<RepoView>('DELETE', `${repoPath(repoId)}/deprecated`),
+  queueRepo: (repoId: string) => send<RepoView>('PUT', `${repoPath(repoId)}/queued`),
+  unqueueRepo: (repoId: string) => send<RepoView>('DELETE', `${repoPath(repoId)}/queued`),
   listBranches:(repoId: string) => request<BranchesResponse>(`${repoPath(repoId)}/branches`),
   setBranch: (repoId: string, branch: string) => send<RepoView>('PUT', `${repoPath(repoId)}/branch`, { branch }),
   markAlertHandled: (repoId: string, number: number) => send<RepoView>('PUT', `${repoPath(repoId)}/alerts/${number}/handled`),
@@ -74,6 +76,7 @@ export const api = {
   createCategory: (name: string) => send<Category>('POST', 'categories', { name }),
   renameCategory: (id: string, name: string) => send<Category>('PUT', categoryPath(id), { name }),
   deleteCategory: (id: string) => send<{ deleted: true }>('DELETE', categoryPath(id)),
+  queueCategory: (id: string) => send<ReposResponse>('PUT', `${categoryPath(id)}/queued`),
   setRights: (repoId: string, rights: Rights) => send<RepoView>('PUT', `${repoPath(repoId)}/rights`, { rights }),
   startFix: (repoId: string, scope: AuditScope) => send<OperationResponse>('POST', `${repoPath(repoId)}/operations`, { scope }),
   getOperation: (id: string) => request<OperationResponse>(operationPath(id)),

@@ -11,7 +11,7 @@ import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
 import { AuditAll } from "../src/core/audit-all.js";
 import { ConflictError } from "../src/core/errors.js";
-import { auditFindings, cleanAudit, operationSummary, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
+import { auditFindings, auditTargetRepos, cleanAudit, queuedRepos, operationSummary, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
 import { describeOperation } from "../src/tools/format.js";
@@ -30,7 +30,7 @@ function alert(number: number, severity: Alert["severity"], pkg: string, scope: 
 
 function repo(id: string, alerts: Alert[] = [], syncedAt: string | null = null): Repo {
   const [owner, name] = id.split("/");
-  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, handledAlerts: [], pullRequests: [], syncedAt, syncError: null, deprecatedAt: null };
+  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, handledAlerts: [], pullRequests: [], syncedAt, syncError: null, deprecatedAt: null, queuedAt: null };
 }
 
 function operation(overrides: Partial<Operation> = {}): Operation {
@@ -256,9 +256,9 @@ test("AuditAll audits three repositories at a time and reports those skipped or 
   const auditAll = new AuditAll(audit, (message) => errors.push(message));
   assert.equal(auditAll.status(), null);
   const ids = ["o/a", "o/busy", "o/b", "o/broken", "o/c", "o/d"];
-  const started = auditAll.start(ids, "all", null);
-  assert.deepEqual([started.running, started.scope, started.categoryId, started.total, started.done], [true, "all", null, 6, 0]);
-  assert.throws(() => auditAll.start(ids, "production", null), /already running/);
+  const started = auditAll.start(ids, "all", { kind: "all" });
+  assert.deepEqual([started.running, started.scope, started.target, started.total, started.done], [true, "all", { kind: "all" }, 6, 0]);
+  assert.throws(() => auditAll.start(ids, "production", { kind: "all" }), /already running/);
   await auditAll.finished();
   const done = auditAll.status()!;
   assert.equal(done.running, false);
@@ -522,6 +522,26 @@ test("staleRepos selects repositories never synced or synced too long ago, depre
     store.addRepo(repo("o/fresh", [], "2026-01-01T00:55:00.000Z"));
     store.addRepo({ ...repo("o/deprecated", [], "2026-01-01T00:10:00.000Z"), deprecatedAt: "2026-01-01T00:20:00.000Z" });
     assert.deepEqual(staleRepos(store, 10 * 60_000, at).map((r) => r.id), ["o/never", "o/old"]);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("the audit targets every repository, a category or the queue in its order, deprecated ones aside", () => {
+  const temp = makeTempDir("tracker-target-");
+  try {
+    const store = new Store(temp.dir);
+    const category = store.createCategory("MCP");
+    store.addRepo({ ...repo("o/a"), categoryId: category.id, queuedAt: "2026-01-02T00:00:00.000Z" });
+    store.addRepo({ ...repo("o/b"), categoryId: category.id });
+    store.addRepo({ ...repo("o/c"), queuedAt: "2026-01-01T00:00:00.000Z" });
+    store.addRepo({ ...repo("o/d"), categoryId: category.id, queuedAt: "2026-01-01T12:00:00.000Z", deprecatedAt: "2026-01-03T00:00:00.000Z" });
+    const ids = (repos: Repo[]) => repos.map((r) => r.id).sort();
+    assert.deepEqual(ids(auditTargetRepos(store, { kind: "all" })), ["o/a", "o/b", "o/c"]);
+    assert.deepEqual(ids(auditTargetRepos(store, { kind: "category", categoryId: category.id })), ["o/a", "o/b"]);
+    assert.deepEqual(auditTargetRepos(store, { kind: "queue" }).map((r) => r.id), ["o/c", "o/a"]);
+    assert.deepEqual(queuedRepos(store).map((r) => r.id), ["o/c", "o/a"]);
+    assert.throws(() => auditTargetRepos(store, { kind: "category", categoryId: "missing" }), /does not exist/);
   } finally {
     temp.cleanup();
   }

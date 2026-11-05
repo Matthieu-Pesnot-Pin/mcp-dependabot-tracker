@@ -259,6 +259,10 @@ app.put("/api/repos/:owner/:name/deprecated", (c) => forward(c, "DEPRECATE_REPO"
 
 app.delete("/api/repos/:owner/:name/deprecated", (c) => forward(c, "RESTORE_REPO", { repoId: repoId(c) }));
 
+app.put("/api/repos/:owner/:name/queued", (c) => forward(c, "QUEUE_REPO", { repoId: repoId(c) }));
+
+app.delete("/api/repos/:owner/:name/queued", (c) => forward(c, "UNQUEUE_REPO", { repoId: repoId(c) }));
+
 app.put("/api/repos/:owner/:name/rights", async (c) => {
   const read = await readBody(c, SetRightsBodySchema);
   if ("response" in read) return read.response;
@@ -302,6 +306,8 @@ app.put("/api/categories/:id", async (c) => {
 });
 
 app.delete("/api/categories/:id", (c) => forward(c, "DELETE_CATEGORY", { categoryId: c.req.param("id") }));
+
+app.put("/api/categories/:id/queued", (c) => forward(c, "QUEUE_CATEGORY", { categoryId: c.req.param("id") }));
 
 app.post("/api/repos/:owner/:name/operations", async (c) => {
   const read = await readBody(c, ScopeBodySchema);

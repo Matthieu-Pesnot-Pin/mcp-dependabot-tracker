@@ -222,6 +222,32 @@ const PATHS = {
       <path d="m3 7 2 2 4-4" />
     </>
   ),
+  'list-todo': (
+    <>
+      <path d="M13 5h8" />
+      <path d="M13 12h8" />
+      <path d="M13 19h8" />
+      <path d="m3 17 2 2 4-4" />
+      <rect x="3" y="4" width="6" height="6" rx="1" />
+    </>
+  ),
+  'list-plus': (
+    <>
+      <path d="M16 5H3" />
+      <path d="M11 12H3" />
+      <path d="M16 19H3" />
+      <path d="M18 9v6" />
+      <path d="M21 12h-6" />
+    </>
+  ),
+  'list-check': (
+    <>
+      <path d="M16 5H3" />
+      <path d="M16 12H3" />
+      <path d="M11 19H3" />
+      <path d="m15 18 2 2 4-4" />
+    </>
+  ),
   copy: (
     <>
       <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />

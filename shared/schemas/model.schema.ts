@@ -99,7 +99,8 @@ export type Category = z.infer<typeof CategorySchema>;
  * `handledAlerts` les alertes qu'il a marquées corrigées à la main ;
  * `pullRequests` les pull requests du tracker encore ouvertes à la dernière lecture ;
  * `deprecatedAt` la date à laquelle il a été marqué déprécié, null sinon : un
- * dépôt déprécié n'est plus synchronisé ni audité.
+ * dépôt déprécié n'est plus synchronisé ni audité ;
+ * `queuedAt` la date de son entrée dans la file d'attente, null s'il n'y est pas.
  */
 export const RepoSchema = z.object({
   id: z.string(),
@@ -116,6 +117,7 @@ export const RepoSchema = z.object({
   syncedAt: z.string().nullable(),
   syncError: z.string().nullable(),
   deprecatedAt: z.string().nullable(),
+  queuedAt: z.string().nullable(),
 });
 
 export type Repo = z.infer<typeof RepoSchema>;

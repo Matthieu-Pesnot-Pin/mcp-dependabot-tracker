@@ -24,7 +24,7 @@ import { OrganizerClient } from "./core/organizer.js";
 import { readSettings, saveSettings, settingsView, testOrganizer, type SettingsChecks } from "./core/settings.js";
 import { SaveSettingsBodySchema } from "../shared/schemas/settings.schema.js";
 import { AUDIT_SCOPES } from "../shared/schemas/model.schema.js";
-import { SYNC_INTERVAL_MS, activeRepos, addRepository, operationSummary, deprecateRepository, listAddableRepositories, restoreRepository, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
+import { SYNC_INTERVAL_MS, addRepository, auditTargetRepos, queueCategory, queueRepository, unqueueRepository, operationSummary, deprecateRepository, listAddableRepositories, restoreRepository, listRepoBranches, listRepoViews, markAlertHandled, setBranch, setCategory, repoView, setRights, staleRepos, syncAllRepositories, syncRepository, unmarkAlertHandled } from "./core/repos.js";
 import { GUI_REQUEST_TYPES, IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
 import {
   AddRepoBodySchema,
@@ -206,12 +206,8 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
     case "START_AUDIT_ALL": {
       readGitHubConfig();
       store.failOrphanedOperations();
-      const { scope, categoryId } = parseRequest(AuditAllBodySchema, msg.data?.body);
-      if (categoryId !== null) store.getCategory(categoryId);
-      const repoIds = activeRepos(store)
-        .filter((repo) => categoryId === null || repo.categoryId === categoryId)
-        .map((repo) => repo.id);
-      return { auditAll: auditAll.start(repoIds, scope, categoryId) } satisfies AuditAllResponse;
+      const { scope, target } = parseRequest(AuditAllBodySchema, msg.data?.body);
+      return { auditAll: auditAll.start(auditTargetRepos(store, target).map((repo) => repo.id), scope, target) } satisfies AuditAllResponse;
     }
 
     case "LIST_ADDABLE_REPOS":
@@ -233,6 +229,12 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
 
     case "DEPRECATE_REPO":
       return repoView(store, deprecateRepository(store, parseRequest(RepoRequestSchema, msg.data).repoId));
+
+    case "QUEUE_REPO":
+      return repoView(store, queueRepository(store, parseRequest(RepoRequestSchema, msg.data).repoId));
+
+    case "UNQUEUE_REPO":
+      return repoView(store, unqueueRepository(store, parseRequest(RepoRequestSchema, msg.data).repoId));
 
     case "RESTORE_REPO":
       return repoView(store, await restoreRepository(store, readGitHubConfig(), parseRequest(RepoRequestSchema, msg.data).repoId));
@@ -280,6 +282,10 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
       const { categoryId } = parseRequest(CategoryRequestSchema, msg.data);
       return store.renameCategory(categoryId, parseRequest(CategoryBodySchema, msg.data?.body).name);
     }
+
+    case "QUEUE_CATEGORY":
+      queueCategory(store, parseRequest(CategoryRequestSchema, msg.data).categoryId);
+      return { repos: listRepoViews(store), categories: store.listCategories() } satisfies ReposResponse;
 
     case "DELETE_CATEGORY":
       store.deleteCategory(parseRequest(CategoryRequestSchema, msg.data).categoryId);
