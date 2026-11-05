@@ -24,10 +24,10 @@ export class AuditAll {
     return this.state && { ...this.state, skipped: [...this.state.skipped], failed: [...this.state.failed] };
   }
 
-  /** Lance la série sur `repoIds`, périmètre `scope`, et rend aussitôt son état ; refusé si une série est en cours. */
-  start(repoIds: string[], scope: AuditScope): AuditAllState {
+  /** Lance la série sur `repoIds` de la catégorie `categoryId` (`null` : tous les dépôts), périmètre `scope`, et rend aussitôt son état ; refusé si une série est en cours. */
+  start(repoIds: string[], scope: AuditScope, categoryId: string | null): AuditAllState {
     if (this.state?.running) throw new ConflictError("An audit of every repository is already running.");
-    this.state = { running: true, scope, startedAt: new Date().toISOString(), finishedAt: null, total: repoIds.length, done: 0, skipped: [], failed: [] };
+    this.state = { running: true, scope, categoryId, startedAt: new Date().toISOString(), finishedAt: null, total: repoIds.length, done: 0, skipped: [], failed: [] };
     this.run = this.auditAll(this.state, [...repoIds]);
     return this.status()!;
   }

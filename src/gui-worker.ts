@@ -7,7 +7,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 
 import { IPCMessageSchema, type IPCMessage, type IpcErrorKind } from "../shared/schemas/ipc.schema.js";
-import { AddRepoBodySchema, CategoryBodySchema, ForceBodySchema, PushBodySchema, RepairBodySchema, ScopeBodySchema, SetBranchBodySchema, SetCategoryBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
+import { AddRepoBodySchema, AuditAllBodySchema, CategoryBodySchema, ForceBodySchema, PushBodySchema, RepairBodySchema, ScopeBodySchema, SetBranchBodySchema, SetCategoryBodySchema, SetRightsBodySchema } from "../shared/schemas/api.schema.js";
 import { SaveSettingsBodySchema } from "../shared/schemas/settings.schema.js";
 import type { Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
@@ -244,7 +244,7 @@ app.post("/api/sync", (c) => forward(c, "SYNC_REPOS"));
 app.get("/api/audit-all", (c) => forward(c, "GET_AUDIT_ALL"));
 
 app.post("/api/audit-all", async (c) => {
-  const read = await readBody(c, ScopeBodySchema);
+  const read = await readBody(c, AuditAllBodySchema);
   if ("response" in read) return read.response;
   return forward(c, "START_AUDIT_ALL", { body: read.body });
 });

@@ -256,9 +256,9 @@ test("AuditAll audits three repositories at a time and reports those skipped or 
   const auditAll = new AuditAll(audit, (message) => errors.push(message));
   assert.equal(auditAll.status(), null);
   const ids = ["o/a", "o/busy", "o/b", "o/broken", "o/c", "o/d"];
-  const started = auditAll.start(ids, "all");
-  assert.deepEqual([started.running, started.scope, started.total, started.done], [true, "all", 6, 0]);
-  assert.throws(() => auditAll.start(ids, "production"), /already running/);
+  const started = auditAll.start(ids, "all", null);
+  assert.deepEqual([started.running, started.scope, started.categoryId, started.total, started.done], [true, "all", null, 6, 0]);
+  assert.throws(() => auditAll.start(ids, "production", null), /already running/);
   await auditAll.finished();
   const done = auditAll.status()!;
   assert.equal(done.running, false);

@@ -244,10 +244,12 @@ test("the GUI audits every repository; the agent sees what Dependabot misses", {
   assert.equal((await call("POST", "repos", { repository: "octo/quiet" })).status, 200);
   assert.deepEqual((await call("GET", "audit-all")).json, { auditAll: null });
   assert.equal((await call("POST", "audit-all")).status, 400, "the scope is required");
-  const started = await call("POST", "audit-all", { scope: "production" });
+  assert.equal((await call("POST", "audit-all", { scope: "production" })).status, 400, "the category is required");
+  assert.equal((await call("POST", "audit-all", { scope: "production", categoryId: "missing" })).status, 404);
+  const started = await call("POST", "audit-all", { scope: "production", categoryId: null });
   assert.equal(started.status, 200, started.json.error);
-  assert.deepEqual([started.json.auditAll.running, started.json.auditAll.scope], [true, "production"]);
-  assert.equal((await call("POST", "audit-all", { scope: "production" })).status, 409);
+  assert.deepEqual([started.json.auditAll.running, started.json.auditAll.scope, started.json.auditAll.categoryId], [true, "production", null]);
+  assert.equal((await call("POST", "audit-all", { scope: "production", categoryId: null })).status, 409);
   const finished = await waitFor("the audit of every repository", () => call("GET", "audit-all"), (response) => response.json.auditAll.running === false);
   const { total, done, skipped, failed } = finished.json.auditAll;
   assert.deepEqual({ done, skipped, failed }, { done: total, skipped: [], failed: [] });

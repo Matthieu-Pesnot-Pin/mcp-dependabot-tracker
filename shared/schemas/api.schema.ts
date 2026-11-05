@@ -39,10 +39,15 @@ export interface BranchesResponse {
   branches: string[];
 }
 
-/** Corps de `POST /api/repos/:owner/:name/operations` et de `POST /api/audit-all` : le périmètre de l'audit. */
+/** Corps de `POST /api/repos/:owner/:name/operations` : le périmètre de l'audit. */
 export const ScopeBodySchema = z.object({ scope: z.enum(AUDIT_SCOPES) });
 
 export type ScopeBody = z.infer<typeof ScopeBodySchema>;
+
+/** Corps de `POST /api/audit-all` : le périmètre des audits et la catégorie des dépôts audités, `null` pour tous les dépôts. */
+export const AuditAllBodySchema = ScopeBodySchema.extend({ categoryId: z.string().min(1).nullable() });
+
+export type AuditAllBody = z.infer<typeof AuditAllBodySchema>;
 
 /** `apply` : lancer `npm audit fix --force` ; sinon l'étape est passée. */
 export const ForceBodySchema = z.object({ apply: z.boolean() });
@@ -106,11 +111,12 @@ export interface RepoView {
  * Série « Auditer tout » : `done` dépôts traités sur `total`, dont ceux laissés
  * de côté parce qu'une opération y était en cours (`skipped`) et ceux dont
  * l'audit a échoué, avec la raison (`failed`) ; `scope` est le périmètre des
- * audits.
+ * audits, `categoryId` la catégorie des dépôts audités (`null` : tous).
  */
 export interface AuditAllState {
   running: boolean;
   scope: AuditScope;
+  categoryId: string | null;
   startedAt: string;
   finishedAt: string | null;
   total: number;

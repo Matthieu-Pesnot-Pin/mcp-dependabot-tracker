@@ -12,12 +12,13 @@ const RUNNING_POLL_MS = 1500
 const IDLE_POLL_MS = 5000
 
 /**
- * Audite la branche par défaut de tous les dépôts suivis, sur le périmètre
- * choisi au lancement, avec la progression sur le bouton ; à la fin d'une
- * série suivie ici, un message dit combien de dépôts ont été audités, laissés
- * de côté ou en échec.
+ * Audite la branche par défaut des dépôts suivis de la catégorie `categoryId`,
+ * ou de tous les dépôts suivis quand elle est `null`, sur le périmètre choisi
+ * au lancement, avec la progression sur le bouton ; à la fin d'une série suivie
+ * ici, un message dit combien de dépôts ont été audités, laissés de côté ou en
+ * échec.
  */
-export function AuditAllButton() {
+export function AuditAllButton({ categoryId }: { categoryId: string | null }) {
   const [pollMs, setPollMs] = useState(IDLE_POLL_MS)
   const status = usePolling('audit-all', api.getAuditAll, pollMs)
   const [starting, setStarting] = useState(false)
@@ -44,7 +45,7 @@ export function AuditAllButton() {
   async function start(scope: AuditScope) {
     setStarting(true)
     try {
-      const { auditAll } = await api.startAuditAll(scope)
+      const { auditAll } = await api.startAuditAll(scope, categoryId)
       followedRef.current = auditAll?.startedAt ?? null
       status.reload()
     } catch (err) {
@@ -62,5 +63,5 @@ export function AuditAllButton() {
       </button>
     )
   }
-  return <ScopeButton variant="secondary" icon="scan-search" label="Auditer tout" disabled={starting} onLaunch={(scope) => void start(scope)} />
+  return <ScopeButton variant="secondary" icon="scan-search" label={categoryId === null ? 'Auditer tout' : 'Auditer la catégorie'} disabled={starting} onLaunch={(scope) => void start(scope)} />
 }

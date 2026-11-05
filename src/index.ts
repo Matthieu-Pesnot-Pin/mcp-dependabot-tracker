@@ -36,6 +36,7 @@ import {
   PushBodySchema,
   RepairBodySchema,
   RepoRequestSchema,
+  AuditAllBodySchema,
   ScopeBodySchema,
   SetBranchBodySchema,
   SetCategoryBodySchema,
@@ -202,10 +203,16 @@ async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
     case "GET_AUDIT_ALL":
       return { auditAll: auditAll.status() } satisfies AuditAllResponse;
 
-    case "START_AUDIT_ALL":
+    case "START_AUDIT_ALL": {
       readGitHubConfig();
       store.failOrphanedOperations();
-      return { auditAll: auditAll.start(activeRepos(store).map((repo) => repo.id), parseRequest(ScopeBodySchema, msg.data?.body).scope) } satisfies AuditAllResponse;
+      const { scope, categoryId } = parseRequest(AuditAllBodySchema, msg.data?.body);
+      if (categoryId !== null) store.getCategory(categoryId);
+      const repoIds = activeRepos(store)
+        .filter((repo) => categoryId === null || repo.categoryId === categoryId)
+        .map((repo) => repo.id);
+      return { auditAll: auditAll.start(repoIds, scope, categoryId) } satisfies AuditAllResponse;
+    }
 
     case "LIST_ADDABLE_REPOS":
       return { repositories: await listAddableRepositories(store, readGitHubConfig()) } satisfies AddableReposResponse;

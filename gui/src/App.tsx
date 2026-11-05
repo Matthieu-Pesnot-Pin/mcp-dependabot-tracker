@@ -43,7 +43,7 @@ export default function App() {
           <Icon name="settings" />
         </a>
         <SyncButton />
-        <AuditAllButton />
+        <AuditAllButton categoryId={route.name === 'home' ? route.categoryId : null} />
         <button type="button" className="button button-primary" onClick={openAdd}>
           <Icon name="plus" />
           Ajouter un dépôt
