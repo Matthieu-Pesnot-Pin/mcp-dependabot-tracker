@@ -212,6 +212,17 @@ code {
   min-width: 0;
 }
 
+.title-link {
+  display: inline-flex;
+  margin-left: 8px;
+  vertical-align: middle;
+  color: var(--muted);
+}
+
+.title-link:hover {
+  color: var(--text);
+}
+
 .back {
   display: inline-flex;
   margin-top: 5px;
@@ -684,6 +695,38 @@ code {
   min-height: 48px;
 }
 
+.repo-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.repo-github {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--faint);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.row:hover .repo-github,
+.repo-github:focus-visible {
+  opacity: 1;
+}
+
+.repo-github:hover {
+  color: var(--text);
+}
+
+@media (hover: none) {
+  .repo-github {
+    opacity: 1;
+  }
+}
+
 .repo-name {
   min-width: 0;
   overflow: hidden;
@@ -794,7 +837,7 @@ code {
     padding: 10px 44px 10px 16px;
   }
 
-  .repo-name {
+  .repo-name-cell {
     flex: 1 1 100%;
   }
 

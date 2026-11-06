@@ -18,6 +18,7 @@ const skip = online ? false : "the npm registry is unreachable: npm audit needs 
 let client: McpClient;
 let temp: { dir: string; cleanup: () => void };
 let github: FakeGitHub;
+let remotes: LocalRemotes;
 let baseUrl = "";
 let port = 0;
 
@@ -34,7 +35,7 @@ before(async () => {
   temp = makeTempDir("tracker-server-");
   github = new FakeGitHub();
   await github.start();
-  const remotes = new LocalRemotes(path.join(temp.dir, "remotes"));
+  remotes = new LocalRemotes(path.join(temp.dir, "remotes"));
   remotes.create("octo", "demo", "main", { ".": VULNERABLE_FIXTURE });
   github.addRepo("octo", "demo", "main", [
     { number: 3, severity: "medium", package: "cookie", summary: "Cookie name issue" },
@@ -79,6 +80,7 @@ test("the server lists its tools and serves the GUI page with its base href", as
   assert.match(await page.text(), /<base href="\/" \/>/);
   const config = await call("GET", "config");
   assert.equal(config.json.githubConfigured, true);
+  assert.equal(config.json.githubServerUrl, remotes.serverUrl);
   assert.equal((await call("GET", "nope")).status, 404);
 });
 

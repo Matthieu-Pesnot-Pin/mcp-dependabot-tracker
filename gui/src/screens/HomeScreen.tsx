@@ -250,17 +250,32 @@ function RepoTableHead() {
 }
 
 /**
- * Ligne d'un dépôt de l'accueil : le nom, puis les colonnes « Sécurité »,
- * « Dernier audit » et « Suivi », de largeur fixe, puis les boutons et le
- * chevron. Avec `hoverActions`, les boutons n'apparaissent qu'au survol de la
- * ligne, ou en permanence sur un écran tactile.
+ * Ligne d'un dépôt de l'accueil : le nom, suivi au survol du lien vers sa page
+ * GitHub sous `githubServerUrl` (en permanence sur un écran tactile), puis les
+ * colonnes « Sécurité », « Dernier audit » et « Suivi », de largeur fixe, puis
+ * les boutons et le chevron. Avec `hoverActions`, les boutons n'apparaissent
+ * qu'au survol de la ligne, ou en permanence sur un écran tactile.
  */
-function RepoRow({ view, actions, hoverActions }: { view: RepoView; actions: ReactNode; hoverActions: boolean }) {
+function RepoRow({ view, githubServerUrl, actions, hoverActions }: { view: RepoView; githubServerUrl: string | null; actions: ReactNode; hoverActions: boolean }) {
   return (
     <div className="row row-linked repo-row">
-      <a className="repo-name row-link" href={hrefs.repo(view.repo.id)} title={view.repo.id}>
-        {view.repo.name}
-      </a>
+      <div className="repo-name-cell">
+        <a className="repo-name row-link" href={hrefs.repo(view.repo.id)} title={view.repo.id}>
+          {view.repo.name}
+        </a>
+        {githubServerUrl && (
+          <a
+            className="repo-github"
+            href={`${githubServerUrl}/${view.repo.id}`}
+            target="_blank"
+            rel="noreferrer"
+            title={`Ouvrir ${view.repo.id} sur GitHub`}
+            aria-label={`Ouvrir ${view.repo.id} sur GitHub`}
+          >
+            <Icon name="external-link" size={14} />
+          </a>
+        )}
+      </div>
       <div className="repo-cell">
         <SecurityCell view={view} />
       </div>
@@ -774,6 +789,7 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
               <RepoRow
                 key={view.repo.id}
                 view={view}
+                githubServerUrl={config.data?.githubServerUrl ?? null}
                 hoverActions={!showingQueue && !showingPulls && !showingDeploy}
                 actions={
                   showingQueue ? (

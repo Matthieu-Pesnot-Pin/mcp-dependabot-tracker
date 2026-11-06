@@ -192,8 +192,10 @@ export interface OperationsResponse {
   operations: OperationSummary[];
 }
 
+/** Configuration lue par la GUI ; `githubServerUrl` est l'adresse web du serveur GitHub, sans barre finale. */
 export interface AppConfig {
   version: string;
   dataDir: string;
   githubConfigured: boolean;
+  githubServerUrl: string;
 }

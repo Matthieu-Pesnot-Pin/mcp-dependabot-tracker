@@ -291,6 +291,7 @@ function DeployButton({ view, onChanged }: { view: RepoView; onChanged: () => vo
 export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
   const polled = usePolling(`repo:${repoId}`, () => api.getRepo(repoId), POLL_MS)
   const history = usePolling(`history:${repoId}`, () => api.listOperations(repoId), POLL_MS)
+  const config = usePolling('config', api.getConfig, null)
   const [drawer, setDrawer] = useState(false)
   const [starting, setStarting] = useState(false)
   const view = polled.data
@@ -324,7 +325,21 @@ export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
           <Icon name="arrow-left" size={20} />
         </a>
         <div className="page-head-text">
-          <h1 className="page-title">{repo.name}</h1>
+          <h1 className="page-title">
+            {repo.name}
+            {config.data && (
+              <a
+                className="title-link"
+                href={`${config.data.githubServerUrl}/${repo.id}`}
+                target="_blank"
+                rel="noreferrer"
+                title={`Ouvrir ${repo.id} sur GitHub`}
+                aria-label={`Ouvrir ${repo.id} sur GitHub`}
+              >
+                <Icon name="external-link" size={16} />
+              </a>
+            )}
+          </h1>
           <div className="subtitle">
             {repo.owner} · <BranchSelector repo={repo} onChanged={polled.reload} /> ·{' '}
             <CategorySelector repo={repo} categoryName={view.category?.name ?? null} onChanged={polled.reload} /> ·{' '}

@@ -13,6 +13,11 @@ export interface GitHubConfig {
 const DEFAULT_API_URL = "https://api.github.com";
 const DEFAULT_SERVER_URL = "https://github.com";
 
+/** Adresse web du serveur GitHub, sans barre finale : `<serveur>/<propriétaire>/<nom>` est la page d'un dépôt. */
+export function readServerUrl(): string {
+  return (process.env.GITHUB_SERVER_URL?.trim() || DEFAULT_SERVER_URL).replace(/\/+$/, "");
+}
+
 export function githubConfigured(): boolean {
   return !!process.env.GITHUB_TOKEN?.trim();
 }
@@ -28,6 +33,6 @@ export function readGitHubConfig(): GitHubConfig {
   return {
     token,
     apiUrl: (process.env.GITHUB_API_URL?.trim() || DEFAULT_API_URL).replace(/\/+$/, ""),
-    serverUrl: (process.env.GITHUB_SERVER_URL?.trim() || DEFAULT_SERVER_URL).replace(/\/+$/, ""),
+    serverUrl: readServerUrl(),
   };
 }

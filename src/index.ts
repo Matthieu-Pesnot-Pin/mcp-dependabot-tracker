@@ -12,7 +12,7 @@ import type { z } from "zod";
 import { APP_VERSION } from "./version.js";
 import { resolveCloneDir, resolveDataDir } from "./core/data-dir.js";
 import { resolveLogDir } from "./core/log-dir.js";
-import { githubConfigured, readGitHubConfig } from "./core/config.js";
+import { githubConfigured, readGitHubConfig, readServerUrl } from "./core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "./core/errors.js";
 import { Store } from "./core/store.js";
 import { assertMergeAuditPossible, cancelOperation, runDefaultBranchAudit, startMergeAudit, startUserFix, type OperationContext } from "./core/operations.js";
@@ -187,7 +187,7 @@ function errorKindOf(err: unknown): IpcErrorKind {
 async function handleGuiRequest(msg: IPCMessage): Promise<unknown> {
   switch (msg.type) {
     case "GET_CONFIG":
-      return { version: APP_VERSION, dataDir, githubConfigured: githubConfigured() } satisfies AppConfig;
+      return { version: APP_VERSION, dataDir, githubConfigured: githubConfigured(), githubServerUrl: readServerUrl() } satisfies AppConfig;
 
     case "LIST_REPOS":
       return { repos: listRepoViews(store), categories: store.listCategories() } satisfies ReposResponse;
