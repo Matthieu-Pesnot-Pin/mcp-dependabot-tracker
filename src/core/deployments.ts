@@ -165,6 +165,11 @@ export class DeploymentStore {
     return deployment;
   }
 
+  /** Déploiement en cours sur le serveur `serverId`, quel que soit le dépôt. */
+  runningOnServer(serverId: string): Deployment | null {
+    return this.readAll().find((deployment) => deployment.status === "running" && deployment.serverId === serverId) ?? null;
+  }
+
   active(repoId: string): Deployment | null {
     return this.list(repoId).find((deployment) => deployment.status === "running") ?? null;
   }
@@ -253,6 +258,12 @@ export class Deployer {
     return this.view(repo.id);
   }
 
+  /** Refuse une opération sur la clé d'un serveur pendant qu'un déploiement l'utilise. */
+  assertServerIdle(serverId: string): void {
+    const running = this.deployments.runningOnServer(serverId);
+    if (running) throw new ConflictError(`A deployment of ${running.repoId} is running on this server: wait for it to finish or interrupt it.`);
+  }
+
   /** Lance le script du dépôt sur son serveur ; le déploiement se poursuit en arrière-plan. */
   async start(repoId: string): Promise<Deployment> {
     const repo = this.store.getRepo(repoId);
@@ -260,6 +271,7 @@ export class Deployer {
     if (repo.deployServerId === null) throw new ConflictError(`${repo.id} has no deployment server: connect one first.`);
     if (!repo.deployScript.trim()) throw new ConflictError(`${repo.id} has no deployment script: write it first.`);
     const server = this.servers.get(repo.deployServerId);
+    if (server.publicKey === null) throw new ConflictError(`The key of ${server.name} was revoked: install a new key first.`);
     if (server.testedAt === null) throw new ConflictError(`The connection to ${server.name} has not been tested: test it before deploying.`);
     if (this.deployments.active(repo.id)) throw new ConflictError(`A deployment is already running on ${repo.id}: wait for it to finish or interrupt it.`);
 

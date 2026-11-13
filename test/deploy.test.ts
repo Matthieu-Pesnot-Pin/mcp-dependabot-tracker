@@ -179,6 +179,93 @@ test("a running deployment can be interrupted, and only one runs at a time", asy
   assert.equal(listed.json.deployments[0].output, undefined);
 });
 
+/** Lignes du fichier dédié du faux serveur. */
+function keyLines(): string[] {
+  return fs.readFileSync(ssh.keyFile, "utf-8").trim().split("\n").filter(Boolean);
+}
+
+const OTHER_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherKeyOfAnotherTrackerServer0000000000 other@host";
+
+test("a key the server does not accept stops the rotation at the test, and the file gets back its original line", async () => {
+  const before = (await call("GET", "deploy-servers")).json.servers[0].server;
+  const linesBefore = keyLines();
+  const original = new Set(fs.readdirSync(path.dirname(ssh.keyFile)));
+  ssh.acceptOnly = before.publicKey.split(" ")[1];
+  try {
+    const rotated = await call("POST", `deploy-servers/${serverId}/key/rotate`);
+    assert.equal(rotated.status, 200, rotated.json.error);
+    assert.deepEqual(rotated.json.steps, ["done", "done", "failed", "skipped"]);
+    assert.match(rotated.json.error, /Authentification refusée/);
+    assert.equal(rotated.json.server.server.publicKey, before.publicKey);
+  } finally {
+    ssh.acceptOnly = null;
+  }
+  assert.deepEqual(keyLines(), linesBefore);
+  assert.deepEqual(new Set(fs.readdirSync(path.dirname(ssh.keyFile))), original);
+});
+
+test("a rotation replaces the key on the server and in the tracker, keeps its address limit and the other keys", async () => {
+  const before = (await call("GET", "deploy-servers")).json.servers[0].server;
+  fs.mkdirSync(path.join(ssh.home, ".ssh"), { recursive: true });
+  fs.writeFileSync(path.join(ssh.home, ".ssh", "authorized_keys"), `${before.publicKey}\n`);
+  const doubled = await call("POST", `deploy-servers/${serverId}/key/rotate`);
+  assert.equal(doubled.status, 400);
+  assert.match(doubled.json.error, /aussi dans ~\/\.ssh\/authorized_keys/);
+  fs.rmSync(path.join(ssh.home, ".ssh", "authorized_keys"));
+
+  const rotated = await call("POST", `deploy-servers/${serverId}/key/rotate`);
+  assert.equal(rotated.status, 200, rotated.json.error);
+  assert.deepEqual([rotated.json.steps, rotated.json.error], [["done", "done", "done", "done"], null]);
+  const after = rotated.json.server.server;
+  assert.notEqual(after.publicKey, before.publicKey);
+  assert.equal(after.allowedFrom, "127.0.0.1");
+  assert.ok(after.testedAt);
+  assert.deepEqual(keyLines(), [`restrict ${OTHER_KEY}`, `restrict,from="127.0.0.1" ${after.publicKey}`]);
+
+  await call("PUT", "repos/octo/app/deploy/script", { script: "echo rotated\n" });
+  const deployment = await deploy();
+  assert.equal(deployment.status, "done", deployment.error ?? deployment.output);
+  assert.equal(deployment.output, "rotated\n");
+});
+
+test("a revocation removes the key from the server, checks it is refused, then forgets it; a new key starts over", async () => {
+  const before = (await call("GET", "deploy-servers")).json.servers[0];
+  const revoked = await call("POST", `deploy-servers/${serverId}/key/revoke`);
+  assert.equal(revoked.status, 200, revoked.json.error);
+  assert.deepEqual([revoked.json.server.publicKey, revoked.json.installCommand, revoked.json.revokeCommand, revoked.json.server.testedAt], [null, null, null, null]);
+  assert.deepEqual(keyLines(), [`restrict ${OTHER_KEY}`]);
+  assert.ok(before.revokeCommand.startsWith("grep -vF 'ssh-ed25519 "), before.revokeCommand);
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "deploy-servers.json"), "utf-8")).servers.find((s: any) => s.id === serverId);
+  assert.equal(stored.privateKeyEncrypted, null);
+
+  const deployRefused = await call("POST", "repos/octo/app/deployments");
+  assert.equal(deployRefused.status, 409);
+  assert.match(deployRefused.json.error, /was revoked/);
+  assert.match((await call("POST", `deploy-servers/${serverId}/test`)).json.error, /a été révoquée/);
+  assert.equal((await call("POST", `deploy-servers/${serverId}/key/rotate`)).status, 400);
+
+  const fresh = await call("POST", `deploy-servers/${serverId}/key`);
+  assert.equal(fresh.status, 200, fresh.json.error);
+  assert.match(fresh.json.server.publicKey, /^ssh-ed25519 /);
+  assert.ok(fresh.json.installCommand);
+  assert.equal((await call("POST", `deploy-servers/${serverId}/key`)).status, 400);
+  ssh.install(`restrict ${OTHER_KEY}\nrestrict ${fresh.json.server.publicKey}`);
+  const tested = await call("POST", `deploy-servers/${serverId}/test`);
+  assert.equal(tested.status, 200, tested.json.error);
+});
+
+test("an unreachable server keeps its key until the user says the line is removed", async () => {
+  const created = await call("POST", "deploy-servers", { name: "Gone", host: "127.0.0.1", port: 1, username: "deploy" });
+  const id = created.json.server.id;
+  const failed = await call("POST", `deploy-servers/${id}/key/revoke`);
+  assert.equal(failed.status, 400);
+  assert.match(failed.json.error, /n'a pas pu se connecter pour retirer sa clé/);
+  assert.ok((await call("GET", "deploy-servers")).json.servers.find((s: any) => s.server.id === id).server.publicKey);
+  const forgotten = await call("POST", `deploy-servers/${id}/key/forget`);
+  assert.equal(forgotten.status, 200, forgotten.json.error);
+  assert.equal(forgotten.json.server.publicKey, null);
+});
+
 test("changing the host forgets the host key and the test; the server refuses to start with another VAULT_KEY", async () => {
   const moved = await call("PUT", `deploy-servers/${serverId}`, { name: "Préprod 2", host: "localhost", port: ssh.port, username: "deploy" });
   assert.equal(moved.status, 200, moved.json.error);

@@ -8,6 +8,7 @@ import { clockTime, dayAndTime, relativeTime } from '../../utils/format'
 import { hrefs, navigate } from '../../utils/router'
 import { Icon, type IconName } from '../Icon'
 import { lineCount } from '../../utils/script'
+import { RevokeKeyModal, RotateKeyModal } from './KeyModals'
 import { ScriptEditor, ScriptView, type LineMark } from './ScriptView'
 import { ServerWizard, type WizardStep } from './ServerWizard'
 
@@ -160,19 +161,24 @@ interface ServerCardProps {
   starting: boolean
   onDeploy: () => void
   onCancel: (deployment: Deployment) => void
-  onWizard: (step: WizardStep) => void
+  onWizard: (step: WizardStep, view?: DeployServerView) => void
+  onKey: (action: 'rotate' | 'revoke') => void
   onNewServer: () => void
   onChanged: () => void
 }
 
 /** Serveur du dépôt : son état, « Déployer » (ou « Interrompre » pendant un déploiement) et son menu. */
-function ServerCard({ repo, view, deploy, starting, onDeploy, onCancel, onWizard, onNewServer, onChanged }: ServerCardProps) {
+function ServerCard({ repo, view, deploy, starting, onDeploy, onCancel, onWizard, onKey, onNewServer, onChanged }: ServerCardProps) {
   const { server } = view
   const [menu, setMenu] = useState<'closed' | 'actions' | 'servers'>('closed')
   const ref = useDismiss(menu !== 'closed', () => setMenu('closed'))
   const active = deploy.activeDeployment
   const last = deploy.deployments.find((deployment) => deployment.status !== 'running') ?? null
-  const blocked = server.testedAt === null ? 'Testez la connexion avant de déployer.' : !deploy.script.trim() ? 'Écrivez le script avant de déployer.' : repo.deprecatedAt ? 'Dépôt déprécié.' : null
+  const hasKey = server.publicKey !== null
+  const blocked = !hasKey
+    ? 'Clé révoquée : installez une nouvelle clé.'
+    : server.testedAt === null
+      ? 'Testez la connexion avant de déployer.' : !deploy.script.trim() ? 'Écrivez le script avant de déployer.' : repo.deprecatedAt ? 'Dépôt déprécié.' : null
 
   async function choose(id: string | null) {
     setMenu('closed')
@@ -184,7 +190,19 @@ function ServerCard({ repo, view, deploy, starting, onDeploy, onCancel, onWizard
     }
   }
 
-  const detail = last ? `dernier déploiement ${relativeTime(last.createdAt)}` : server.testedAt ? `testé ${relativeTime(server.testedAt)}` : 'connexion à tester'
+  /** Génère une nouvelle clé pour un serveur dont la clé a été révoquée, puis ouvre son installation. */
+  async function installKey() {
+    setMenu('closed')
+    try {
+      const fresh = await api.installDeployKey(server.id)
+      onChanged()
+      onWizard('key', fresh)
+    } catch (err) {
+      showError(err)
+    }
+  }
+
+  const detail = !hasKey ? 'clé révoquée' : last ? `dernier déploiement ${relativeTime(last.createdAt)}` : server.testedAt ? `testé ${relativeTime(server.testedAt)}` : 'connexion à tester'
 
   return (
     <div className="panel deploy-server">
@@ -200,6 +218,11 @@ function ServerCard({ repo, view, deploy, starting, onDeploy, onCancel, onWizard
           <span className="status-dot" />
           En cours
         </span>
+      ) : !hasKey ? (
+        <button type="button" className="status-chip is-idle" onClick={() => void installKey()}>
+          <span className="status-dot" />
+          Sans clé
+        </button>
       ) : server.testedAt ? (
         <span className="status-chip is-ok">
           <span className="status-dot" />
@@ -228,14 +251,40 @@ function ServerCard({ repo, view, deploy, starting, onDeploy, onCancel, onWizard
         </button>
         {menu === 'actions' && (
           <div className="picker-menu picker-menu-right">
-            <button type="button" className="menu-item" onClick={() => (setMenu('closed'), onWizard('key'))}>
-              <Icon name="file-key" size={14} />
-              Commande d'installation et test
-            </button>
+            {hasKey ? (
+              <button type="button" className="menu-item" onClick={() => (setMenu('closed'), onWizard('key'))}>
+                <Icon name="file-key" size={14} />
+                Commande d'installation et test
+              </button>
+            ) : (
+              <button type="button" className="menu-item" onClick={() => void installKey()}>
+                <Icon name="key-round" size={14} />
+                Installer une clé
+              </button>
+            )}
             <button type="button" className="menu-item" onClick={() => (setMenu('closed'), onWizard('form'))}>
               <Icon name="pencil" size={14} />
               Modifier le serveur
             </button>
+            {hasKey && (
+              <>
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => (setMenu('closed'), onKey('rotate'))}
+                  disabled={active !== null || server.hostKeyFingerprint === null}
+                  title={server.hostKeyFingerprint === null ? 'Testez la connexion avant de renouveler la clé.' : undefined}
+                >
+                  <Icon name="refresh-cw" size={14} />
+                  Renouveler la clé
+                </button>
+                <button type="button" className="menu-item menu-item-danger" onClick={() => (setMenu('closed'), onKey('revoke'))} disabled={active !== null}>
+                  <Icon name="key-round" size={14} />
+                  Révoquer la clé
+                </button>
+              </>
+            )}
+            <span className="menu-divider" />
             <button type="button" className="menu-item" onClick={() => setMenu('servers')} disabled={active !== null}>
               <Icon name="server" size={14} />
               Changer de serveur
@@ -408,6 +457,7 @@ function OpenedDeployment({ repoId, deploymentId }: { repoId: string; deployment
 export function DeployTab({ repo, deploymentId }: { repo: Repo; deploymentId: string | null }) {
   const polled = usePolling(`deploy:${repo.id}`, () => api.getRepoDeploy(repo.id), POLL_MS)
   const [wizard, setWizard] = useState<{ server: DeployServerView | null; step: WizardStep } | null>(null)
+  const [keyAction, setKeyAction] = useState<'rotate' | 'revoke' | null>(null)
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
   const deploy = polled.data
@@ -476,7 +526,8 @@ export function DeployTab({ repo, deploymentId }: { repo: Repo; deploymentId: st
         starting={busy}
         onDeploy={() => void start()}
         onCancel={(deployment) => void cancel(deployment)}
-        onWizard={(step) => setWizard({ server: deploy.server, step })}
+        onWizard={(step, view) => setWizard({ server: view ?? deploy.server, step })}
+        onKey={setKeyAction}
         onNewServer={() => setWizard({ server: null, step: 'form' })}
         onChanged={polled.reload}
       />
@@ -510,10 +561,20 @@ export function DeployTab({ repo, deploymentId }: { repo: Repo; deploymentId: st
     </>
   )
 
+  const keyModal =
+    keyAction && deploy.server ? (
+      keyAction === 'rotate' ? (
+        <RotateKeyModal view={deploy.server} onClose={() => setKeyAction(null)} onChanged={polled.reload} />
+      ) : (
+        <RevokeKeyModal view={deploy.server} onClose={() => setKeyAction(null)} onChanged={polled.reload} />
+      )
+    ) : null
+
   return (
     <>
       {content}
       {wizardModal}
+      {keyModal}
     </>
   )
 }

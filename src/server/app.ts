@@ -334,6 +334,21 @@ export function createApp(ctx: ServerContext): Hono {
 
   app.post("/api/deploy-servers/:id/test", (c) => respond(c, () => deployer.servers.test(c.req.param("id"))));
 
+  /** Opération sur la clé d'un serveur, refusée pendant un déploiement qui l'utilise. */
+  const withIdleServer = <T>(c: Context, fn: (id: string) => T): T => {
+    const id = deployer.servers.get(c.req.param("id")!).id;
+    deployer.assertServerIdle(id);
+    return fn(id);
+  };
+
+  app.post("/api/deploy-servers/:id/key", (c) => respond(c, () => deployer.servers.installNewKey(c.req.param("id"))));
+
+  app.post("/api/deploy-servers/:id/key/rotate", (c) => respond(c, () => withIdleServer(c, (id) => deployer.servers.rotate(id))));
+
+  app.post("/api/deploy-servers/:id/key/revoke", (c) => respond(c, () => withIdleServer(c, (id) => deployer.servers.revoke(id))));
+
+  app.post("/api/deploy-servers/:id/key/forget", (c) => respond(c, () => withIdleServer(c, (id) => deployer.servers.forget(id))));
+
   app.get("/api/repos/:owner/:name/deploy", (c) => respond(c, () => deployer.view(repoId(c))));
 
   app.put("/api/repos/:owner/:name/deploy/server", (c) => withBody(c, SetDeployServerBodySchema, (body) => deployer.setServer(repoId(c), body.serverId)));

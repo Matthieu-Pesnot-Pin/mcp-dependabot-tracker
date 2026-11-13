@@ -9,11 +9,13 @@ import {
   type DeployServersFile,
   type DeployServerView,
   type KeyFileStatus,
+  type KeyStepStatus,
+  type RotationResponse,
   type StoredDeployServer,
   type TestDeployServerResponse,
 } from "../../shared/schemas/deploy.schema.js";
 import { NotFoundError, TrackerError } from "./errors.js";
-import { connectSsh, execScript, type SshTarget } from "./ssh.js";
+import { AuthRefusedError, connectSsh, execScript, type SshTarget } from "./ssh.js";
 import { decryptSecret, encryptSecret } from "./vault.js";
 
 /** Fichier de clés propre au tracker, relatif au dossier personnel de l'utilisateur distant. */
@@ -64,6 +66,12 @@ export function installCommand(publicKey: string): string {
   ].join(" && ");
 }
 
+/** Commande qui retire la clé `publicKey` du fichier dédié, sans toucher aux autres lignes. */
+export function revokeCommand(publicKey: string): string {
+  const file = `~/${DEDICATED_KEY_FILE}`;
+  return `grep -vF '${keyIdentity(publicKey)}' ${file} > ${file}.tmp; mv -f ${file}.tmp ${file}`;
+}
+
 /** Contrôle et normalise les champs saisis pour un serveur. */
 export function validateServerInput(input: DeployServerBody): DeployServerBody {
   const name = String(input.name ?? "").trim();
@@ -100,6 +108,19 @@ function generateKeyPair(serverId: string): { public: string; private: string } 
 function toPublic({ privateKeyEncrypted: _key, ...server }: StoredDeployServer): DeployServer {
   return server;
 }
+
+function requireKey(server: DeployServer): string {
+  if (!server.publicKey) throw new TrackerError(`La clé de ${server.name} a été révoquée : installez une nouvelle clé.`);
+  return server.publicKey;
+}
+
+async function probe(target: SshTarget): Promise<void> {
+  const { client } = await connectSsh(target);
+  client.end();
+}
+
+/** Étapes d'un renouvellement de clé. */
+export const ROTATION_STEP_COUNT = 4;
 
 /** Type et corps de la clé, sans le commentaire : ce qui identifie la clé dans un fichier. */
 function keyIdentity(publicKey: string): string {
@@ -139,18 +160,19 @@ async function inspect(client: Client, publicKey: string): Promise<Inspection> {
 }
 
 /**
- * Remplace la ligne de la clé `publicKey` du fichier dédié par `line`, sans
- * toucher aux lignes des autres clés, par un fichier temporaire renommé :
+ * Retire du fichier dédié les lignes des clés `publicKeys` et y ajoute `lines`,
+ * sans toucher aux lignes des autres clés, par un fichier temporaire renommé :
  * jamais de fichier à moitié écrit.
  */
-async function writeKeyLine(client: Client, publicKey: string, line: string): Promise<void> {
+async function writeKeyLines(client: Client, publicKeys: string[], lines: string[]): Promise<void> {
+  const filters = publicKeys.map((key) => `-e '${keyIdentity(key)}'`).join(" ");
   const script = [
     `umask 077`,
     `mkdir -p "$HOME/.ssh/authorized_keys.d"`,
-    `{ [ -f ${KEY_FILE} ] && grep -vF '${keyIdentity(publicKey)}' ${KEY_FILE}; cat <<'DEPENDABOT_TRACKER_KEYS'`,
-    line,
+    `{ [ -f ${KEY_FILE} ] && grep -vF ${filters} ${KEY_FILE}; cat <<'DEPENDABOT_TRACKER_KEYS'`,
+    ...lines,
     `DEPENDABOT_TRACKER_KEYS`,
-    `} > ${KEY_FILE}.tmp`,
+    `} | grep -v '^$' > ${KEY_FILE}.tmp`,
     `mv -f ${KEY_FILE}.tmp ${KEY_FILE}`,
     ``,
   ].join("\n");
@@ -190,7 +212,11 @@ export class DeployServerStore {
       if (err.code === "ENOENT") return { servers: [] };
       throw err;
     }
-    const parsed = DeployServersFileSchema.safeParse(JSON.parse(raw));
+    const file = JSON.parse(raw);
+    if (Array.isArray(file?.servers)) {
+      file.servers = file.servers.map((server: any) => ({ ...server, keyCreatedAt: server?.keyCreatedAt ?? (server?.publicKey ? server.createdAt : null) }));
+    }
+    const parsed = DeployServersFileSchema.safeParse(file);
     if (!parsed.success) throw new TrackerError(`${this.file} is invalid: ${parsed.error.message}`);
     return parsed.data;
   }
@@ -209,7 +235,11 @@ export class DeployServerStore {
   }
 
   view(server: DeployServer): DeployServerView {
-    return { server, installCommand: installCommand(server.publicKey) };
+    return {
+      server,
+      installCommand: server.publicKey ? installCommand(server.publicKey) : null,
+      revokeCommand: server.publicKey ? revokeCommand(server.publicKey) : null,
+    };
   }
 
   list(): DeployServer[] {
@@ -227,13 +257,15 @@ export class DeployServerStore {
       let id = base;
       for (let n = 2; servers.some((server) => server.id === id); n += 1) id = `${base}-${n}`;
       const keys = generateKeyPair(id);
+      const createdAt = new Date().toISOString();
       const server: StoredDeployServer = {
         id,
         ...fields,
         publicKey: keys.public,
+        keyCreatedAt: createdAt,
         allowedFrom: null,
         hostKeyFingerprint: null,
-        createdAt: new Date().toISOString(),
+        createdAt,
         testedAt: null,
         privateKeyEncrypted: encryptSecret(keys.private, this.vaultKey),
       };
@@ -268,6 +300,7 @@ export class DeployServerStore {
   /** Cible SSH du serveur, avec sa clé privée déchiffrée et l'empreinte enregistrée. */
   target(id: string): SshTarget {
     const server = this.find(this.read().servers, id);
+    if (!server.privateKeyEncrypted) throw new TrackerError(`La clé de ${server.name} a été révoquée : installez une nouvelle clé.`);
     return {
       host: server.host,
       port: server.port,
@@ -280,6 +313,7 @@ export class DeployServerStore {
   /** Vérifie que VAULT_KEY déchiffre toutes les clés enregistrées. */
   verifyVault(): void {
     for (const server of this.read().servers) {
+      if (!server.privateKeyEncrypted) continue;
       try {
         decryptSecret(server.privateKeyEncrypted, this.vaultKey);
       } catch {
@@ -318,7 +352,8 @@ export class DeployServerStore {
     const target = this.target(id);
     const { client } = await connectSsh(target);
     try {
-      const found = await inspect(client, server.publicKey);
+      const publicKey = requireKey(server);
+      const found = await inspect(client, publicKey);
       const status = (allowedFrom: string | null, restrictError: string | null): KeyFileStatus => {
         this.patch(id, { allowedFrom });
         return { inDedicatedFile: found.line !== null, inAuthorizedKeys: found.inAuthorizedKeys, allowedFrom, restrictError };
@@ -329,20 +364,145 @@ export class DeployServerStore {
       const address = found.clientAddress && ADDRESS.test(found.clientAddress) ? found.clientAddress : null;
       if (!address) return status(current, "Le serveur n'indique pas l'adresse du tracker (SSH_CLIENT vide) : la limite d'adresse n'est pas posée.");
 
-      const wanted = keyLine(server.publicKey, address);
+      const wanted = keyLine(publicKey, address);
       if (found.line === wanted) return status(address, null);
 
-      await writeKeyLine(client, server.publicKey, wanted);
+      await writeKeyLines(client, [publicKey], [wanted]);
       try {
-        const probe = await connectSsh(target);
-        probe.client.end();
+        await probe(target);
       } catch (err: any) {
-        await writeKeyLine(client, server.publicKey, found.line);
+        await writeKeyLines(client, [publicKey], [found.line]);
         return status(current, `La limite à ${address} a été refusée par le serveur, la ligne d'origine est remise : ${err.message}`);
       }
       return status(address, null);
     } finally {
       client.end();
     }
+  }
+
+  /**
+   * Remplace la clé en quatre étapes : générer, ajouter la nouvelle à côté de
+   * l'actuelle, l'essayer sur une seconde connexion, puis ne garder qu'elle.
+   * Un échec avant la fin remet le fichier dans son état d'origine.
+   */
+  async rotate(id: string): Promise<RotationResponse> {
+    const server = this.get(id);
+    const publicKey = requireKey(server);
+    if (!server.hostKeyFingerprint) throw new TrackerError("Testez la connexion à ce serveur avant de renouveler sa clé.");
+
+    const steps: KeyStepStatus[] = Array.from({ length: ROTATION_STEP_COUNT }, () => "skipped");
+    const result = (error: string | null): RotationResponse => ({ server: this.view(this.get(id)), steps, error });
+    const target = this.target(id);
+    const { client } = await connectSsh(target);
+    try {
+      const found = await inspect(client, publicKey);
+      if (!found.line) throw new TrackerError(`La clé actuelle n'est pas dans ~/${DEDICATED_KEY_FILE} : collez d'abord la commande d'installation sur le serveur.`);
+      if (found.inAuthorizedKeys) {
+        throw new TrackerError("La clé actuelle figure aussi dans ~/.ssh/authorized_keys : elle resterait valable après le renouvellement. Retirez cette ligne vous-même, puis recommencez.");
+      }
+      const allowedFrom = allowedFromOf(found.line);
+
+      const fresh = generateKeyPair(id);
+      const freshLine = keyLine(fresh.public, allowedFrom);
+      steps[0] = "done";
+
+      try {
+        await writeKeyLines(client, [publicKey], [found.line, freshLine]);
+        steps[1] = "done";
+      } catch (err: any) {
+        steps[1] = "failed";
+        return result(err.message);
+      }
+
+      try {
+        await probe({ ...target, privateKey: fresh.private });
+        steps[2] = "done";
+      } catch (err: any) {
+        steps[2] = "failed";
+        try {
+          await writeKeyLines(client, [publicKey, fresh.public], [found.line]);
+        } catch (restoreErr: any) {
+          return result(`${err.message} La ligne ajoutée n'a pas pu être retirée : ${restoreErr.message}`);
+        }
+        return result(err.message);
+      }
+
+      this.replaceKey(id, fresh, allowedFrom);
+      try {
+        await writeKeyLines(client, [publicKey, fresh.public], [freshLine]);
+        steps[3] = "done";
+      } catch (err: any) {
+        steps[3] = "failed";
+        return result(`La nouvelle clé est en service, mais l'ancienne est encore dans le fichier dédié : ${err.message}`);
+      }
+      return result(null);
+    } finally {
+      client.end();
+    }
+  }
+
+  /**
+   * Retire la ligne de la clé du fichier dédié, vérifie que le serveur refuse
+   * désormais la clé, puis l'oublie. Si le serveur l'accepte encore, elle figure
+   * ailleurs : rien n'est effacé.
+   */
+  async revoke(id: string): Promise<DeployServerView> {
+    const server = this.get(id);
+    const publicKey = requireKey(server);
+    const target = this.target(id);
+
+    let client: Client;
+    try {
+      ({ client } = await connectSsh(target));
+    } catch (err: any) {
+      throw new TrackerError(`Le tracker n'a pas pu se connecter pour retirer sa clé : ${err.message}`);
+    }
+    try {
+      const found = await inspect(client, publicKey);
+      if (found.line) await writeKeyLines(client, [publicKey], []);
+    } finally {
+      client.end();
+    }
+
+    try {
+      await probe(target);
+    } catch (err) {
+      if (err instanceof AuthRefusedError) return this.forget(id);
+      throw new TrackerError(`La clé est retirée du fichier dédié, mais la vérification n'a pas abouti : ${(err as Error).message}`);
+    }
+    throw new TrackerError("Le serveur accepte toujours la clé : elle figure ailleurs, sans doute dans ~/.ssh/authorized_keys. Retirez-la vous-même, puis effacez la clé ici.");
+  }
+
+  /** Efface la clé sans toucher au serveur : le serveur reste enregistré, sans accès. */
+  forget(id: string): DeployServerView {
+    return this.view(
+      this.mutate((servers) => {
+        const server = this.find(servers, id);
+        Object.assign(server, { publicKey: null, privateKeyEncrypted: null, keyCreatedAt: null, allowedFrom: null, testedAt: null });
+        return toPublic(server);
+      })
+    );
+  }
+
+  /** Génère une nouvelle paire pour un serveur dont la clé a été révoquée. */
+  installNewKey(id: string): DeployServerView {
+    const server = this.get(id);
+    if (server.publicKey) throw new TrackerError(`${server.name} a déjà une clé : renouvelez-la plutôt.`);
+    return this.view(this.replaceKey(id, generateKeyPair(id), null));
+  }
+
+  /** Remplace la paire de clés ; la limite d'adresse suit la ligne écrite sur le serveur. */
+  private replaceKey(id: string, keys: { public: string; private: string }, allowedFrom: string | null): DeployServer {
+    return this.mutate((servers) => {
+      const server = this.find(servers, id);
+      Object.assign(server, {
+        publicKey: keys.public,
+        privateKeyEncrypted: encryptSecret(keys.private, this.vaultKey),
+        keyCreatedAt: new Date().toISOString(),
+        allowedFrom,
+      });
+      if (!allowedFrom) server.testedAt = null;
+      return toPublic(server);
+    });
   }
 }

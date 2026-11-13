@@ -244,7 +244,7 @@ export function ServerWizard({ repoId, server: initial, step: initialStep, onClo
         <div className="wizard-section">
           <div className="wizard-section-title">
             Commande d'installation
-            <CopyButton value={view.installCommand} />
+            <CopyButton value={view.installCommand ?? ''} />
           </div>
           <div className="keybox mono">{view.installCommand}</div>
           <div className="key-caption">
@@ -256,7 +256,7 @@ export function ServerWizard({ repoId, server: initial, step: initialStep, onClo
           {showKey && (
             <div className="oneliner mono">
               <span>{view.server.publicKey}</span>
-              <CopyButton value={view.server.publicKey} compact />
+              <CopyButton value={view.server.publicKey ?? ''} compact />
             </div>
           )}
         </div>

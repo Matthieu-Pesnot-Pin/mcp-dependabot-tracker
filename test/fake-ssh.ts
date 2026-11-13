@@ -41,11 +41,14 @@ export class FakeSshServer {
     fs.writeFileSync(this.keyFile, `${line}\n`);
   }
 
+  /** Seule clé acceptée quand elle est donnée, même si d'autres figurent dans le fichier dédié : un serveur qui refuse une nouvelle clé. */
+  acceptOnly: string | null = null;
+
   private allowed(ip: string, algo: string, data: Buffer): ssh2.ParsedKey | null {
     if (!fs.existsSync(this.keyFile)) return null;
     for (const raw of fs.readFileSync(this.keyFile, "utf-8").split("\n")) {
       const line = parseKeyLine(raw);
-      if (!line) continue;
+      if (!line || (this.acceptOnly !== null && line.key.split(/\s+/)[1] !== this.acceptOnly)) continue;
       const from = /(?:^|,)from="([^"]*)"/.exec(line.options)?.[1];
       if (from !== undefined && from !== ip) continue;
       const parsed = ssh2.utils.parseKey(line.key);

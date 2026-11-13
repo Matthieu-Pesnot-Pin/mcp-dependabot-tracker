@@ -1,6 +1,6 @@
 import type { AddableReposResponse, AppConfig, AuditAllResponse, AuditTarget, BranchesResponse, CategoriesResponse, OperationResponse, OperationsResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
 import type { AgentTokensResponse, CreatedAgentTokenResponse } from '@shared/schemas/agent-token.schema'
-import type { DeployServerBody, DeploymentResponse, DeployServersResponse, DeployServerView, RepoDeployResponse, TestDeployServerResponse } from '@shared/schemas/deploy.schema'
+import type { DeployServerBody, DeploymentResponse, DeployServersResponse, DeployServerView, RepoDeployResponse, RotationResponse, TestDeployServerResponse } from '@shared/schemas/deploy.schema'
 import type { AuditScope, Category } from '@shared/schemas/model.schema'
 import type { SaveSettingsBody, SettingsView } from '@shared/schemas/settings.schema'
 
@@ -96,6 +96,10 @@ export const api = {
   createDeployServer: (body: DeployServerBody) => send<DeployServerView>('POST', 'deploy-servers', body),
   updateDeployServer: (id: string, body: DeployServerBody) => send<DeployServerView>('PUT', `deploy-servers/${encodeURIComponent(id)}`, body),
   testDeployServer: (id: string) => send<TestDeployServerResponse>('POST', `deploy-servers/${encodeURIComponent(id)}/test`),
+  installDeployKey: (id: string) => send<DeployServerView>('POST', `deploy-servers/${encodeURIComponent(id)}/key`),
+  rotateDeployKey: (id: string) => send<RotationResponse>('POST', `deploy-servers/${encodeURIComponent(id)}/key/rotate`),
+  revokeDeployKey: (id: string) => send<DeployServerView>('POST', `deploy-servers/${encodeURIComponent(id)}/key/revoke`),
+  forgetDeployKey: (id: string) => send<DeployServerView>('POST', `deploy-servers/${encodeURIComponent(id)}/key/forget`),
   getRepoDeploy: (repoId: string) => request<RepoDeployResponse>(`${repoPath(repoId)}/deploy`),
   setRepoDeployServer: (repoId: string, serverId: string | null) => send<RepoDeployResponse>('PUT', `${repoPath(repoId)}/deploy/server`, { serverId }),
   saveRepoDeployScript: (repoId: string, script: string) => send<RepoDeployResponse>('PUT', `${repoPath(repoId)}/deploy/script`, { script }),
