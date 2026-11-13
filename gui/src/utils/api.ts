@@ -3,6 +3,7 @@ import type { AgentTokensResponse, CreatedAgentTokenResponse } from '@shared/sch
 import type { DeployServerBody, DeploymentResponse, DeployServersResponse, DeployServerView, RepoDeployResponse, RotationResponse, TestDeployServerResponse } from '@shared/schemas/deploy.schema'
 import type { AuditScope, Category } from '@shared/schemas/model.schema'
 import type { SaveSettingsBody, SettingsView } from '@shared/schemas/settings.schema'
+import { useAuth } from '../store/useAuth'
 
 /** Erreur HTTP de l'API ; `status` distingue un conflit (409) des autres échecs. */
 export class ApiError extends Error {
@@ -15,15 +16,13 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * Les routes sont relatives : la SPA est montée derrière un préfixe de proxy
- * variable, résolu par la balise <base> injectée par le serveur.
- */
+/** Appelle l'API de la GUI ; une réponse 401 ramène à l'écran de connexion. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`api/${path}`, {
     ...init,
     headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
   })
+  if (response.status === 401) useAuth.getState().expire()
   if (!response.ok) {
     let message = `HTTP ${response.status}`
     try {

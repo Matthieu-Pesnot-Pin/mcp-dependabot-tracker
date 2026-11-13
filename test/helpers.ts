@@ -148,6 +148,36 @@ export function fakeCommit(repoId: string, branch: string): string {
 /** VAULT_KEY des serveurs lancés par les tests. */
 export const TEST_VAULT_KEY = Buffer.alloc(32, 7).toString("base64");
 
+/** AUTH_SECRET des serveurs lancés par les tests. */
+export const TEST_AUTH_SECRET = "test-auth-secret-0123456789abcdefghijklmnop";
+
+/** Compte de l'interface créé par les tests. */
+export const TEST_USER = { email: "admin@example.com", password: "correct horse battery" };
+
+/** Lance `user <args>` avec `stdin` sur l'entrée standard ; rend le code de sortie et les sorties. */
+export function runUserCommand(env: Record<string, string | undefined>, args: string[], stdin = ""): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [SERVER_ENTRY, "user", ...args], { env, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf-8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.setEncoding("utf-8").on("data", (chunk: string) => (stderr += chunk));
+    child.on("exit", (code) => resolve({ code, stdout, stderr }));
+    child.stdin.end(stdin);
+  });
+}
+
+/** Ouvre une session avec `TEST_USER` (ou `user`) ; rend l'en-tête Cookie à renvoyer. */
+export async function signIn(baseUrl: string, user: { email: string; password: string } = TEST_USER): Promise<string> {
+  const response = await fetch(`${baseUrl}/api/auth/sign-in/email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: baseUrl },
+    body: JSON.stringify(user),
+  });
+  if (!response.ok) throw new Error(`Sign-in failed: HTTP ${response.status} ${await response.text()}`);
+  return response.headers.getSetCookie().map((cookie) => cookie.split(";")[0]).join("; ");
+}
+
 /**
  * Fausse API GitHub : dépôts, alertes Dependabot paginées, utilisateur du token,
  * création de pull requests, qu'elle enregistre, et liste des pull requests ouvertes.
@@ -469,10 +499,9 @@ export function baseEnv(): Record<string, string | undefined> {
     "AGENT_TOKEN",
     "PROXY_URL",
     "APP_PORT",
-    "APP_PATH",
-    "APP_PATH_PREFIX",
-    "APP_NAME",
-    "APP_GROUP",
+    "APP_URL",
+    "AUTH_SECRET",
+    "TRUSTED_PROXIES",
     "CLONE_DIR",
     "MCP_DATA_DIR",
     "MCP_LOG_DIR",

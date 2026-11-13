@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test, { after, before } from "node:test";
 
-import { FakeGitHub, LocalRemotes, McpClient, SERVER_ENTRY, TEST_VAULT_KEY, TrackerServer, VULNERABLE_FIXTURE, baseEnv, freePort, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
+import { FakeGitHub, LocalRemotes, McpClient, SERVER_ENTRY, TEST_AUTH_SECRET, TEST_USER, TEST_VAULT_KEY, TrackerServer, VULNERABLE_FIXTURE, baseEnv, runUserCommand, signIn, freePort, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
 
 /**
  * Serveur réel lancé par `serve` sur un port libre, la fausse API GitHub et des
@@ -22,13 +22,15 @@ let temp: { dir: string; cleanup: () => void };
 let github: FakeGitHub;
 let remotes: LocalRemotes;
 let baseUrl = "";
+let serverEnv: Record<string, string | undefined> = {};
+let cookie = "";
 let port = 0;
 let token: { id: string; secret: string; setupCommand: string };
 
 async function call(method: string, route: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; json: any }> {
   const response = await fetch(`${baseUrl}/api/${route}`, {
     method,
-    headers: { ...headers, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    headers: { Cookie: cookie, ...headers, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: response.status, json: await response.json() };
@@ -64,8 +66,8 @@ before(async () => {
   github.repos.get("octo/locked")!.alertsStatus = 403;
 
   port = await freePort();
-  baseUrl = `http://127.0.0.1:${port}`;
-  server = new TrackerServer({
+  baseUrl = `http://localhost:${port}`;
+  serverEnv = {
     ...baseEnv(),
     MCP_DATA_DIR: path.join(temp.dir, "data"),
     CLONE_DIR: path.join(temp.dir, "clones", "nested"),
@@ -74,8 +76,14 @@ before(async () => {
     GITHUB_SERVER_URL: remotes.serverUrl,
     APP_PORT: String(port),
     VAULT_KEY: TEST_VAULT_KEY,
-  });
-  await waitFor("the server", () => fetch(`${baseUrl}/proxy/health`).then((r) => r.ok, () => false), (ok) => ok, 20_000);
+    APP_URL: `http://localhost:${port}`,
+    AUTH_SECRET: TEST_AUTH_SECRET,
+  };
+  const account = await runUserCommand(serverEnv, ["add", TEST_USER.email], `${TEST_USER.password}\n`);
+  assert.equal(account.code, 0, account.stderr);
+  server = new TrackerServer(serverEnv);
+  await waitFor("the server", () => fetch(`${baseUrl}/health`).then((r) => r.ok, () => false), (ok) => ok, 20_000);
+  cookie = await signIn(baseUrl);
 
   const created = await call("POST", "agent-tokens", { name: "Tests" });
   assert.equal(created.status, 200, created.json.error);
@@ -91,7 +99,7 @@ after(async () => {
   temp?.cleanup();
 });
 
-test("the MCP mode lists its tools; the server serves the GUI page with its base href", async () => {
+test("the MCP mode lists its tools; the server serves the GUI page", async () => {
   const { tools } = await client.request("tools/list");
   assert.deepEqual(
     tools.map((tool: { name: string }) => tool.name),
@@ -99,11 +107,60 @@ test("the MCP mode lists its tools; the server serves the GUI page with its base
   );
   const page = await fetch(`${baseUrl}/`);
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /<base href="\/" \/>/);
+  assert.match(await page.text(), /<div id="root">/);
   const config = await call("GET", "config");
   assert.equal(config.json.githubServerUrl, remotes.serverUrl);
   assert.equal((await call("GET", "nope")).status, 404);
   assert.match(server.stderr.join(""), new RegExp(`Dependabot Tracker \\S+ serves http://localhost:${port} `));
+});
+
+test("the GUI API needs a session; sign-in, cross-site requests, sign-out and the account commands", async () => {
+  const anonymous = await fetch(`${baseUrl}/api/repos`);
+  assert.equal(anonymous.status, 401);
+  assert.match((await anonymous.json()).error, /Sign in/);
+
+  const wrong = await fetch(`${baseUrl}/api/auth/sign-in/email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: baseUrl },
+    body: JSON.stringify({ email: TEST_USER.email, password: "not the password" }),
+  });
+  assert.equal(wrong.status, 401);
+  const signUp = await fetch(`${baseUrl}/api/auth/sign-up/email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: baseUrl },
+    body: JSON.stringify({ email: "intruder@example.com", password: "a long enough password", name: "x" }),
+  });
+  assert.ok(signUp.status >= 400, "sign-up is closed");
+
+  assert.equal((await call("GET", "repos")).status, 200);
+  assert.equal((await call("POST", "categories", { name: "Cross" }, { Origin: "https://evil.example" })).status, 403);
+  assert.equal((await call("POST", "categories", { name: "Cross" }, { "Sec-Fetch-Site": "cross-site" })).status, 403);
+
+  const env = serverEnv;
+  const duplicate = await runUserCommand(env, ["add", TEST_USER.email], "another long password\n");
+  assert.equal(duplicate.code, 1);
+  assert.match(duplicate.stderr, /already uses/);
+  const short = await runUserCommand(env, ["add", "short@example.com"], "short\n");
+  assert.match(short.stderr, /too short/);
+  const second = { email: "second@example.com", password: "second long password" };
+  assert.equal((await runUserCommand(env, ["add", second.email, "--name=Second"], `${second.password}\n`)).code, 0);
+  const listed = await runUserCommand(env, ["list"]);
+  assert.match(listed.stdout, /admin@example\.com/);
+  assert.match(listed.stdout, /second@example\.com	Second/);
+
+  const secondCookie = await signIn(baseUrl, second);
+  const asSecond = () => fetch(`${baseUrl}/api/repos`, { headers: { Cookie: secondCookie } }).then((r) => r.status);
+  assert.equal(await asSecond(), 200);
+  assert.equal((await runUserCommand(env, ["password", second.email], "a brand new password\n")).code, 0);
+  assert.equal(await asSecond(), 401, "changing the password closes the sessions");
+  const renewed = await signIn(baseUrl, { email: second.email, password: "a brand new password" });
+  assert.equal((await runUserCommand(env, ["remove", second.email])).code, 0);
+  assert.equal(await fetch(`${baseUrl}/api/repos`, { headers: { Cookie: renewed } }).then((r) => r.status), 401, "removing the account closes its sessions");
+
+  const temporary = await signIn(baseUrl);
+  const signOut = await fetch(`${baseUrl}/api/auth/sign-out`, { method: "POST", headers: { Cookie: temporary, Origin: baseUrl, "Content-Type": "application/json" }, body: "{}" });
+  assert.equal(signOut.status, 200);
+  assert.equal(await fetch(`${baseUrl}/api/repos`, { headers: { Cookie: temporary } }).then((r) => r.status), 401);
 });
 
 test("a new agent token is shown once, with the command that declares the MCP mode", async () => {
@@ -443,11 +500,17 @@ test("the server creates CLONE_DIR at launch and refuses to start without its se
   assert.deepEqual([noToken.code, /GITHUB_TOKEN is not set/.test(noToken.stderr)], [1, true], noToken.stderr);
   const noClones = await runEntry(["serve"], { ...env, GITHUB_TOKEN: "t" });
   assert.deepEqual([noClones.code, /CLONE_DIR is not set/.test(noClones.stderr)], [1, true], noClones.stderr);
-  const noExposure = await runEntry(["serve"], { ...env, GITHUB_TOKEN: "t", CLONE_DIR: path.join(temp.dir, "clones-2") });
-  assert.deepEqual([noExposure.code, /Neither PROXY_URL nor APP_PORT is set/.test(noExposure.stderr)], [1, true], noExposure.stderr);
-  const noVault = await runEntry(["serve"], { ...env, GITHUB_TOKEN: "t", CLONE_DIR: path.join(temp.dir, "clones-2"), APP_PORT: "1" });
+  const clones = { ...env, GITHUB_TOKEN: "t", CLONE_DIR: path.join(temp.dir, "clones-2") };
+  const noPort = await runEntry(["serve"], clones);
+  assert.deepEqual([noPort.code, /APP_PORT is not set/.test(noPort.stderr)], [1, true], noPort.stderr);
+  const noUrl = await runEntry(["serve"], { ...clones, APP_PORT: "1" });
+  assert.deepEqual([noUrl.code, /APP_URL is not set/.test(noUrl.stderr)], [1, true], noUrl.stderr);
+  const noSecret = await runEntry(["serve"], { ...clones, APP_PORT: "1", APP_URL: "http://localhost:1" });
+  assert.deepEqual([noSecret.code, /AUTH_SECRET is not set/.test(noSecret.stderr)], [1, true], noSecret.stderr);
+  const exposed = { ...clones, APP_PORT: "1", APP_URL: "http://localhost:1", AUTH_SECRET: TEST_AUTH_SECRET };
+  const noVault = await runEntry(["serve"], exposed);
   assert.deepEqual([noVault.code, /VAULT_KEY is not set/.test(noVault.stderr)], [1, true], noVault.stderr);
-  const badVault = await runEntry(["serve"], { ...env, GITHUB_TOKEN: "t", CLONE_DIR: path.join(temp.dir, "clones-2"), APP_PORT: "1", VAULT_KEY: "short" });
+  const badVault = await runEntry(["serve"], { ...exposed, VAULT_KEY: "short" });
   assert.deepEqual([badVault.code, /VAULT_KEY is not a valid key/.test(badVault.stderr)], [1, true], badVault.stderr);
 });
 
@@ -471,4 +534,18 @@ test("a revoked agent token closes the agent API at once", async () => {
 
 test("nothing from the MCP mode leaks onto stdout outside JSON-RPC", () => {
   assert.deepEqual(client.strayStdout, []);
+});
+
+test("sign-in attempts are rate limited per client, whatever IP headers the client sends", async () => {
+  const attempt = (headers: Record<string, string> = {}) =>
+    fetch(`${baseUrl}/api/auth/sign-in/email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl, ...headers },
+      body: JSON.stringify({ email: TEST_USER.email, password: "not the password" }),
+    }).then((r) => r.status);
+  const statuses: number[] = [];
+  for (let i = 0; i < 6; i++) statuses.push(await attempt());
+  assert.ok(statuses.includes(429), `statuses: ${statuses.join(", ")}`);
+  assert.equal(await attempt({ "X-Forwarded-For": "203.0.113.7" }), 429);
+  assert.equal(await attempt({ "X-Tracker-Client-Ip": "203.0.113.8" }), 429);
 });

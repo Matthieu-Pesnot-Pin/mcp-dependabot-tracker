@@ -15,7 +15,8 @@ import { auditFindings, auditTargetRepos, cleanAudit, cleanProductionAudit, last
 import { Store } from "../src/core/store.js";
 import { parseConnection, runSetupMcp, setupCommand } from "../src/cli/setup-mcp.js";
 import { authenticateAgent, createAgentToken, listAgentTokens, revokeAgentToken } from "../src/core/agent-tokens.js";
-import { resolveExposure } from "../src/server/serve.js";
+import { crossSiteRejection } from "../src/server/app.js";
+import { readServerConfig } from "../src/core/server-config.js";
 import { describeOperation } from "../src/tools/format.js";
 import { assertSandboxAvailable } from "../src/core/repair.js";
 import { bwrapArgs, projectDir } from "../src/core/npm-sandbox.js";
@@ -465,12 +466,35 @@ test("agent tokens are stored as hashes, shown by their last characters, and sto
   }
 });
 
-test("the server is exposed through the proxy or on a local port, never both, never neither", () => {
-  assert.deepEqual(resolveExposure({ PROXY_URL: "http://localhost:3000/" }), { kind: "proxy", proxyUrl: "http://localhost:3000" });
-  assert.deepEqual(resolveExposure({ APP_PORT: "4700" }), { kind: "port", port: 4700 });
-  assert.throws(() => resolveExposure({ PROXY_URL: "http://x", APP_PORT: "4700" }), /both set/);
-  assert.throws(() => resolveExposure({}), /Neither PROXY_URL nor APP_PORT/);
-  assert.throws(() => resolveExposure({ APP_PORT: "99999" }), /APP_PORT is invalid/);
+test("the server needs APP_PORT, an https APP_URL (http only on localhost) and a long AUTH_SECRET", () => {
+  const secret = "x".repeat(32);
+  assert.deepEqual(readServerConfig({ APP_PORT: "4700", APP_URL: "https://deps.example.com/", AUTH_SECRET: secret }), {
+    port: 4700,
+    listenHost: undefined,
+    appUrl: "https://deps.example.com",
+    authSecret: secret,
+    trustedProxies: [],
+  });
+  assert.equal(readServerConfig({ APP_PORT: "4700", APP_URL: "http://localhost:4700", AUTH_SECRET: secret }).listenHost, "127.0.0.1");
+  assert.deepEqual(readServerConfig({ APP_PORT: "1", APP_URL: "https://a.b", AUTH_SECRET: secret, TRUSTED_PROXIES: "127.0.0.1, 10.0.0.0/8,::1" }).trustedProxies, ["127.0.0.1", "10.0.0.0/8", "::1"]);
+  assert.throws(() => readServerConfig({ APP_URL: "https://a.b", AUTH_SECRET: secret }), /APP_PORT is not set/);
+  assert.throws(() => readServerConfig({ APP_PORT: "99999", APP_URL: "https://a.b", AUTH_SECRET: secret }), /APP_PORT is invalid/);
+  assert.throws(() => readServerConfig({ APP_PORT: "1", AUTH_SECRET: secret }), /APP_URL is not set/);
+  assert.throws(() => readServerConfig({ APP_PORT: "1", APP_URL: "http://deps.example.com", AUTH_SECRET: secret }), /only accepted on localhost/);
+  assert.throws(() => readServerConfig({ APP_PORT: "1", APP_URL: "https://a.b/tracker", AUTH_SECRET: secret }), /without path/);
+  assert.throws(() => readServerConfig({ APP_PORT: "1", APP_URL: "https://a.b" }), /AUTH_SECRET is not set/);
+  assert.throws(() => readServerConfig({ APP_PORT: "1", APP_URL: "https://a.b", AUTH_SECRET: "short" }), /too short/);
+  assert.throws(() => readServerConfig({ APP_PORT: "1", APP_URL: "https://a.b", AUTH_SECRET: secret, TRUSTED_PROXIES: "10.0.0.0/40" }), /invalid entry/);
+});
+
+test("changes coming from another site are refused", () => {
+  const app = "https://deps.example.com";
+  assert.equal(crossSiteRejection("GET", { secFetchSite: "cross-site" }, app), null);
+  assert.equal(crossSiteRejection("POST", { secFetchSite: "same-origin" }, app), null);
+  assert.match(crossSiteRejection("POST", { secFetchSite: "same-site" }, app)!, /Sec-Fetch-Site/);
+  assert.equal(crossSiteRejection("PUT", { origin: app }, app), null);
+  assert.equal(crossSiteRejection("DELETE", {}, app), null);
+  assert.match(crossSiteRejection("DELETE", { origin: "https://evil.example" }, app)!, /Origin/);
 });
 
 test("Store reads an operation saved without the vulnerabilities of its first audit", () => {

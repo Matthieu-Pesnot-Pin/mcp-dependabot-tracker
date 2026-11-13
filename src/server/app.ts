@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { honoGuiGuard } from "@imenam/mcp-gui-interface";
 import { Hono, type Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { z } from "zod";
@@ -38,6 +38,7 @@ import {
 import type { Operation } from "../../shared/schemas/model.schema.js";
 import { SaveSettingsBodySchema } from "../../shared/schemas/settings.schema.js";
 import { setupCommand } from "../cli/setup-mcp.js";
+import { AUTH_BASE_PATH, CLIENT_IP_HEADER, type Auth } from "../core/auth.js";
 import { authenticateAgent, createAgentToken, listAgentTokens, revokeAgentToken } from "../core/agent-tokens.js";
 import type { AuditAll } from "../core/audit-all.js";
 import type { Deployer } from "../core/deployments.js";
@@ -71,7 +72,7 @@ import { readSettings, saveSettings, settingsView, testOrganizer, type SettingsC
 import type { Store } from "../core/store.js";
 import { APP_VERSION } from "../version.js";
 
-/** Ce dont les routes ont besoin : données, opérations, réglages, et l'adresse publique du serveur. */
+/** Ce dont les routes ont besoin : données, opérations, réglages, authentification et adresse publique du serveur. */
 export interface ServerContext {
   store: Store;
   dataDir: string;
@@ -83,14 +84,27 @@ export interface ServerContext {
   settingsChecks: SettingsChecks;
   /** Dossier de la SPA compilée (`gui/dist`). */
   staticRoot: string;
-  /** Proxy auprès duquel le serveur s'enregistre ; son nom d'hôte est une origine de confiance. */
-  proxyUrl: string | undefined;
-  /** Adresse publique du serveur, sans barre finale : celle du proxy, ou `http://localhost:<port>`. */
-  publicUrl: () => string;
-  /** Chemin de montage de la SPA, pour sa balise `<base>` : celui du proxy, ou `/`. */
-  mountPath: () => string;
-  /** État de l'enregistrement auprès du proxy, ou `standalone`. */
-  proxyStatus: () => string;
+  /** Comptes et sessions de l'interface. */
+  auth: Auth;
+  /** Adresse publique du serveur (APP_URL), sans barre finale. */
+  appUrl: string;
+  /** Les proxies de confiance sont configurés : X-Forwarded-For est transmis au limiteur de débit. */
+  trustsProxies: boolean;
+}
+
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * Raison du refus d'une requête de modification venue d'un autre site, ou
+ * `null` : Sec-Fetch-Site doit valoir `same-origin` ou `none`, à défaut
+ * l'en-tête Origin doit être l'adresse publique du serveur.
+ */
+export function crossSiteRejection(method: string, headers: { secFetchSite?: string; origin?: string }, appUrl: string): string | null {
+  if (SAFE_METHODS.has(method.toUpperCase())) return null;
+  const fetchSite = headers.secFetchSite?.trim().toLowerCase();
+  if (fetchSite) return fetchSite === "same-origin" || fetchSite === "none" ? null : `Cross-site request refused (Sec-Fetch-Site: ${fetchSite}).`;
+  if (headers.origin === undefined || headers.origin === appUrl) return null;
+  return `Cross-site request refused (Origin: ${headers.origin}).`;
 }
 
 function statusOf(err: unknown): ContentfulStatusCode {
@@ -100,12 +114,7 @@ function statusOf(err: unknown): ContentfulStatusCode {
   return 500;
 }
 
-function htmlBaseHref(mountPath: string): string {
-  const normalized = mountPath.startsWith("/") ? mountPath : `/${mountPath}`;
-  return normalized.endsWith("/") ? normalized : `${normalized}/`;
-}
-
-/** Application Hono du serveur : API de la GUI, API des agents, fichiers de la SPA. */
+/** Application Hono du serveur : authentification, API de la GUI, API des agents, fichiers de la SPA. */
 export function createApp(ctx: ServerContext): Hono {
   const { store, dataDir, github, operations, auditAll, deployer } = ctx;
   const app = new Hono();
@@ -150,15 +159,27 @@ export function createApp(ctx: ServerContext): Hono {
 
   const agentOperation = (operation: Operation): AgentOperationResponse => ({
     operation,
-    guiUrl: `${ctx.publicUrl()}#/r/${operation.repoId}/op/${operation.id}`,
+    guiUrl: `${ctx.appUrl}#/r/${operation.repoId}/op/${operation.id}`,
   });
 
-  // Contrôle de l'hôte appelé et des requêtes de modification, avant toute route.
-  app.use("*", honoGuiGuard({ proxyUrl: ctx.proxyUrl }));
+  app.get("/health", (c) => c.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() }));
 
-  app.get("/proxy/health", (c) =>
-    c.json({ status: "ok", proxy: ctx.proxyStatus(), uptime: process.uptime(), timestamp: new Date().toISOString() })
-  );
+  // --- Authentification -----------------------------------------------------------
+
+  /** Adresse du client vue par la socket, précédée de X-Forwarded-For quand des proxies de confiance sont configurés. */
+  const clientIpChain = (c: Context): string => {
+    const socketIp = getConnInfo(c).remote.address ?? "";
+    const forwarded = ctx.trustsProxies ? c.req.header("x-forwarded-for")?.trim() : undefined;
+    return forwarded ? `${forwarded}, ${socketIp}` : socketIp;
+  };
+
+  app.on(["GET", "POST"], `${AUTH_BASE_PATH}/*`, (c) => {
+    const headers = new Headers(c.req.raw.headers);
+    headers.set(CLIENT_IP_HEADER, clientIpChain(c));
+    return ctx.auth.handler(new Request(c.req.raw, { headers }));
+  });
+
+  app.all(`${AUTH_BASE_PATH}/*`, (c) => c.json({ error: `Unknown authentication route: ${c.req.method} ${c.req.path}` }, 404));
 
   // --- API des agents ------------------------------------------------------------
 
@@ -204,6 +225,15 @@ export function createApp(ctx: ServerContext): Hono {
   app.all("/api/agent/*", (c) => c.json({ error: `Unknown agent API route: ${c.req.method} ${c.req.path}` }, 404));
 
   // --- API de la GUI --------------------------------------------------------------
+
+  // Session ouverte exigée, et refus des modifications venues d'un autre site.
+  app.use("/api/*", async (c, next) => {
+    const rejection = crossSiteRejection(c.req.method, { secFetchSite: c.req.header("sec-fetch-site"), origin: c.req.header("origin") }, ctx.appUrl);
+    if (rejection) return c.json({ error: rejection }, 403);
+    const session = await ctx.auth.api.getSession({ headers: c.req.raw.headers });
+    if (!session) return c.json({ error: "Sign in to use the interface." }, 401);
+    await next();
+  });
 
   app.get("/api/config", (c) =>
     respond(c, (): AppConfig => ({ version: APP_VERSION, dataDir, githubServerUrl: github.serverUrl }))
@@ -372,7 +402,7 @@ export function createApp(ctx: ServerContext): Hono {
   app.post("/api/agent-tokens", (c) =>
     withBody(c, CreateAgentTokenBodySchema, (body): CreatedAgentTokenResponse => {
       const { token, secret } = createAgentToken(dataDir, body.name);
-      return { token, secret, setupCommand: setupCommand({ serverUrl: ctx.publicUrl(), token: secret }) };
+      return { token, secret, setupCommand: setupCommand({ serverUrl: ctx.appUrl, token: secret }) };
     })
   );
 
@@ -390,16 +420,13 @@ export function createApp(ctx: ServerContext): Hono {
 
   app.use("/assets/*", serveStatic({ root: path.relative(process.cwd(), ctx.staticRoot) }));
 
-  // Toute autre route renvoie la page de la SPA, avec la balise <base> du chemin de montage.
+  // Toute autre route renvoie la page de la SPA, qui affiche l'écran de connexion sans session.
   app.get("/*", (c) => {
     const indexPath = path.join(ctx.staticRoot, "index.html");
     if (!fs.existsSync(indexPath)) {
       return c.text(`GUI build not found at ${ctx.staticRoot}. Run "npm run build:gui" in the package.`, 404);
     }
-    // ?__direct=1 : accès au serveur sur son port local, sans le proxy ; les assets sont alors servis à la racine.
-    const baseHref = c.req.query("__direct") === "1" ? "/" : htmlBaseHref(ctx.mountPath());
-    const html = fs.readFileSync(indexPath, "utf8").replace("<head>", `<head>\n    <base href="${baseHref}" />`);
-    return c.html(html);
+    return c.html(fs.readFileSync(indexPath, "utf8"));
   });
 
   return app;

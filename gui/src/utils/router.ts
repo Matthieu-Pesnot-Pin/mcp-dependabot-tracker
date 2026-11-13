@@ -59,11 +59,7 @@ export function parseHash(hash: string): Route {
   return { name: 'not_found', hash }
 }
 
-/**
- * Adresse de la page courante suivie de `hash`. Un lien `#/…` seul serait
- * résolu contre le `<base href>`, qui diffère de l'adresse de la page quand un
- * relais (gateway manager, `/_gui/…`) la sert sous un autre chemin.
- */
+/** Adresse de la page courante suivie de `hash`. */
 function inPage(hash: string): string {
   return `${window.location.pathname}${window.location.search}${hash}`
 }

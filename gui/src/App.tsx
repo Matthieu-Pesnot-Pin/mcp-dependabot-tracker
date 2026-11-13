@@ -1,16 +1,40 @@
-import { useCallback, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { AuditAllButton } from './components/AuditAllButton'
 import { Icon } from './components/Icon'
 import { NoticeToast } from './components/NoticeToast'
 import { SyncButton } from './components/SyncButton'
 import { TopBar } from './components/TopBar'
 import { HomeScreen } from './screens/HomeScreen'
+import { LoginScreen } from './screens/LoginScreen'
 import { OperationScreen } from './screens/OperationScreen'
 import { RepoScreen } from './screens/RepoScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
+import { useAuth } from './store/useAuth'
 import { hrefs, useRoute, type HomeTab } from './utils/router'
 
+/** Écran de connexion sans session, interface sinon. */
 export default function App() {
+  const status = useAuth((state) => state.status)
+  const check = useAuth((state) => state.check)
+  const [checkError, setCheckError] = useState<string | null>(null)
+
+  useEffect(() => {
+    check().catch((err: unknown) => setCheckError(err instanceof Error ? err.message : String(err)))
+  }, [check])
+
+  if (checkError) {
+    return (
+      <div className="login">
+        <p className="error-text">{checkError}</p>
+      </div>
+    )
+  }
+  if (status.kind === 'checking') return null
+  if (status.kind === 'signed-out') return <LoginScreen />
+  return <SignedInApp />
+}
+
+function SignedInApp() {
   const route = useRoute()
   const [adding, setAdding] = useState(false)
   const openAdd = useCallback(() => setAdding(true), [])

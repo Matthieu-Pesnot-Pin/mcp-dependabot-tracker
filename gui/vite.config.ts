@@ -2,10 +2,9 @@ import path from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-// base './' : la SPA est servie derrière un préfixe de proxy variable, résolu à
-// l'exécution par la balise <base> injectée par le GUI worker.
+// La SPA est servie à la racine de l'adresse du serveur.
 export default defineConfig({
-  base: './',
+  base: '/',
   plugins: [react()],
   resolve: {
     // La GUI partage les schémas avec le serveur MCP.

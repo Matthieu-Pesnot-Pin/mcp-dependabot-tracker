@@ -5,7 +5,7 @@ import path from "node:path";
 import test, { after, before } from "node:test";
 
 import { FakeSshServer } from "./fake-ssh.js";
-import { FakeGitHub, SERVER_ENTRY, TEST_VAULT_KEY, TrackerServer, baseEnv, fakeCommit, freePort, makeTempDir, waitFor } from "./helpers.js";
+import { FakeGitHub, SERVER_ENTRY, TEST_AUTH_SECRET, TEST_USER, TEST_VAULT_KEY, TrackerServer, baseEnv, runUserCommand, signIn, fakeCommit, freePort, makeTempDir, waitFor } from "./helpers.js";
 
 /**
  * Déploiement d'un dépôt de bout en bout : serveur réel lancé par `serve`,
@@ -19,12 +19,14 @@ let github: FakeGitHub;
 let ssh: FakeSshServer;
 let temp: { dir: string; cleanup: () => void };
 let baseUrl = "";
+let serverEnv: Record<string, string | undefined> = {};
+let cookie = "";
 let dataDir = "";
 
 async function call(method: string, route: string, body?: unknown): Promise<{ status: number; json: any }> {
   const response = await fetch(`${baseUrl}/api/${route}`, {
     method,
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    headers: { Cookie: cookie, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: response.status, json: await response.json() };
@@ -47,8 +49,8 @@ before(async () => {
   await ssh.start();
 
   const port = await freePort();
-  baseUrl = `http://127.0.0.1:${port}`;
-  server = new TrackerServer({
+  baseUrl = `http://localhost:${port}`;
+  serverEnv = {
     ...baseEnv(),
     MCP_DATA_DIR: dataDir,
     CLONE_DIR: path.join(temp.dir, "clones"),
@@ -56,8 +58,14 @@ before(async () => {
     GITHUB_API_URL: github.url,
     APP_PORT: String(port),
     VAULT_KEY: TEST_VAULT_KEY,
-  });
-  await waitFor("the server", () => fetch(`${baseUrl}/proxy/health`).then((r) => r.ok, () => false), (ok) => ok, 20_000);
+    APP_URL: `http://localhost:${port}`,
+    AUTH_SECRET: TEST_AUTH_SECRET,
+  };
+  const account = await runUserCommand(serverEnv, ["add", TEST_USER.email], `${TEST_USER.password}\n`);
+  assert.equal(account.code, 0, account.stderr);
+  server = new TrackerServer(serverEnv);
+  await waitFor("the server", () => fetch(`${baseUrl}/health`).then((r) => r.ok, () => false), (ok) => ok, 20_000);
+  cookie = await signIn(baseUrl);
   const added = await call("POST", "repos", { repository: "octo/app", categoryId: null });
   assert.equal(added.status, 200, added.json.error);
 });
@@ -273,7 +281,7 @@ test("changing the host forgets the host key and the test; the server refuses to
   assert.equal((await call("POST", "repos/octo/app/deployments")).status, 409);
 
   const child = spawn(process.execPath, [SERVER_ENTRY, "serve"], {
-    env: { ...baseEnv(), MCP_DATA_DIR: dataDir, CLONE_DIR: path.join(temp.dir, "clones"), GITHUB_TOKEN: "t", APP_PORT: "1", VAULT_KEY: Buffer.alloc(32, 9).toString("base64") },
+    env: { ...baseEnv(), MCP_DATA_DIR: dataDir, CLONE_DIR: path.join(temp.dir, "clones"), GITHUB_TOKEN: "t", APP_PORT: "1", APP_URL: "http://localhost:1", AUTH_SECRET: TEST_AUTH_SECRET, VAULT_KEY: Buffer.alloc(32, 9).toString("base64") },
   });
   let stderr = "";
   child.stderr.setEncoding("utf-8");

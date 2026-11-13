@@ -40,7 +40,47 @@ npx -y @imenam/mcp-dependabot-tracker --generate-vault-key
 
 Le serveur journalise sur sa sortie d'erreur et dans `<logs>/server.log` ; au démarrage, il donne l'adresse de son interface. Un répertoire de données ne sert qu'à un serveur à la fois.
 
-Le serveur écoute sur `127.0.0.1` seulement, derrière `honoGuiGuard` : les autres machines le joignent par le proxy. L'API des agents exige un token d'agent ; l'interface et son API ne demandent aucune authentification propre, et se protègent par le proxy ou le hub qui les exposent.
+### Exposition et authentification
+
+Le serveur est une application autonome : il sert lui-même l'interface à l'adresse `APP_URL`, sur le port `APP_PORT`.
+
+- **L'interface et son API** exigent une session ouverte avec un compte e-mail et mot de passe ([Better Auth](https://www.better-auth.com)). Les sessions durent 7 jours, sont prolongées à l'usage et vivent dans un cookie `HttpOnly`, `SameSite=Lax`, `Secure` en https. Les tentatives de connexion sont limitées à 5 par minute et par client, toutes les requêtes d'authentification à 100 par minute. Une requête de modification venue d'un autre site est refusée (`Sec-Fetch-Site`, à défaut `Origin`).
+- **L'API des agents** (`/api/agent/…`) exige un token d'agent (`Authorization: Bearer dtk_…`), et rien d'autre.
+
+`APP_URL` est en https, sauf sur `localhost` : avec `http://localhost:<port>`, le serveur n'écoute que sur `127.0.0.1` ; avec une adresse https, il écoute sur toutes les interfaces, derrière le reverse proxy qui porte le certificat (Caddy, nginx…). Dans ce cas, déclarez l'adresse du reverse proxy dans `TRUSTED_PROXIES` : le limiteur de débit identifie alors le client par `X-Forwarded-For`, et non par l'adresse du proxy. Sans `TRUSTED_PROXIES`, `X-Forwarded-For` est ignoré.
+
+Exemple avec Caddy, qui obtient le certificat tout seul :
+
+```
+deps.example.com {
+	reverse_proxy 127.0.0.1:4700
+}
+```
+
+```bash
+APP_URL=https://deps.example.com
+APP_PORT=4700
+TRUSTED_PROXIES=127.0.0.1
+```
+
+### Comptes de l'interface
+
+Il n'y a pas d'inscription : les comptes se créent sur la machine du serveur, avec le même environnement que lui (`MCP_DATA_DIR`, `APP_URL`, `AUTH_SECRET`, ou le `.env` du package). Le mot de passe est demandé deux fois, sans être affiché ; il fait au moins 12 caractères.
+
+```bash
+mcp-dependabot-tracker user add admin@example.com --name="Admin"
+mcp-dependabot-tracker user password admin@example.com
+mcp-dependabot-tracker user remove admin@example.com
+mcp-dependabot-tracker user list
+```
+
+Changer le mot de passe ou supprimer le compte ferme aussitôt ses sessions. Sans terminal, le mot de passe est lu sur la première ligne de l'entrée standard. Tant qu'aucun compte n'existe, le serveur le signale au démarrage. Comptes et sessions sont enregistrés dans `<données>/auth.sqlite`.
+
+`AUTH_SECRET` signe les sessions. Générez-le une fois et déclarez-le comme variable secrète du service ; le changer ferme toutes les sessions :
+
+```bash
+npx -y @imenam/mcp-dependabot-tracker --generate-auth-secret
+```
 
 ### Le mode MCP, dans un projet
 
@@ -67,7 +107,7 @@ La commande crée (ou complète) le `.mcp.json` du répertoire courant avec une 
 }
 ```
 
-`SERVER_URL` est l'adresse publique du serveur, celle de son interface : `http://localhost:<APP_PORT>`, ou l'adresse du proxy suivie du chemin de montage. Le mode MCP appelle `<SERVER_URL>/api/agent/…` avec l'en-tête `Authorization: Bearer <token>` : l'adresse doit joindre le serveur sans autre authentification. Sans `SERVER_URL` ou `AGENT_TOKEN`, le mode MCP refuse de démarrer.
+`SERVER_URL` est l'adresse publique du serveur, `APP_URL`. Le mode MCP appelle `<SERVER_URL>/api/agent/…` avec l'en-tête `Authorization: Bearer <token>` : l'adresse doit joindre le serveur sans autre authentification. Sans `SERVER_URL` ou `AGENT_TOKEN`, le mode MCP refuse de démarrer.
 
 ### Token GitHub
 
@@ -91,18 +131,16 @@ Elles se renseignent dans l'environnement du service, ou dans un fichier `.env` 
 | `GITHUB_TOKEN` | **Obligatoire.** Token GitHub (voir ci-dessus). Sans lui, le serveur refuse de démarrer. |
 | `CLONE_DIR` | **Obligatoire.** Dossier où chaque opération crée son clone ; il est créé s'il n'existe pas. Sans lui, le serveur refuse de démarrer. |
 | `VAULT_KEY` | **Obligatoire.** 32 octets en base64 (`--generate-vault-key`), qui chiffrent en AES-256-GCM les clés privées des serveurs de déploiement. Sans elle, ou si elle ne déchiffre pas les clés déjà enregistrées, le serveur refuse de démarrer. La perdre oblige à reconnecter chaque serveur. |
-| `PROXY_URL` | URL du [proxy central](https://github.com/imenam/proxy-setup) : le proxy attribue le port et monte l'interface sous `APP_PATH`. |
-| `APP_PORT` | Port local quand le serveur n'a pas de proxy : l'interface est servie sur `http://localhost:<port>`. |
-| `APP_PATH` | Chemin de montage derrière le proxy (défaut `/dependabot-tracker`). |
-| `APP_PATH_PREFIX` | Préfixe de namespace appliqué au chemin par le client proxy partagé ; le `<base href>` de l'interface suit le chemin réellement enregistré. |
-| `APP_NAME` | Nom affiché dans le dashboard du proxy (défaut `Dependabot Tracker`). |
-| `APP_GROUP` | Section repliable du dashboard du proxy (facultatif). |
+| `APP_PORT` | **Obligatoire.** Port d'écoute du serveur. |
+| `APP_URL` | **Obligatoire.** Adresse publique de l'interface, sans chemin : `https://…`, ou `http://localhost:<port>` sur la machine elle-même (voir [Exposition et authentification](#exposition-et-authentification)). |
+| `AUTH_SECRET` | **Obligatoire.** Secret de signature des sessions, 32 caractères au moins (`--generate-auth-secret`). |
+| `TRUSTED_PROXIES` | Adresses IP ou plages CIDR des reverse proxies, séparées par des virgules, dont l'en-tête `X-Forwarded-For` est cru. |
 | `GITHUB_API_URL` | API GitHub (défaut `https://api.github.com`), à changer pour GitHub Enterprise Server. |
 | `GITHUB_SERVER_URL` | Serveur git des clones (défaut `https://github.com`) : un dépôt se clone depuis `<serveur>/<propriétaire>/<nom>.git`. |
 | `MCP_DATA_DIR` | Répertoire des données (défaut `~/.mcp-dependabot-tracker`). |
 | `MCP_LOG_DIR` | Répertoire des logs. Défaut : `<données>/logs`. |
 
-`PROXY_URL` ou `APP_PORT`, exactement l'un des deux : sans aucun, ou avec les deux, le serveur refuse de démarrer.
+Sans une variable obligatoire, ou avec une valeur invalide (`APP_URL` en http hors `localhost`, `AUTH_SECRET` trop court), le serveur refuse de démarrer en nommant la variable.
 
 ### Dans mcp-http-gateway
 
@@ -193,7 +231,7 @@ Une tâche introuvable, sans le tag ou non assignée au propriétaire fait écho
 - **Corrections par Claude** — les limites d'une session.
 - **Accès des agents** — les tokens d'agent, un par ligne : nom, quatre derniers caractères, date de création et de dernière utilisation ; « Révoquer », au survol (en permanence sur un écran tactile), le révoque après un second clic de confirmation dans les 4 secondes. « Nouveau token » ouvre un champ en place pour le nommer (Entrée crée, Échap annule) ; le token s'affiche alors une seule fois, avec « Copier » et la commande `--claude-setup-mcp` qui déclare le mode MCP. Créer ou révoquer un token prend effet aussitôt, sans « Enregistrer ».
 
-Les tokens de l'organizer et de Claude sont enregistrés dans `<données>/settings.json`, ceux des agents par leur empreinte dans `<données>/agent-tokens.json`, lisibles par le seul compte du serveur ; la GUI n'en reçoit que les quatre derniers caractères. Claude Code garde sa configuration dans `<données>/claude`. L'écran est protégé comme le reste de l'interface, par le proxy ou le hub qui l'expose.
+Les tokens de l'organizer et de Claude sont enregistrés dans `<données>/settings.json`, ceux des agents par leur empreinte dans `<données>/agent-tokens.json`, lisibles par le seul compte du serveur ; la GUI n'en reçoit que les quatre derniers caractères. Claude Code garde sa configuration dans `<données>/claude`. L'écran est protégé comme le reste de l'interface, par la session de l'utilisateur.
 
 **Suivi** — la tâche du dernier rapport de Claude s'affiche dans la colonne « Suivi » de la ligne du dépôt (« MNT-12 », qui ouvre la tâche sur l'organizer) tant qu'elle n'est pas terminée : son statut est relu sur l'organizer avec les alertes, toutes les 10 minutes. La pull request de la correction mentionne la clé de la tâche.
 
@@ -257,11 +295,12 @@ Les écrans se relisent par polling : toutes les 3 s pour les listes, toutes les
 
 Un point d'entrée, `src/index.ts`, et deux modes :
 
-- **Serveur** (`serve`, `src/server/`) — un seul processus : Hono sert l'interface, son API et l'API des agents, qui appellent directement la logique (`src/core/`) ; il mène les opérations, relit les alertes et les pull requests toutes les 10 minutes, et s'enregistre auprès du proxy ou écoute sur `APP_PORT`, sur `127.0.0.1` derrière `honoGuiGuard`. Au démarrage, une opération encore en cours, interrompue par l'arrêt précédent, passe en échec et perd son clone.
+- **Serveur** (`serve`, `src/server/`) — un seul processus : Hono sert l'interface, son API et l'API des agents, qui appellent directement la logique (`src/core/`) ; il mène les opérations, relit les alertes et les pull requests toutes les 10 minutes, et écoute sur `APP_PORT`. Better Auth (`src/core/auth.ts`, base SQLite `<données>/auth.sqlite`, migrée au démarrage) sert `/api/auth/…` ; un middleware exige une session sur le reste de `/api/…`, hors `/api/agent/…`, protégé par les tokens d'agent. Au démarrage, une opération encore en cours, interrompue par l'arrêt précédent, passe en échec et perd son clone.
 - **Mode MCP** (`mcp`, `src/mcp.ts`, `src/tools/`) — JSON-RPC sur stdio : chaque outil appelle l'API des agents du serveur et met sa réponse en forme.
 
 | Route | Effet |
 |---|---|
+| `GET` / `POST /api/auth/…` | Routes de Better Auth : `sign-in/email`, `sign-out`, `get-session`… L'inscription (`sign-up/email`) est fermée. |
 | `GET /api/config` | Version, répertoire des données, adresse du serveur GitHub. |
 | `GET /api/repos`, `POST /api/repos` | Dépôts suivis, dépréciés compris (avec catégorie, opération en cours et dernière opération) et catégories ; ajout d'un dépôt (`{ repository, categoryId? }`). |
 | `POST /api/sync` | Relit tout de suite les alertes et les pull requests de chaque dépôt suivi non déprécié, en parallèle ; renvoie les dépôts et les catégories. |
@@ -333,14 +372,15 @@ cd gui && npm run lint   # oxlint
 | `src/server/` | Serveur : démarrage, exposition, relecture périodique (`serve.ts`) ; routes de l'interface, de l'API des agents et fichiers de la SPA (`app.ts`). |
 | `src/mcp.ts` | Mode MCP : `instructions` et serveur stdio des outils. |
 | `src/tools/` | Outils du mode MCP, client de l'API des agents, mise en forme des résultats. |
-| `src/core/` | Stockage, tokens d'agent, client GitHub, commandes `git`/`npm`, rapports `npm audit` et lockfiles, opérations, dépôts ; coffre (`vault.ts`), connexion SSH (`ssh.ts`), serveurs de déploiement (`deploy-servers.ts`) et déploiements (`deployments.ts`). |
+| `src/core/` | Stockage, tokens d'agent, client GitHub, commandes `git`/`npm`, rapports `npm audit` et lockfiles, opérations, dépôts ; coffre (`vault.ts`), connexion SSH (`ssh.ts`), serveurs de déploiement (`deploy-servers.ts`) et déploiements (`deployments.ts`) ; configuration du serveur (`server-config.ts`) et authentification (`auth.ts`). |
 | `src/npm-tools.ts` | Serveur MCP des commandes npm fourni à Claude Code pendant ses corrections. |
 | `src/cli/setup-mcp.ts` | Commande `--claude-setup-mcp`. |
+| `src/cli/users.ts` | Commandes `user add`, `user password`, `user remove`, `user list`. |
 | `shared/schemas/` | Schémas zod communs au serveur et à la GUI. |
 | `gui/` | Vite + React 19 + zustand, CSS écrit à la main. |
 | `test/` | Tests `node --test`. |
 
-Les tests utilisent une fausse API GitHub (dépôts, alertes paginées, utilisateur, création et liste des pull requests) et des dépôts nus locaux servis par `file://` (`GITHUB_API_URL`, `GITHUB_SERVER_URL`). `test/operations.test.ts` et `test/server.test.ts` lancent un vrai `npm audit` sur un petit projet vulnérable (`test/fixtures/vulnerable` : `lodash`, corrigé par `audit fix`, et `nth-check`, qui demande une montée majeure ; `test/fixtures/vulnerable-dev`, le même avec `nth-check` en devDependency, pour le périmètre production) : ils ont besoin du registre npm et sont ignorés, avec la raison, s'il est injoignable. `test/server.test.ts` lance le serveur (`serve`) sur un port libre, crée un token d'agent par l'API de l'interface, puis lance le mode MCP (`mcp`) sur stdio : il parcourt les outils, les tokens et la correction complète depuis l'API de l'interface. Les corrections par Claude passent par un faux Claude Code (`test/fake-claude.ts`, qui note ses appels, appelle les outils du serveur `npm` du tracker et répond en `stream-json`) et un faux organizer (tâches, assignations, tags). `test/deploy.test.ts` connecte un serveur et déploie sur un faux serveur SSH (`test/fake-ssh.ts`, bâti sur `ssh2`) qui n'accepte que les clés du fichier dédié, en respectant leur option `from`, et exécute réellement les commandes avec bash : `bash` doit être dans le `PATH` (Git Bash sous Windows).
+Les tests utilisent une fausse API GitHub (dépôts, alertes paginées, utilisateur, création et liste des pull requests) et des dépôts nus locaux servis par `file://` (`GITHUB_API_URL`, `GITHUB_SERVER_URL`). `test/operations.test.ts` et `test/server.test.ts` lancent un vrai `npm audit` sur un petit projet vulnérable (`test/fixtures/vulnerable` : `lodash`, corrigé par `audit fix`, et `nth-check`, qui demande une montée majeure ; `test/fixtures/vulnerable-dev`, le même avec `nth-check` en devDependency, pour le périmètre production) : ils ont besoin du registre npm et sont ignorés, avec la raison, s'il est injoignable. `test/server.test.ts` crée un compte (`user add`), lance le serveur (`serve`) sur un port libre, ouvre une session, vérifie l'authentification (session exigée, inscription fermée, requêtes d'un autre site, commandes `user`, limitation des connexions), crée un token d'agent par l'API de l'interface, puis lance le mode MCP (`mcp`) sur stdio : il parcourt les outils, les tokens et la correction complète depuis l'API de l'interface. Les corrections par Claude passent par un faux Claude Code (`test/fake-claude.ts`, qui note ses appels, appelle les outils du serveur `npm` du tracker et répond en `stream-json`) et un faux organizer (tâches, assignations, tags). `test/deploy.test.ts` connecte un serveur et déploie sur un faux serveur SSH (`test/fake-ssh.ts`, bâti sur `ssh2`) qui n'accepte que les clés du fichier dédié, en respectant leur option `from`, et exécute réellement les commandes avec bash : `bash` doit être dans le `PATH` (Git Bash sous Windows).
 
 ## Publication
 
