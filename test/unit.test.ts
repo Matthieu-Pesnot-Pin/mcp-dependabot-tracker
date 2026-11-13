@@ -25,6 +25,9 @@ import { readSettings, saveSettings, type SettingsChecks } from "../src/core/set
 import type { Alert, Operation, Repo } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS } from "../shared/schemas/settings.schema.js";
 import { makeTempDir } from "./helpers.js";
+import { appendOutput, OUTPUT_LIMIT, remoteWrapper, TraceReader } from "../src/core/deployments.js";
+import { installCommand, keyLine, validateServerInput } from "../src/core/deploy-servers.js";
+import { decryptSecret, encryptSecret, generateVaultKey, parseVaultKey } from "../src/core/vault.js";
 
 function alert(number: number, severity: Alert["severity"], pkg: string, scope: Alert["scope"] = "runtime"): Alert {
   return { number, severity, ecosystem: "npm", package: pkg, manifestPath: "package-lock.json", summary: "s", url: "u", patchedVersion: null, createdAt: "2026-01-01T00:00:00.000Z", scope };
@@ -32,7 +35,7 @@ function alert(number: number, severity: Alert["severity"], pkg: string, scope: 
 
 function repo(id: string, alerts: Alert[] = [], syncedAt: string | null = null): Repo {
   const [owner, name] = id.split("/");
-  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", alerts, handledAlerts: [], pullRequests: [], syncedAt, syncError: null, deprecatedAt: null, queuedAt: null, deployPendingAt: null };
+  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", alerts, handledAlerts: [], pullRequests: [], syncedAt, syncError: null, deprecatedAt: null, queuedAt: null, deployPendingAt: null, deployServerId: null, deployScript: "" };
 }
 
 function operation(overrides: Partial<Operation> = {}): Operation {
@@ -766,4 +769,49 @@ test("the npm tools of Claude only run in a project folder of the clone", () => 
   } finally {
     temp.cleanup();
   }
+});
+
+test("the vault encrypts with VAULT_KEY and refuses another key or an invalid one", () => {
+  const key = parseVaultKey(generateVaultKey());
+  const sealed = encryptSecret("secret", key);
+  assert.match(sealed, /^v1:/);
+  assert.equal(decryptSecret(sealed, key), "secret");
+  assert.throws(() => decryptSecret(sealed, parseVaultKey(generateVaultKey())), /does not decrypt/);
+  assert.throws(() => parseVaultKey(undefined), /VAULT_KEY is not set/);
+  assert.throws(() => parseVaultKey("abc"), /not a valid key/);
+});
+
+test("the key line and the installation command target the dedicated file, and keep SSH Gate's file readable by sshd", () => {
+  assert.equal(keyLine("ssh-ed25519 AAAA c"), "restrict ssh-ed25519 AAAA c");
+  assert.equal(keyLine("ssh-ed25519 AAAA c", "10.0.0.1"), 'restrict,from="10.0.0.1" ssh-ed25519 AAAA c');
+  const command = installCommand("ssh-ed25519 AAAA c");
+  assert.ok(command.includes("AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys.d/ssh-gate .ssh/authorized_keys.d/dependabot-tracker"));
+  assert.ok(!command.includes("\n"));
+  assert.deepEqual(validateServerInput({ name: " web ", host: "10.0.0.1", port: 2222, username: "deploy" }), { name: "web", host: "10.0.0.1", port: 2222, username: "deploy" });
+  assert.throws(() => validateServerInput({ name: "web", host: "10.0.0.1", port: 70000, username: "deploy" }), /port/);
+  assert.throws(() => validateServerInput({ name: "web", host: "10.0.0.1", port: 22, username: "a b" }), /Utilisateur invalide/);
+});
+
+test("the trace reader follows the lines of the script only, and reads the process id first", () => {
+  const lines: number[] = [];
+  const reader = new TraceReader((line) => lines.push(line));
+  reader.push("__DTPID_4242__\n+__DTrun.sh:6__ . /tmp/x/deploy.sh\n+__DTdeploy.sh:2__ echo a\n++__DTdep");
+  reader.push("loy.sh:3__ date\nplain text\n");
+  assert.equal(reader.pid, 4242);
+  assert.deepEqual(lines, [2, 3]);
+});
+
+test("the remote wrapper exports the variables quoted and keeps the script intact", () => {
+  const wrapper = remoteWrapper("echo $BRANCH", { BRANCH: "it's", REPO: "o/n" });
+  assert.ok(wrapper.includes("export BRANCH='it'\\''s'"), wrapper);
+  assert.ok(wrapper.includes("echo $BRANCH\nDTSCRIPT_"));
+  assert.ok(wrapper.includes('bash "$d/run.sh" "$d/deploy.sh" </dev/null'));
+});
+
+test("the output keeps only its end beyond the limit", () => {
+  assert.deepEqual(appendOutput("ab", "c"), { output: "abc", truncated: false });
+  const long = appendOutput("x".repeat(OUTPUT_LIMIT), "yz");
+  assert.equal(long.output.length, OUTPUT_LIMIT);
+  assert.ok(long.output.endsWith("yz"));
+  assert.equal(long.truncated, true);
 });

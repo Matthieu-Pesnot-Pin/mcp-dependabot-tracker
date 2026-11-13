@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import fs from "fs";
 import http from "http";
 import net from "net";
@@ -139,6 +140,14 @@ interface FakeRepo {
 /** Nombre d'alertes par page : petit, pour exercer la pagination par `Link`. */
 const FAKE_PAGE_SIZE = 2;
 
+/** Commit de tête d'une branche de la fausse API GitHub : stable pour un dépôt et une branche. */
+export function fakeCommit(repoId: string, branch: string): string {
+  return crypto.createHash("sha1").update(`${repoId}#${branch}`).digest("hex");
+}
+
+/** VAULT_KEY des serveurs lancés par les tests. */
+export const TEST_VAULT_KEY = Buffer.alloc(32, 7).toString("base64");
+
 /**
  * Fausse API GitHub : dépôts, alertes Dependabot paginées, utilisateur du token,
  * création de pull requests, qu'elle enregistre, et liste des pull requests ouvertes.
@@ -190,6 +199,11 @@ export class FakeGitHub {
 
     if (req.method === "GET" && parts.length === 3) {
       return this.send(res, 200, { name: repo.name, full_name: `${repo.owner}/${repo.name}`, owner: { login: repo.owner }, default_branch: repo.defaultBranch });
+    }
+    if (req.method === "GET" && parts[3] === "branches" && parts.length === 5) {
+      const branch = decodeURIComponent(parts[4]);
+      if (!repo.branches.includes(branch)) return this.send(res, 404, { message: "Branch not found" });
+      return this.send(res, 200, { name: branch, commit: { sha: fakeCommit(`${repo.owner}/${repo.name}`, branch) } });
     }
     if (req.method === "GET" && parts[3] === "branches") {
       return this.send(res, 200, repo.branches.map((branch) => ({ name: branch })));
@@ -465,6 +479,7 @@ export function baseEnv(): Record<string, string | undefined> {
     "GITHUB_TOKEN",
     "GITHUB_API_URL",
     "GITHUB_SERVER_URL",
+    "VAULT_KEY",
   ]) {
     delete env[key];
   }

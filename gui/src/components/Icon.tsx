@@ -2,6 +2,38 @@ import type { ReactNode } from 'react'
 
 /** Tracés des icônes (jeu Lucide, grille 24 × 24, trait sans remplissage). */
 const PATHS = {
+  server: (
+    <>
+      <rect width="20" height="8" x="2" y="2" rx="2" ry="2" />
+      <rect width="20" height="8" x="2" y="14" rx="2" ry="2" />
+      <line x1="6" x2="6.01" y1="6" y2="6" />
+      <line x1="6" x2="6.01" y1="18" y2="18" />
+    </>
+  ),
+  plug: (
+    <>
+      <path d="M12 22v-5" />
+      <path d="M15 8V2" />
+      <path d="M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z" />
+      <path d="M9 8V2" />
+    </>
+  ),
+  'file-key': (
+    <>
+      <path d="M10.65 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v10.1" />
+      <path d="M14 2v5a1 1 0 0 0 1 1h5" />
+      <path d="m10 15 1 1" />
+      <path d="m11 14-4.586 4.586" />
+      <circle cx="5" cy="20" r="2" />
+    </>
+  ),
+  lock: (
+    <>
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </>
+  ),
+  square: <rect width="18" height="18" x="3" y="3" rx="2" />,
   'shield-check': (
     <>
       <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />

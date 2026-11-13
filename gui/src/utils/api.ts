@@ -1,5 +1,6 @@
 import type { AddableReposResponse, AppConfig, AuditAllResponse, AuditTarget, BranchesResponse, CategoriesResponse, OperationResponse, OperationsResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
 import type { AgentTokensResponse, CreatedAgentTokenResponse } from '@shared/schemas/agent-token.schema'
+import type { DeployServerBody, DeploymentResponse, DeployServersResponse, DeployServerView, RepoDeployResponse, TestDeployServerResponse } from '@shared/schemas/deploy.schema'
 import type { AuditScope, Category } from '@shared/schemas/model.schema'
 import type { SaveSettingsBody, SettingsView } from '@shared/schemas/settings.schema'
 
@@ -91,4 +92,14 @@ export const api = {
   listAgentTokens: () => request<AgentTokensResponse>('agent-tokens'),
   createAgentToken: (name: string) => send<CreatedAgentTokenResponse>('POST', 'agent-tokens', { name }),
   revokeAgentToken: (id: string) => send<{ revoked: true }>('DELETE', `agent-tokens/${encodeURIComponent(id)}`),
+  listDeployServers: () => request<DeployServersResponse>('deploy-servers'),
+  createDeployServer: (body: DeployServerBody) => send<DeployServerView>('POST', 'deploy-servers', body),
+  updateDeployServer: (id: string, body: DeployServerBody) => send<DeployServerView>('PUT', `deploy-servers/${encodeURIComponent(id)}`, body),
+  testDeployServer: (id: string) => send<TestDeployServerResponse>('POST', `deploy-servers/${encodeURIComponent(id)}/test`),
+  getRepoDeploy: (repoId: string) => request<RepoDeployResponse>(`${repoPath(repoId)}/deploy`),
+  setRepoDeployServer: (repoId: string, serverId: string | null) => send<RepoDeployResponse>('PUT', `${repoPath(repoId)}/deploy/server`, { serverId }),
+  saveRepoDeployScript: (repoId: string, script: string) => send<RepoDeployResponse>('PUT', `${repoPath(repoId)}/deploy/script`, { script }),
+  startDeployment: (repoId: string) => send<DeploymentResponse>('POST', `${repoPath(repoId)}/deployments`),
+  getDeployment: (id: string) => request<DeploymentResponse>(`deployments/${encodeURIComponent(id)}`),
+  cancelDeployment: (id: string) => send<DeploymentResponse>('POST', `deployments/${encodeURIComponent(id)}/cancel`),
 }

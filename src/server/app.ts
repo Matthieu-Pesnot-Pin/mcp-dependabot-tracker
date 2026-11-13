@@ -28,11 +28,19 @@ import {
   type ReposResponse,
 } from "../../shared/schemas/api.schema.js";
 import { CreateAgentTokenBodySchema, type AgentTokensResponse, type CreatedAgentTokenResponse } from "../../shared/schemas/agent-token.schema.js";
+import {
+  DeployServerBodySchema,
+  SaveScriptBodySchema,
+  SetDeployServerBodySchema,
+  type DeploymentResponse,
+  type DeployServersResponse,
+} from "../../shared/schemas/deploy.schema.js";
 import type { Operation } from "../../shared/schemas/model.schema.js";
 import { SaveSettingsBodySchema } from "../../shared/schemas/settings.schema.js";
 import { setupCommand } from "../cli/setup-mcp.js";
 import { authenticateAgent, createAgentToken, listAgentTokens, revokeAgentToken } from "../core/agent-tokens.js";
 import type { AuditAll } from "../core/audit-all.js";
+import type { Deployer } from "../core/deployments.js";
 import type { GitHubConfig } from "../core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "../core/errors.js";
 import { assertMergeAuditPossible, cancelOperation, startAudit, startFix, startMergeAudit, type OperationContext } from "../core/operations.js";
@@ -70,6 +78,8 @@ export interface ServerContext {
   github: GitHubConfig;
   operations: OperationContext;
   auditAll: AuditAll;
+  /** Serveurs de déploiement, scripts et déploiements des dépôts. */
+  deployer: Deployer;
   settingsChecks: SettingsChecks;
   /** Dossier de la SPA compilée (`gui/dist`). */
   staticRoot: string;
@@ -97,7 +107,7 @@ function htmlBaseHref(mountPath: string): string {
 
 /** Application Hono du serveur : API de la GUI, API des agents, fichiers de la SPA. */
 export function createApp(ctx: ServerContext): Hono {
-  const { store, dataDir, github, operations, auditAll } = ctx;
+  const { store, dataDir, github, operations, auditAll, deployer } = ctx;
   const app = new Hono();
 
   /** Rend le résultat de `fn` en JSON, ou `{ error }` avec le code HTTP de l'erreur. */
@@ -226,7 +236,10 @@ export function createApp(ctx: ServerContext): Hono {
 
   app.delete("/api/repos/:owner/:name", (c) =>
     respond(c, () => {
-      store.removeRepo(repoId(c));
+      const repo = store.getRepo(repoId(c));
+      if (deployer.deployments.active(repo.id)) throw new ConflictError(`A deployment is running on ${repo.id}: interrupt it before removing the repository.`);
+      store.removeRepo(repo.id);
+      deployer.deployments.removeRepo(repo.id);
       return { removed: true };
     })
   );
@@ -308,6 +321,30 @@ export function createApp(ctx: ServerContext): Hono {
   app.get("/api/operations/:id", (c) => respond(c, (): OperationResponse => ({ operation: store.getOperation(c.req.param("id")) })));
 
   app.post("/api/operations/:id/cancel", (c) => respond(c, (): OperationResponse => ({ operation: cancelOperation(operations, c.req.param("id")) })));
+
+  app.get("/api/deploy-servers", (c) =>
+    respond(c, (): DeployServersResponse => ({ servers: deployer.servers.list().map((server) => deployer.servers.view(server)) }))
+  );
+
+  app.post("/api/deploy-servers", (c) => withBody(c, DeployServerBodySchema, (body) => deployer.servers.view(deployer.servers.create(body))));
+
+  app.put("/api/deploy-servers/:id", (c) =>
+    withBody(c, DeployServerBodySchema, (body) => deployer.servers.view(deployer.servers.update(c.req.param("id"), body)))
+  );
+
+  app.post("/api/deploy-servers/:id/test", (c) => respond(c, () => deployer.servers.test(c.req.param("id"))));
+
+  app.get("/api/repos/:owner/:name/deploy", (c) => respond(c, () => deployer.view(repoId(c))));
+
+  app.put("/api/repos/:owner/:name/deploy/server", (c) => withBody(c, SetDeployServerBodySchema, (body) => deployer.setServer(repoId(c), body.serverId)));
+
+  app.put("/api/repos/:owner/:name/deploy/script", (c) => withBody(c, SaveScriptBodySchema, (body) => deployer.saveScript(repoId(c), body.script)));
+
+  app.post("/api/repos/:owner/:name/deployments", (c) => respond(c, async (): Promise<DeploymentResponse> => ({ deployment: await deployer.start(repoId(c)) })));
+
+  app.get("/api/deployments/:id", (c) => respond(c, (): DeploymentResponse => ({ deployment: deployer.deployments.get(c.req.param("id")) })));
+
+  app.post("/api/deployments/:id/cancel", (c) => respond(c, async (): Promise<DeploymentResponse> => ({ deployment: await deployer.cancel(c.req.param("id")) })));
 
   app.get("/api/settings", (c) => respond(c, () => settingsView(readSettings(dataDir))));
 

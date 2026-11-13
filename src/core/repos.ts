@@ -344,6 +344,8 @@ export async function addRepository(store: Store, config: GitHubConfig, input: s
     deprecatedAt: null,
     queuedAt: null,
     deployPendingAt: null,
+    deployServerId: null,
+    deployScript: "",
   });
   return syncRepository(store, config, remote.fullName);
 }

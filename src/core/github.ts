@@ -150,6 +150,14 @@ export class GitHubClient {
     return names;
   }
 
+  /** SHA du dernier commit de `branch`. */
+  async getBranchCommit(owner: string, name: string, branch: string): Promise<string> {
+    const { json } = await this.request("GET", `/repos/${owner}/${name}/branches/${encodeURIComponent(branch)}`);
+    const sha = json?.commit?.sha;
+    if (typeof sha !== "string") throw new TrackerError(`GitHub API returned no commit for the branch ${branch} of ${owner}/${name}.`);
+    return sha;
+  }
+
   async getAuthenticatedUser(): Promise<GitHubUser> {
     const { json } = await this.request("GET", "/user");
     return { login: json.login, id: json.id, name: json.name ?? null };

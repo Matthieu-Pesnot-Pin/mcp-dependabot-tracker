@@ -4,6 +4,7 @@ import type { AuditScope } from '@shared/schemas/model.schema'
 import { useEffect, useState } from 'react'
 import { BranchSelector } from '../components/BranchSelector'
 import { CategorySelector } from '../components/CategorySelector'
+import { DeployTab } from '../components/deploy/DeployTab'
 import { Icon } from '../components/Icon'
 import { OperationHistory } from '../components/OperationHistory'
 import { ScopeButton } from '../components/ScopeButton'
@@ -160,11 +161,6 @@ function HandledAlerts({ view, onChanged }: { view: RepoView; onChanged: () => v
 }
 
 /**
- * Écran d'un dépôt : ses alertes Dependabot ouvertes et son historique en deux
- * onglets, la correction et les droits de l'agent ; un dépôt déprécié ne se
- * corrige pas.
- */
-/**
  * Bouton de file d'attente de l'en-tête : « Traité » retire de la file un dépôt
  * qui y est et ramène à la file ; « Ajouter à la file » y met un dépôt qui n'y
  * est pas.
@@ -238,7 +234,12 @@ function DeployButton({ view, onChanged }: { view: RepoView; onChanged: () => vo
   )
 }
 
-export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
+/**
+ * Écran d'un dépôt : ses alertes Dependabot ouvertes, son historique et son
+ * déploiement en trois onglets, et la correction ; un dépôt déprécié ne se
+ * corrige pas.
+ */
+export function RepoScreen({ repoId, tab, deploymentId }: { repoId: string; tab: RepoTab; deploymentId: string | null }) {
   const polled = usePolling(`repo:${repoId}`, () => api.getRepo(repoId), POLL_MS)
   const history = usePolling(`history:${repoId}`, () => api.listOperations(repoId), POLL_MS)
   const config = usePolling('config', api.getConfig, null)
@@ -341,6 +342,9 @@ export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
           Historique
           {operations.length > 0 && <span className="tab-count">{operations.length}</span>}
         </a>
+        <a className={`tab${tab === 'deploy' ? ' is-active' : ''}`} href={hrefs.repoDeploy(repo.id)}>
+          Déploiement
+        </a>
       </nav>
 
       {tab === 'alerts' ? (
@@ -348,6 +352,8 @@ export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
           <PendingAlerts view={view} onChanged={polled.reload} />
           <HandledAlerts view={view} onChanged={polled.reload} />
         </>
+      ) : tab === 'deploy' ? (
+        <DeployTab repo={repo} deploymentId={deploymentId} />
       ) : history.data ? (
         <OperationHistory repoId={repo.id} operations={operations} />
       ) : (

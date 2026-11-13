@@ -10,6 +10,8 @@ import { AuditAll } from "../core/audit-all.js";
 import { checkClaudeToken, packagedClaudeCommand, type ClaudeRuntime } from "../core/claude.js";
 import { readGitHubConfig, type GitHubConfig } from "../core/config.js";
 import { resolveCloneDir, resolveDataDir } from "../core/data-dir.js";
+import { DeployServerStore } from "../core/deploy-servers.js";
+import { Deployer, DeploymentStore } from "../core/deployments.js";
 import { resolveLogDir } from "../core/log-dir.js";
 import { runDefaultBranchAudit, type OperationContext } from "../core/operations.js";
 import { OrganizerClient } from "../core/organizer.js";
@@ -17,6 +19,7 @@ import { refreshReportTask } from "../core/repair.js";
 import { SYNC_INTERVAL_MS, staleRepos, syncRepository } from "../core/repos.js";
 import { readSettings, type SettingsChecks } from "../core/settings.js";
 import { Store } from "../core/store.js";
+import { parseVaultKey } from "../core/vault.js";
 import { APP_VERSION } from "../version.js";
 import { createApp } from "./app.js";
 
@@ -92,10 +95,12 @@ export async function serve(): Promise<void> {
   let github: GitHubConfig;
   let cloneDir: string;
   let exposure: Exposure;
+  let vaultKey: Buffer;
   try {
     github = readGitHubConfig();
     cloneDir = resolveCloneDir();
     exposure = resolveExposure();
+    vaultKey = parseVaultKey(process.env.VAULT_KEY);
   } catch (err: any) {
     logger.error(err.message);
     process.exit(1);
@@ -103,6 +108,14 @@ export async function serve(): Promise<void> {
 
   const dataDir = resolveDataDir();
   const store = new Store(dataDir);
+  const deployServers = new DeployServerStore(dataDir, vaultKey);
+  try {
+    deployServers.verifyVault();
+  } catch (err: any) {
+    logger.error(err.message);
+    process.exit(1);
+  }
+  const deployer = new Deployer(store, deployServers, new DeploymentStore(dataDir), github, (message) => logger.error(message));
   const claude: ClaudeRuntime = { command: packagedClaudeCommand(), home: path.join(dataDir, "claude") };
   const settingsChecks: SettingsChecks = {
     organizer: (connection) => new OrganizerClient(connection).space(),
@@ -127,6 +140,7 @@ export async function serve(): Promise<void> {
     github,
     operations,
     auditAll,
+    deployer,
     settingsChecks,
     staticRoot: path.join(root, "gui", "dist"),
     proxyUrl: exposure.kind === "proxy" ? exposure.proxyUrl : undefined,
@@ -168,6 +182,7 @@ export async function serve(): Promise<void> {
     process.exit(1);
   }
 
+  for (const deployment of deployer.deployments.failInterrupted()) logger.warn(`Deployment ${deployment.id} on ${deployment.repoId} was interrupted by the last stop of the server.`);
   for (const operation of store.failInterruptedOperations()) logger.warn(`Operation ${operation.id} on ${operation.repoId} was interrupted by the last stop of the server.`);
   logger.info(`Dependabot Tracker ${APP_VERSION} serves ${publicUrl} (port ${port}, data dir ${dataDir}, clone dir ${cloneDir})`);
 

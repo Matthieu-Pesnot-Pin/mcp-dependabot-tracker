@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test, { after, before } from "node:test";
 
-import { FakeGitHub, LocalRemotes, McpClient, SERVER_ENTRY, TrackerServer, VULNERABLE_FIXTURE, baseEnv, freePort, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
+import { FakeGitHub, LocalRemotes, McpClient, SERVER_ENTRY, TEST_VAULT_KEY, TrackerServer, VULNERABLE_FIXTURE, baseEnv, freePort, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
 
 /**
  * Serveur réel lancé par `serve` sur un port libre, la fausse API GitHub et des
@@ -73,6 +73,7 @@ before(async () => {
     GITHUB_API_URL: github.url,
     GITHUB_SERVER_URL: remotes.serverUrl,
     APP_PORT: String(port),
+    VAULT_KEY: TEST_VAULT_KEY,
   });
   await waitFor("the server", () => fetch(`${baseUrl}/proxy/health`).then((r) => r.ok, () => false), (ok) => ok, 20_000);
 
@@ -444,6 +445,10 @@ test("the server creates CLONE_DIR at launch and refuses to start without its se
   assert.deepEqual([noClones.code, /CLONE_DIR is not set/.test(noClones.stderr)], [1, true], noClones.stderr);
   const noExposure = await runEntry(["serve"], { ...env, GITHUB_TOKEN: "t", CLONE_DIR: path.join(temp.dir, "clones-2") });
   assert.deepEqual([noExposure.code, /Neither PROXY_URL nor APP_PORT is set/.test(noExposure.stderr)], [1, true], noExposure.stderr);
+  const noVault = await runEntry(["serve"], { ...env, GITHUB_TOKEN: "t", CLONE_DIR: path.join(temp.dir, "clones-2"), APP_PORT: "1" });
+  assert.deepEqual([noVault.code, /VAULT_KEY is not set/.test(noVault.stderr)], [1, true], noVault.stderr);
+  const badVault = await runEntry(["serve"], { ...env, GITHUB_TOKEN: "t", CLONE_DIR: path.join(temp.dir, "clones-2"), APP_PORT: "1", VAULT_KEY: "short" });
+  assert.deepEqual([badVault.code, /VAULT_KEY is not a valid key/.test(badVault.stderr)], [1, true], badVault.stderr);
 });
 
 test("the MCP mode refuses to start without the server address or the agent token, and the entry point without a command", async () => {

@@ -4,7 +4,8 @@
  * Point d'entrée du paquet :
  *   serve                                          le serveur Dependabot Tracker (interface, API, opérations) ;
  *   mcp                                            le mode MCP, lancé par un agent, qui pilote un serveur ;
- *   --claude-setup-mcp --server_url=… --token=…    déclare le mode MCP dans le .mcp.json du répertoire courant.
+ *   --claude-setup-mcp --server_url=… --token=…    déclare le mode MCP dans le .mcp.json du répertoire courant ;
+ *   --generate-vault-key                           affiche une nouvelle VAULT_KEY.
  */
 
 const USAGE = [
@@ -12,11 +13,15 @@ const USAGE = [
   "  mcp-dependabot-tracker serve                                         lance le serveur",
   "  mcp-dependabot-tracker mcp                                           mode MCP, lancé par un agent (SERVER_URL, AGENT_TOKEN)",
   "  mcp-dependabot-tracker --claude-setup-mcp --server_url=<url> --token=<token> [--force]",
+  "  mcp-dependabot-tracker --generate-vault-key                          affiche une nouvelle VAULT_KEY",
 ].join("\n");
 
 const argv = process.argv.slice(2);
 
-if (argv.includes("--claude-setup-mcp")) {
+if (argv.includes("--generate-vault-key")) {
+  const { generateVaultKey } = await import("./core/vault.js");
+  console.log(generateVaultKey());
+} else if (argv.includes("--claude-setup-mcp")) {
   const { parseConnection, runSetupMcp } = await import("./cli/setup-mcp.js");
   const parsed = parseConnection(argv);
   if ("error" in parsed) {

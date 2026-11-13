@@ -84,7 +84,9 @@ export type Category = z.infer<typeof CategorySchema>;
  * `deprecatedAt` la date à laquelle il a été marqué déprécié, null sinon : un
  * dépôt déprécié n'est plus synchronisé ni audité ;
  * `queuedAt` la date de son entrée dans la file d'attente, null s'il n'y est pas ;
- * `deployPendingAt` la date à laquelle il a été marqué « à déployer », null s'il ne l'est pas.
+ * `deployPendingAt` la date à laquelle il a été marqué « à déployer », null s'il ne l'est pas ;
+ * `deployServerId` le serveur sur lequel il se déploie, null s'il n'en a pas ;
+ * `deployScript` le script shell qui le déploie sur ce serveur.
  */
 export const RepoSchema = z.object({
   id: z.string(),
@@ -102,6 +104,8 @@ export const RepoSchema = z.object({
   deprecatedAt: z.string().nullable(),
   queuedAt: z.string().nullable(),
   deployPendingAt: z.string().nullable(),
+  deployServerId: z.string().nullable(),
+  deployScript: z.string(),
 });
 
 export type Repo = z.infer<typeof RepoSchema>;

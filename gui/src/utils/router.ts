@@ -11,6 +11,8 @@ import { useSyncExternalStore } from 'react'
  *   `#/settings`                        réglages des corrections par Claude ;
  *   `#/r/<propriétaire>/<nom>`          écran du dépôt, ses alertes ;
  *   `#/r/<propriétaire>/<nom>/history`  écran du dépôt, son historique ;
+ *   `#/r/<propriétaire>/<nom>/deploy`   écran du dépôt, son déploiement ;
+ *   `#/r/<propriétaire>/<nom>/deploy/<id>`  écran du dépôt, un déploiement ;
  *   `#/r/<propriétaire>/<nom>/op/<id>`  écran d'une opération.
  */
 export type Route =
@@ -20,7 +22,7 @@ export type Route =
   | { name: 'deploy' }
   | { name: 'deprecated' }
   | { name: 'settings' }
-  | { name: 'repo'; repoId: string; tab: RepoTab }
+  | { name: 'repo'; repoId: string; tab: RepoTab; deploymentId: string | null }
   | { name: 'operation'; repoId: string; operationId: string }
   | { name: 'not_found'; hash: string }
 
@@ -46,12 +48,14 @@ export function parseHash(hash: string): Route {
   if (segments.length === 1 && segments[0] === 'deploy') return { name: 'deploy' }
   if (segments.length === 1 && segments[0] === 'deprecated') return { name: 'deprecated' }
   if (segments.length === 1 && segments[0] === 'settings') return { name: 'settings' }
-  const [section, owner, name, sub, operationId] = segments as string[]
+  const [section, owner, name, sub, subId] = segments as string[]
   if (section !== 'r' || !owner || !name) return { name: 'not_found', hash }
   const repoId = `${owner}/${name}`
-  if (segments.length === 3) return { name: 'repo', repoId, tab: 'alerts' }
-  if (segments.length === 4 && sub === 'history') return { name: 'repo', repoId, tab: 'history' }
-  if (segments.length === 5 && sub === 'op') return { name: 'operation', repoId, operationId }
+  if (segments.length === 3) return { name: 'repo', repoId, tab: 'alerts', deploymentId: null }
+  if (segments.length === 4 && sub === 'history') return { name: 'repo', repoId, tab: 'history', deploymentId: null }
+  if (segments.length === 4 && sub === 'deploy') return { name: 'repo', repoId, tab: 'deploy', deploymentId: null }
+  if (segments.length === 5 && sub === 'deploy') return { name: 'repo', repoId, tab: 'deploy', deploymentId: subId }
+  if (segments.length === 5 && sub === 'op') return { name: 'operation', repoId, operationId: subId }
   return { name: 'not_found', hash }
 }
 
@@ -70,7 +74,7 @@ function repoHash(repoId: string): string {
 }
 
 /** Onglet de l'écran d'un dépôt. */
-export type RepoTab = 'alerts' | 'history'
+export type RepoTab = 'alerts' | 'history' | 'deploy'
 
 /** Onglet de l'accueil : une catégorie, tous les projets (`categoryId` null), la file d'attente, les PR en attente, les dépôts à déployer, ou les dépôts dépréciés. */
 export type HomeTab = { kind: 'category'; categoryId: string | null } | { kind: 'queue' } | { kind: 'pulls' } | { kind: 'deploy' } | { kind: 'deprecated' }
@@ -98,6 +102,8 @@ export const hrefs = {
   },
   repo: (repoId: string) => inPage(repoHash(repoId)),
   repoHistory: (repoId: string) => inPage(`${repoHash(repoId)}/history`),
+  repoDeploy: (repoId: string) => inPage(`${repoHash(repoId)}/deploy`),
+  deployment: (repoId: string, deploymentId: string) => inPage(`${repoHash(repoId)}/deploy/${encodeURIComponent(deploymentId)}`),
   operation: (repoId: string, operationId: string) => inPage(`${repoHash(repoId)}/op/${encodeURIComponent(operationId)}`),
 }
 

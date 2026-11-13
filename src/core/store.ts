@@ -36,7 +36,8 @@ function writeJsonAtomic(target: string, value: unknown): void {
  * corrigée à la main n'en a aucune, un dépôt sans pull request en attente n'en
  * a aucune jusqu'à sa lecture suivante, un dépôt sans date de dépréciation
  * n'est pas déprécié, un dépôt sans date d'entrée dans la file n'y est pas, un
-dépôt sans date de marque « à déployer » ne l'est pas. Une alerte sans date
+dépôt sans date de marque « à déployer » ne l'est pas, un dépôt sans serveur
+ * de déploiement n'en a aucun ni de script. Une alerte sans date
  * d'émission prend celle de la lecture qui l'a rapportée, une alerte sans
  * portée n'en a aucune ; la lecture suivante les remplace par les vraies.
  */
@@ -54,6 +55,8 @@ function normalizeReposFile(file: any): unknown {
       deprecatedAt: repo?.deprecatedAt ?? null,
       queuedAt: repo?.queuedAt ?? null,
       deployPendingAt: repo?.deployPendingAt ?? null,
+      deployServerId: repo?.deployServerId ?? null,
+      deployScript: typeof repo?.deployScript === "string" ? repo.deployScript : "",
       alerts: Array.isArray(repo?.alerts)
         ? repo.alerts.map((alert: any) => ({ ...alert, createdAt: alert?.createdAt ?? repo.syncedAt ?? repo.addedAt, scope: alert?.scope ?? null }))
         : repo?.alerts,
