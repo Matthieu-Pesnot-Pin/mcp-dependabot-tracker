@@ -10,22 +10,6 @@ export const NPM_SEVERITIES = ["critical", "high", "moderate", "low", "info"] as
 
 export type NpmSeverity = (typeof NPM_SEVERITIES)[number];
 
-/** Actions que l'agent peut être autorisé à lancer sur un dépôt, par les outils MCP. */
-export const RIGHTS = ["audit", "fix", "push"] as const;
-
-export type Right = (typeof RIGHTS)[number];
-
-export const RightsSchema = z.object({
-  audit: z.boolean(),
-  fix: z.boolean(),
-  push: z.boolean(),
-});
-
-export type Rights = z.infer<typeof RightsSchema>;
-
-/** Droits d'un dépôt qui vient d'être ajouté : l'audit seul. */
-export const DEFAULT_RIGHTS: Rights = { audit: true, fix: false, push: false };
-
 /**
  * Périmètre d'un audit et de ses corrections : `production` laisse de côté les
  * devDependencies (`--omit=dev`), `all` couvre toutes les dépendances.
@@ -110,7 +94,6 @@ export const RepoSchema = z.object({
   branch: z.string(),
   categoryId: z.string().nullable(),
   addedAt: z.string(),
-  rights: RightsSchema,
   alerts: z.array(AlertSchema),
   handledAlerts: z.array(HandledAlertSchema),
   pullRequests: z.array(PullRequestSchema),
@@ -132,7 +115,7 @@ export const OPERATION_KINDS = ["audit", "fix"] as const;
 
 export type OperationKind = (typeof OPERATION_KINDS)[number];
 
-/** Qui a lancé l'opération : l'utilisateur depuis la GUI, ou l'agent par un outil MCP. */
+/** Qui a lancé l'opération : l'utilisateur depuis la GUI, ou un agent par le mode MCP. */
 export const ORIGINS = ["user", "agent"] as const;
 
 export type Origin = (typeof ORIGINS)[number];
@@ -244,8 +227,7 @@ export type Repair = z.infer<typeof RepairSchema>;
 /**
  * Opération d'audit ou de correction sur un clone temporaire, limitée aux
  * dépendances de `scope`. `workDir` est le
- * clone, présent tant que l'opération n'est pas terminée ; `pid` est le processus
- * qui exécute l'étape en cours. `found` liste les vulnérabilités du premier
+ * clone, présent tant que l'opération n'est pas terminée. `found` liste les vulnérabilités du premier
  * audit, `remaining` celles qui restent après la dernière étape. `repair` est
  * la session de corrections par Claude, null quand elle n'a pas été lancée.
  */
@@ -258,7 +240,6 @@ export const OperationSchema = z.object({
   status: z.enum(OPERATION_STATUSES),
   createdAt: z.string(),
   updatedAt: z.string(),
-  pid: z.number().int(),
   workDir: z.string().nullable(),
   baseBranch: z.string(),
   cancelRequested: z.boolean(),

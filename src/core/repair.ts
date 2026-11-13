@@ -70,7 +70,7 @@ export function assertSandboxAvailable(platform: NodeJS.Platform = process.platf
       reject(
         new TrackerError(
           err.code === "ENOENT"
-            ? "The fixes by Claude need bubblewrap (bwrap), which isolates the npm commands of Claude on Linux, and it is not in the PATH of the MCP server. Install it on the server: sudo apt-get install -y bubblewrap socat"
+            ? "The fixes by Claude need bubblewrap (bwrap), which isolates the npm commands of Claude on Linux, and it is not in the PATH of the server. Install it on the server: sudo apt-get install -y bubblewrap socat"
             : `The fixes by Claude need bubblewrap (bwrap), which could not be started: ${err.message}`
         )
       )
@@ -79,7 +79,7 @@ export function assertSandboxAvailable(platform: NodeJS.Platform = process.platf
       if (code === 0) return resolve();
       reject(
         new TrackerError(
-          `bubblewrap (bwrap) is installed but cannot create a sandbox for the account of the MCP server${stderr.trim() ? `: ${tail(stderr, 3)}` : "."} ` +
+          `bubblewrap (bwrap) is installed but cannot create a sandbox for the account of the server${stderr.trim() ? `: ${tail(stderr, 3)}` : "."} ` +
             "Check the AppArmor restriction on user namespaces (kernel.apparmor_restrict_unprivileged_userns on Ubuntu 24.04 and later) and the hardening of the service (RestrictNamespaces, PrivateUsers, SystemCallFilter)."
         )
       );

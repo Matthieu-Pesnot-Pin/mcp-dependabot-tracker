@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test, { after, before } from "node:test";
 
-import { cancelOperation, runAgentOperation, runDefaultBranchAudit, startUserFix, type OperationContext } from "../src/core/operations.js";
+import { cancelOperation, runDefaultBranchAudit, startAudit, startFix, type FixPlan, type OperationContext } from "../src/core/operations.js";
 import { addRepository, listRepoBranches, repoView, setBranch } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import type { GitHubConfig } from "../src/core/config.js";
@@ -64,6 +64,17 @@ function waitStatus(id: string, statuses: Operation["status"][]): Promise<Operat
   return waitFor(`operation ${id} in ${statuses.join("|")}`, () => ctx.store.getOperation(id), (operation) => statuses.includes(operation.status));
 }
 
+/** Opération lancée en arrière-plan, attendue jusqu'à sa fin. */
+function settled(operation: Operation): Promise<Operation> {
+  return waitStatus(operation.id, ["done", "failed", "cancelled"]);
+}
+
+/** Correction lancée depuis la GUI : production, corrections par Claude comprises. */
+const USER_FIX: FixPlan = { scope: "production", claude: true };
+
+/** Correction d'un agent sans corrections par Claude. */
+const NPM_ONLY: FixPlan = { scope: "production", claude: false };
+
 before(async () => {
   temp = makeTempDir("tracker-operations-");
   github = new FakeGitHub();
@@ -95,7 +106,9 @@ after(async () => {
 
 test("an agent audit reports the vulnerabilities of every npm project and deletes its clone", { skip }, async () => {
   const repoId = await newRepo();
-  const operation = await runAgentOperation(ctx, repoId, "audit", { scope: "production", push: false, commitMessage: "x" });
+  const started = startAudit(ctx, repoId, "agent", "production");
+  assert.equal(started.status, "running");
+  const operation = await settled(started);
   assert.equal(operation.status, "done", operation.error ?? "");
   assert.equal(operation.origin, "agent");
   assert.deepEqual(operation.projects, ["", "tools"]);
@@ -118,16 +131,16 @@ function pushedSubjects(repoId: string, branch: string): string[] {
 async function automaticFix(token: string | null, files?: Record<string, string>): Promise<{ repoId: string; done: Operation }> {
   settings = token === null ? DEFAULT_SETTINGS : claudeSettings(token);
   const repoId = await newRepo(files ?? { ".": VULNERABLE_FIXTURE });
-  const started = startUserFix(ctx, repoId, "production");
+  const started = startFix(ctx, repoId, "user", USER_FIX);
   return { repoId, done: await waitStatus(started.id, ["done", "failed", "cancelled"]) };
 }
 
 test("a fix from the GUI runs to the pull request without any decision; without Claude, the fixes of npm audit fix are pushed with a warning", { skip }, async () => {
   try {
     const repoId = await newRepo();
-    const started = startUserFix(ctx, repoId, "production");
+    const started = startFix(ctx, repoId, "user", USER_FIX);
     assert.equal(started.status, "running");
-    assert.throws(() => startUserFix(ctx, repoId, "production"), /already in progress/);
+    assert.throws(() => startFix(ctx, repoId, "user", USER_FIX), /already in progress/);
 
     const done = await waitStatus(started.id, ["done", "failed", "cancelled"]);
     assert.equal(done.status, "done", done.error ?? "");
@@ -160,7 +173,7 @@ test("a fix from the GUI runs to the pull request without any decision; without 
 
 test("cancelling a running operation stops its command", { skip }, async () => {
   const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
-  const started = startUserFix(ctx, repoId, "production");
+  const started = startFix(ctx, repoId, "user", USER_FIX);
   const requested = cancelOperation(ctx, started.id);
   assert.equal(requested.cancelRequested, true);
   const cancelled = await waitStatus(started.id, ["cancelled", "failed", "done"]);
@@ -275,7 +288,7 @@ test("cancelling an operation while Claude works stops Claude Code", { skip }, a
   settings = claudeSettings("slow");
   try {
     const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
-    const started = startUserFix(ctx, repoId, "production");
+    const started = startFix(ctx, repoId, "user", USER_FIX);
     await waitFor("Claude to start", () => ctx.store.getOperation(started.id), (operation) => (operation.repair?.activity.length ?? 0) > 0);
     cancelOperation(ctx, started.id);
     const cancelled = await waitStatus(started.id, ["cancelled", "failed", "done"]);
@@ -288,33 +301,31 @@ test("cancelling an operation while Claude works stops Claude Code", { skip }, a
   }
 });
 
-test("an agent fix without push reports the changes and pushes nothing", { skip }, async () => {
-  const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
-  const operation = await runAgentOperation(ctx, repoId, "fix", { scope: "production", push: false, commitMessage: "x" });
-  assert.equal(operation.status, "done", operation.error ?? "");
-  assert.deepEqual(operation.steps, { clone: "done", audit: "done", fix: "done", repair: "skipped", push: "skipped" });
-  assert.deepEqual(operation.changes.map((c) => c.name), ["lodash"]);
-  assert.equal(operation.pullRequest, null);
-  const [owner, name] = repoId.split("/");
-  assert.deepEqual(remotes.branches(owner, name), ["main"]);
-});
-
-test("an agent fix with push opens the pull request", { skip }, async () => {
-  const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
-  const operation = await runAgentOperation(ctx, repoId, "fix", { scope: "production", push: true, commitMessage: "chore: audit" });
-  assert.equal(operation.status, "done", operation.error ?? "");
-  assert.ok(operation.pullRequest);
-  assert.equal(operation.origin, "agent");
-  assert.equal(github.pulls.find((candidate) => candidate.repo === repoId)?.title, "chore: audit");
+test("an agent fix without Claude pushes the fixes of npm audit fix and opens the pull request", { skip }, async () => {
+  settings = claudeSettings("ok");
+  try {
+    const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
+    const operation = await settled(startFix(ctx, repoId, "agent", NPM_ONLY));
+    assert.equal(operation.status, "done", operation.error ?? "");
+    assert.equal(operation.origin, "agent");
+    assert.deepEqual(operation.steps, { clone: "done", audit: "done", fix: "done", repair: "skipped", push: "done" });
+    assert.equal(operation.repair, null, "Claude is configured, but the agent did not ask for it");
+    assert.deepEqual(operation.changes.map((c) => c.name), ["lodash"]);
+    assert.ok(operation.pullRequest);
+    assert.deepEqual(pushedSubjects(repoId, operation.branch!), ["fix(deps): resolve npm audit vulnerabilities", "initial"]);
+    assert.doesNotMatch(github.pulls.find((candidate) => candidate.repo === repoId)!.body, /\[!WARNING\]/);
+  } finally {
+    settings = DEFAULT_SETTINGS;
+  }
 });
 
 test("a production fix leaves the devDependencies out, an audit of all dependencies sees them", { skip }, async () => {
   const repoId = await newRepo({ ".": VULNERABLE_DEV_FIXTURE });
-  const all = await runAgentOperation(ctx, repoId, "audit", { scope: "all", push: false, commitMessage: "x" });
+  const all = await settled(startAudit(ctx, repoId, "agent", "all"));
   assert.equal(all.status, "done", all.error ?? "");
   assert.deepEqual(all.found.map((v) => v.name).sort(), ["lodash", "nth-check"]);
 
-  const fixed = await runAgentOperation(ctx, repoId, "fix", { scope: "production", push: true, commitMessage: "fix: production" });
+  const fixed = await settled(startFix(ctx, repoId, "agent", NPM_ONLY));
   assert.equal(fixed.status, "done", fixed.error ?? "");
   assert.equal(fixed.scope, "production");
   assert.deepEqual(fixed.found.map((v) => v.name), ["lodash"]);
@@ -338,7 +349,7 @@ test("an operation clones the chosen branch and opens the pull request towards i
   await assert.rejects(setBranch(ctx.store, ctx.githubConfig(), repoId, "nope"), /Branch "nope" does not exist/);
   await setBranch(ctx.store, ctx.githubConfig(), repoId, "develop");
 
-  const operation = await runAgentOperation(ctx, repoId, "fix", { scope: "production", push: true, commitMessage: "fix: develop" });
+  const operation = await settled(startFix(ctx, repoId, "agent", NPM_ONLY));
   assert.equal(operation.status, "done", operation.error ?? "");
   assert.equal(operation.baseBranch, "develop");
   const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
@@ -369,7 +380,7 @@ test("a repository without package-lock.json fails with an explicit error", asyn
   try {
     fs.writeFileSync(path.join(empty.dir, "README.md"), "nothing\n");
     const repoId = await newRepo({ "README.md": path.join(empty.dir, "README.md") });
-    const operation = await runAgentOperation(ctx, repoId, "audit", { scope: "production", push: false, commitMessage: "x" });
+    const operation = await settled(startAudit(ctx, repoId, "agent", "production"));
     assert.equal(operation.status, "failed");
     assert.equal(operation.steps.clone, "failed");
     assert.match(operation.error ?? "", /No package-lock\.json is tracked in octo\/demo-\d+: npm audit needs a lockfile/);
@@ -382,7 +393,7 @@ test("a repository without package-lock.json fails with an explicit error", asyn
 test("a clone of an unknown remote fails and reports git's message", async () => {
   github.addRepo("octo", "ghost", "main", []);
   const repoId = (await addRepository(ctx.store, ctx.githubConfig(), "octo/ghost", null)).id;
-  const operation = await runAgentOperation(ctx, repoId, "audit", { scope: "production", push: false, commitMessage: "x" });
+  const operation = await settled(startAudit(ctx, repoId, "agent", "production"));
   assert.equal(operation.status, "failed");
   assert.match(operation.error ?? "", /^git clone failed:/);
 });

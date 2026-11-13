@@ -494,11 +494,9 @@ code {
   color: var(--text);
 }
 
-.danger-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
+.button-danger.button-secondary,
+.button-danger.button-secondary:hover:not(:disabled) {
+  border-color: var(--danger);
   color: var(--danger);
 }
 
@@ -1255,42 +1253,6 @@ code {
   margin-top: 24px;
 }
 
-.drawer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  width: 420px;
-  max-width: 100%;
-  padding: 24px;
-  background: var(--panel);
-  border-left: 1px solid var(--border);
-}
-
-.drawer-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.drawer-title {
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.drawer-subtitle {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--faint);
-}
-
-.rights {
-  flex: 1;
-  margin-top: 28px;
-}
-
 .right {
   display: flex;
   align-items: center;
@@ -1825,6 +1787,158 @@ code {
 
 .limits .muted + .number-input {
   margin-left: 8px;
+}
+
+/* Tokens d'accès des agents */
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.section-head .section-label {
+  margin: 0;
+}
+
+.button-small.button {
+  height: 32px;
+  padding: 0 12px;
+}
+
+.section-head + .panel.settings-card {
+  margin-bottom: 0;
+}
+
+.token-create {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.token-create .input {
+  height: 36px;
+  background: var(--bg);
+}
+
+.token-create .link {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.token-created {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 0 18px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 13px;
+}
+
+.token-created-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text);
+}
+
+.token-secret {
+  display: flex;
+  gap: 12px;
+  padding-left: 28px;
+}
+
+.token-secret-value.input {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: var(--bg);
+  overflow-x: auto;
+  white-space: nowrap;
+  user-select: all;
+}
+
+.token-created .field-label {
+  padding-left: 28px;
+}
+
+.token-command.code-chip {
+  justify-content: space-between;
+  height: 32px;
+  margin-left: 28px;
+  min-width: 0;
+  color: var(--text-soft);
+}
+
+.token-command-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  margin: 0 -20px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.token-row:last-child {
+  border-bottom: none;
+}
+
+.token-row:hover {
+  background: var(--surface-raised);
+}
+
+.token-icon {
+  flex-shrink: 0;
+  color: var(--faint);
+}
+
+.token-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.token-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--text-soft);
+}
+
+.token-meta {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.token-revoke {
+  flex-shrink: 0;
+  visibility: hidden;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.token-row:hover .token-revoke,
+.token-row.is-confirming .token-revoke,
+.token-revoke:focus-visible {
+  visibility: visible;
+}
+
+@media (hover: none) {
+  .token-revoke {
+    visibility: visible;
+  }
 }
 
 @media (max-width: 720px) {

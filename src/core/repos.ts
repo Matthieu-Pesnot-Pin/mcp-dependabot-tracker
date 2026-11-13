@@ -1,5 +1,5 @@
 import { alertsInScope, fromNpmSeverity, pendingAlerts, worstOf } from "../../shared/alerts.js";
-import { ALERT_SEVERITIES, DEFAULT_RIGHTS, type Alert, type AlertSeverity, type Category, type HandledAlert, type Operation, type OrganizerTask, type PullRequest, type Repo, type Rights } from "../../shared/schemas/model.schema.js";
+import { ALERT_SEVERITIES, type Alert, type AlertSeverity, type Category, type HandledAlert, type Operation, type OrganizerTask, type PullRequest, type Repo } from "../../shared/schemas/model.schema.js";
 import type { AuditFindings, AuditTarget, CleanAudit, LastAudit, OperationSummary, RepoView } from "../../shared/schemas/api.schema.js";
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, NotFoundError } from "./errors.js";
@@ -198,7 +198,6 @@ export function openReportTask(operations: Operation[]): OrganizerTask | null {
 
 /** Vues de tous les dépôts suivis ; les dépôts, les catégories et les opérations sont lus une seule fois. */
 export function listRepoViews(store: Store): RepoView[] {
-  store.failOrphanedOperations();
   const categories = new Map(store.listCategories().map((category) => [category.id, category]));
   const operationsByRepo = new Map<string, Operation[]>();
   for (const operation of store.listAllOperations()) {
@@ -323,7 +322,7 @@ export async function restoreRepository(store: Store, config: GitHubConfig, repo
   return syncRepository(store, config, repo.id);
 }
 
-/** Suit un nouveau dépôt, rangé dans `categoryId`, avec l'audit pour seul droit de l'agent, puis lit ses alertes. */
+/** Suit un nouveau dépôt, rangé dans `categoryId`, puis lit ses alertes. */
 export async function addRepository(store: Store, config: GitHubConfig, input: string, categoryId: string | null): Promise<Repo> {
   const ref = parseRepoRef(input);
   if (store.findRepo(`${ref.owner}/${ref.name}`)) throw new ConflictError(`Repository ${ref.owner}/${ref.name} is already tracked.`);
@@ -337,7 +336,6 @@ export async function addRepository(store: Store, config: GitHubConfig, input: s
     branch: remote.defaultBranch,
     categoryId,
     addedAt: new Date().toISOString(),
-    rights: DEFAULT_RIGHTS,
     alerts: [],
     handledAlerts: [],
     pullRequests: [],
@@ -390,10 +388,6 @@ export function markAlertHandled(store: Store, repoId: string, number: number): 
 /** Retire la marque « corrigée à la main » d'une alerte. */
 export function unmarkAlertHandled(store: Store, repoId: string, number: number): Repo {
   return store.updateRepo(repoId, (repo) => ({ ...repo, handledAlerts: repo.handledAlerts.filter((mark) => mark.number !== number) }));
-}
-
-export function setRights(store: Store, repoId: string, rights: Rights): Repo {
-  return store.updateRepo(repoId, (repo) => ({ ...repo, rights }));
 }
 
 /** Dépôts non dépréciés jamais synchronisés, ou synchronisés il y a plus de `maxAgeMs`. */

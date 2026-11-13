@@ -1,6 +1,6 @@
 import { handledAlerts, pendingAlerts } from '@shared/alerts'
 import type { RepoView } from '@shared/schemas/api.schema'
-import { RIGHTS, type AuditScope, type Right, type Rights } from '@shared/schemas/model.schema'
+import type { AuditScope } from '@shared/schemas/model.schema'
 import { useEffect, useState } from 'react'
 import { BranchSelector } from '../components/BranchSelector'
 import { CategorySelector } from '../components/CategorySelector'
@@ -8,7 +8,6 @@ import { Icon } from '../components/Icon'
 import { OperationHistory } from '../components/OperationHistory'
 import { ScopeButton } from '../components/ScopeButton'
 import { SeverityPill } from '../components/Pill'
-import { Toggle } from '../components/Toggle'
 import { usePolling } from '../hooks/usePolling'
 import { showError } from '../store/useNotice'
 import { api } from '../utils/api'
@@ -20,28 +19,9 @@ const POLL_MS = 3000
 /** Délai pendant lequel un second clic confirme le retrait du dépôt. */
 const CONFIRM_MS = 4000
 
-const RIGHT_TEXTS: Record<Right, { label: string; description: string }> = {
-  audit: { label: 'Audit', description: 'Cloner le dépôt et lancer npm audit' },
-  fix: { label: 'Audit fix', description: 'Appliquer npm audit fix dans le clone' },
-  push: { label: 'Commit et push', description: 'Pousser sur une nouvelle branche et ouvrir la PR' },
-}
-
-/** Volet des droits de l'agent : chaque interrupteur s'enregistre aussitôt. */
-function AgentDrawer({ view, onClose, onChanged }: { view: RepoView; onClose: () => void; onChanged: () => void }) {
-  const { repo } = view
-  // Droits en cours d'enregistrement, affichés avant que la relecture du dépôt ne les confirme.
-  const [pending, setPending] = useState<Rights | null>(null)
-  if (pending && RIGHTS.every((right) => pending[right] === repo.rights[right])) setPending(null)
-  const rights = pending ?? repo.rights
+/** Retire le dépôt du suivi ; un second clic dans les 4 secondes confirme. Refusé pendant une opération. */
+function RemoveButton({ repoId }: { repoId: string }) {
   const [confirming, setConfirming] = useState(false)
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
 
   useEffect(() => {
     if (!confirming) return
@@ -49,25 +29,13 @@ function AgentDrawer({ view, onClose, onChanged }: { view: RepoView; onClose: ()
     return () => clearTimeout(timer)
   }, [confirming])
 
-  async function change(right: Right, value: boolean) {
-    const next = { ...rights, [right]: value }
-    setPending(next)
-    try {
-      await api.setRights(repo.id, next)
-      onChanged()
-    } catch (err) {
-      setPending(null)
-      showError(err)
-    }
-  }
-
   async function remove() {
     if (!confirming) {
       setConfirming(true)
       return
     }
     try {
-      await api.removeRepo(repo.id)
+      await api.removeRepo(repoId)
       navigate(hrefs.lastHome())
     } catch (err) {
       setConfirming(false)
@@ -75,33 +43,15 @@ function AgentDrawer({ view, onClose, onChanged }: { view: RepoView; onClose: ()
     }
   }
 
-  return (
-    <div className="veil" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <aside className="drawer" aria-label="Droits de l'agent">
-        <div className="drawer-head">
-          <h2 className="drawer-title">Droits de l'agent</h2>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Fermer">
-            <Icon name="x" size={18} />
-          </button>
-        </div>
-        <p className="drawer-subtitle">Ce que l'agent peut faire sur ce dépôt.</p>
-        <div className="rights">
-          {RIGHTS.map((right) => (
-            <div key={right} className="right">
-              <div>
-                <div className="right-label">{RIGHT_TEXTS[right].label}</div>
-                <div className="right-description">{RIGHT_TEXTS[right].description}</div>
-              </div>
-              <Toggle checked={rights[right]} onChange={(value) => void change(right, value)} label={RIGHT_TEXTS[right].label} />
-            </div>
-          ))}
-        </div>
-        <button type="button" className="danger-link" onClick={() => void remove()}>
-          <Icon name="trash-2" />
-          {confirming ? 'Cliquer à nouveau pour retirer le dépôt' : 'Retirer le dépôt'}
-        </button>
-      </aside>
-    </div>
+  return confirming ? (
+    <button type="button" className="button button-secondary button-danger" onClick={() => void remove()}>
+      <Icon name="trash-2" />
+      Confirmer le retrait
+    </button>
+  ) : (
+    <button type="button" className="button button-secondary button-icon" onClick={() => void remove()} aria-label="Retirer le dépôt" title="Retirer le dépôt">
+      <Icon name="trash-2" />
+    </button>
   )
 }
 
@@ -292,7 +242,6 @@ export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
   const polled = usePolling(`repo:${repoId}`, () => api.getRepo(repoId), POLL_MS)
   const history = usePolling(`history:${repoId}`, () => api.listOperations(repoId), POLL_MS)
   const config = usePolling('config', api.getConfig, null)
-  const [drawer, setDrawer] = useState(false)
   const [starting, setStarting] = useState(false)
   const view = polled.data
 
@@ -359,10 +308,7 @@ export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
         <div className="page-actions">
           {!repo.deprecatedAt && <DeployButton view={view} onChanged={polled.reload} />}
           {!repo.deprecatedAt && <QueueButton view={view} onChanged={polled.reload} />}
-          <button type="button" className="button button-secondary" onClick={() => setDrawer(true)}>
-            <Icon name="bot" />
-            Agent
-          </button>
+          <RemoveButton repoId={repo.id} />
           {activeOperation ? (
             <button type="button" className="button button-primary" onClick={() => navigate(hrefs.operation(repo.id, activeOperation.id))}>
               <Icon name="wrench" />
@@ -408,7 +354,6 @@ export function RepoScreen({ repoId, tab }: { repoId: string; tab: RepoTab }) {
         <p className={history.error ? 'error-text' : 'muted'}>{history.error ?? "Chargement de l'historique…"}</p>
       )}
 
-      {drawer && <AgentDrawer view={view} onClose={() => setDrawer(false)} onChanged={polled.reload} />}
     </div>
   )
 }

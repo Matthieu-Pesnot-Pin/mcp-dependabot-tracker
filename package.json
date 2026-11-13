@@ -1,14 +1,14 @@
 {
   "name": "@imenam/mcp-dependabot-tracker",
   "version": "1.0.23",
-  "description": "MCP server and web GUI that track the Dependabot alerts of GitHub repositories and fix their npm vulnerabilities in a temporary clone: npm audit, audit fix, audit fix --force, then a branch and a pull request.",
+  "description": "Server and web GUI that track the Dependabot alerts of GitHub repositories and fix their npm vulnerabilities in a temporary clone: npm audit, audit fix, fixes by Claude, then a branch and a pull request. An MCP mode lets agents drive the server.",
   "main": "dist/src/index.js",
   "scripts": {
     "test": "node --test \"dist/test/*.test.js\"",
     "build:backend": "tsc",
     "build:gui": "cd gui && npm install && npm run build",
     "build": "npm run build:backend && npm run build:gui",
-    "start": "node dist/src/index.js",
+    "start": "node dist/src/index.js serve",
     "prepublishOnly": "npm run build",
     "prebuild": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },

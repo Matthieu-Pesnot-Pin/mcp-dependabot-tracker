@@ -1,5 +1,6 @@
 import { ANALYSIS_LIMITS, type SaveSettingsBody, type SettingsView } from '@shared/schemas/settings.schema'
 import { useState } from 'react'
+import { AgentTokens } from '../components/AgentTokens'
 import { Icon } from '../components/Icon'
 import { usePolling } from '../hooks/usePolling'
 import { showError, useNotice } from '../store/useNotice'
@@ -226,11 +227,13 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
           </div>
         </div>
       </div>
+
+      <AgentTokens />
     </>
   )
 }
 
-/** Réglages des corrections par Claude : connexion à l'organizer, token d'abonnement Claude et limites d'une session. */
+/** Réglages : connexion à l'organizer, token d'abonnement Claude, limites d'une session de Claude, tokens d'accès des agents. */
 export function SettingsScreen() {
   const polled = usePolling('settings', () => api.getSettings(), null, { remember: false })
   const [saved, setSaved] = useState<SettingsView | null>(null)

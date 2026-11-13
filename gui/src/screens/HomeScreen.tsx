@@ -741,12 +741,6 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
             </label>
           </div>
         </div>
-        {config.data && !config.data.githubConfigured && (
-          <p className="banner banner-error">
-            <Icon name="triangle-alert" />
-            GITHUB_TOKEN n'est pas défini : déclarez un token GitHub dans le bloc env du serveur.
-          </p>
-        )}
         {repos.error && !repos.data && <p className="banner banner-error">{repos.error}</p>}
         {unknownCategory && (
           <p className="muted">

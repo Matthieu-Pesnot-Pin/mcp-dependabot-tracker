@@ -4,31 +4,46 @@ import fs from "node:fs";
 import path from "node:path";
 import test, { after, before } from "node:test";
 
-import { FakeGitHub, LocalRemotes, McpClient, SERVER_ENTRY, VULNERABLE_FIXTURE, baseEnv, freePort, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
+import { FakeGitHub, LocalRemotes, McpClient, SERVER_ENTRY, TrackerServer, VULNERABLE_FIXTURE, baseEnv, freePort, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
 
 /**
- * Serveur MCP réel sur stdio, sa GUI en mode standalone sur un port libre, la
- * fausse API GitHub et des dépôts distants locaux : outils de l'agent, droits
- * et parcours complet de la GUI.
+ * Serveur réel lancé par `serve` sur un port libre, la fausse API GitHub et des
+ * dépôts distants locaux ; le mode MCP réel, sur stdio, le pilote avec un token
+ * d'agent créé par l'API de la GUI : outils de l'agent, tokens et parcours
+ * complet de la GUI.
  */
 
 const online = await npmRegistryReachable();
 const skip = online ? false : "the npm registry is unreachable: npm audit needs it";
 
+let server: TrackerServer;
 let client: McpClient;
 let temp: { dir: string; cleanup: () => void };
 let github: FakeGitHub;
 let remotes: LocalRemotes;
 let baseUrl = "";
 let port = 0;
+let token: { id: string; secret: string; setupCommand: string };
 
-async function call(method: string, route: string, body?: unknown): Promise<{ status: number; json: any }> {
+async function call(method: string, route: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; json: any }> {
   const response = await fetch(`${baseUrl}/api/${route}`, {
     method,
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    headers: { ...headers, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: response.status, json: await response.json() };
+}
+
+/** Appelle `get_operation` jusqu'à la fin de l'opération ; rend son dernier compte rendu. */
+async function settledOperation(id: string): Promise<{ text: string; isError: boolean }> {
+  return waitFor(`operation ${id}`, () => client.callTool("get_operation", { operation: id }), (result) => !/\): running\./.test(result.text), 180_000);
+}
+
+/** Identifiant de l'opération cité par le compte rendu d'un outil. */
+function operationId(text: string): string {
+  const match = /\(operation (op-[a-z0-9-]+)\)/.exec(text);
+  assert.ok(match, text);
+  return match[1];
 }
 
 before(async () => {
@@ -50,7 +65,7 @@ before(async () => {
 
   port = await freePort();
   baseUrl = `http://127.0.0.1:${port}`;
-  client = new McpClient({
+  server = new TrackerServer({
     ...baseEnv(),
     MCP_DATA_DIR: path.join(temp.dir, "data"),
     CLONE_DIR: path.join(temp.dir, "clones", "nested"),
@@ -59,29 +74,48 @@ before(async () => {
     GITHUB_SERVER_URL: remotes.serverUrl,
     APP_PORT: String(port),
   });
+  await waitFor("the server", () => fetch(`${baseUrl}/proxy/health`).then((r) => r.ok, () => false), (ok) => ok, 20_000);
+
+  const created = await call("POST", "agent-tokens", { name: "Tests" });
+  assert.equal(created.status, 200, created.json.error);
+  token = { id: created.json.token.id, secret: created.json.secret, setupCommand: created.json.setupCommand };
+  client = new McpClient({ ...baseEnv(), SERVER_URL: baseUrl, AGENT_TOKEN: token.secret });
   await client.initialize("tracker-server-test");
-  await waitFor("the GUI worker", () => fetch(`${baseUrl}/proxy/health`).then((r) => r.ok, () => false), (ok) => ok, 20_000);
 });
 
 after(async () => {
   await client?.stop();
+  await server?.stop();
   await github?.stop();
   temp?.cleanup();
 });
 
-test("the server lists its tools and serves the GUI page with its base href", async () => {
+test("the MCP mode lists its tools; the server serves the GUI page with its base href", async () => {
   const { tools } = await client.request("tools/list");
   assert.deepEqual(
     tools.map((tool: { name: string }) => tool.name),
-    ["list_repositories", "get_alerts", "run_audit", "fix_vulnerabilities", "reconnect_gui"]
+    ["list_repositories", "get_alerts", "run_audit", "fix_vulnerabilities", "get_operation", "cancel_operation"]
   );
   const page = await fetch(`${baseUrl}/`);
   assert.equal(page.status, 200);
   assert.match(await page.text(), /<base href="\/" \/>/);
   const config = await call("GET", "config");
-  assert.equal(config.json.githubConfigured, true);
   assert.equal(config.json.githubServerUrl, remotes.serverUrl);
   assert.equal((await call("GET", "nope")).status, 404);
+  assert.match(server.stderr.join(""), new RegExp(`Dependabot Tracker \\S+ serves http://localhost:${port} `));
+});
+
+test("a new agent token is shown once, with the command that declares the MCP mode", async () => {
+  assert.match(token.secret, /^dtk_/);
+  assert.equal(token.setupCommand, `npx -y @imenam/mcp-dependabot-tracker --claude-setup-mcp --server_url=http://localhost:${port} --token=${token.secret}`);
+  const listed = await call("GET", "agent-tokens");
+  assert.deepEqual(listed.json.tokens.map((entry: { name: string; hint: string }) => [entry.name, entry.hint]), [["Tests", token.secret.slice(-4)]]);
+  assert.ok(!JSON.stringify(listed.json).includes(token.secret), "the list never holds the token");
+  assert.equal((await call("POST", "agent-tokens", { name: " " })).status, 400);
+
+  assert.equal((await call("GET", "agent/repos")).status, 401, "the agent API needs a token");
+  assert.equal((await call("GET", "agent/repos", undefined, { Authorization: "Bearer dtk_nope" })).status, 401);
+  assert.equal((await call("GET", "agent/repos", undefined, { Authorization: `Bearer ${token.secret}` })).status, 200);
 });
 
 test("the GUI adds a repository, syncs its paginated alerts and refuses bad input", async () => {
@@ -91,7 +125,6 @@ test("the GUI adds a repository, syncs its paginated alerts and refuses bad inpu
   const added = await call("POST", "repos", { repository: "https://github.com/octo/demo" });
   assert.equal(added.status, 200, added.json.error);
   assert.equal(added.json.repo.id, "octo/demo");
-  assert.deepEqual(added.json.repo.rights, { audit: true, fix: false, push: false });
   assert.deepEqual(added.json.repo.alerts.map((alert: { number: number }) => alert.number), [2, 1, 3]);
 
   assert.equal((await call("POST", "repos", { repository: "octo/demo" })).status, 409);
@@ -122,30 +155,24 @@ test("the GUI adds a repository, syncs its paginated alerts and refuses bad inpu
   assert.equal((await call("GET", "repos/octo/locked")).status, 404);
 });
 
-test("the agent reads the alerts and is held to its rights", async () => {
+test("the agent reads the alerts and its arguments are checked", async () => {
   const listed = await client.callTool("list_repositories");
   assert.match(listed.text, /octo\/demo \(analysed branch main, the default one\)/);
   assert.match(listed.text, /Open Dependabot alerts: 3 \(critical 1, high 1, medium 1\)/);
-  assert.match(listed.text, /Agent rights: audit/);
 
   const alerts = await client.callTool("get_alerts", { repository: "octo/demo" });
   assert.equal(alerts.isError, false, alerts.text);
   assert.match(alerts.text, /- #2 critical simple-git \(npm, package-lock\.json, runtime dependency\): Remote code execution — patched in 9\.0\.0/);
-
-  const refused = await client.callTool("fix_vulnerabilities", { repository: "octo/demo" });
-  assert.equal(refused.isError, true);
-  assert.match(refused.text, /not allowed to run npm audit fix on octo\/demo\. Only the user can grant this right, in the GUI\./);
+  assert.match((await client.callTool("get_alerts", { repository: "octo/missing" })).text, /Repository "octo\/missing" is not tracked/);
+  assert.match((await client.callTool("get_alerts", { repository: "demo" })).text, /"repository" must be owner\/name/);
 
   const unknownField = await client.callTool("run_audit", { repository: "octo/demo", force: true });
   assert.match(unknownField.text, /Unknown field\(s\): force/);
   const badScope = await client.callTool("run_audit", { repository: "octo/demo", scope: "dev" });
   assert.match(badScope.text, /"scope" must be one of production, all/);
-
-  const rights = await call("PUT", "repos/octo/demo/rights", { rights: { audit: true, fix: true, push: true } });
-  assert.equal(rights.status, 200, rights.json.error);
-  const noForce = await client.callTool("fix_vulnerabilities", { repository: "octo/demo", force: true });
-  assert.match(noForce.text, /Unknown field\(s\): force/);
-  assert.equal((await call("PUT", "repos/octo/demo/rights", { rights: { audit: true } })).status, 400);
+  const noPush = await client.callTool("fix_vulnerabilities", { repository: "octo/demo", push: true });
+  assert.match(noPush.text, /Unknown field\(s\): push/);
+  assert.match((await client.callTool("get_operation", { operation: "op-unknown" })).text, /Operation "op-unknown" not found/);
 });
 
 test("the GUI marks an alert fixed by hand; the agent sees it", async () => {
@@ -309,22 +336,48 @@ test("the GUI audits every repository; the agent sees what Dependabot misses", {
   assert.equal((await call("DELETE", "repos/octo/quiet")).status, 200);
 });
 
-test("the agent fixes and pushes; the result links to the operation in the GUI", { skip }, async () => {
-  const fixed = await client.callTool("fix_vulnerabilities", { repository: "octo/demo", push: true }, 180_000);
+test("the agent starts an audit and follows it to the end", { skip }, async () => {
+  const started = await client.callTool("run_audit", { repository: "octo/demo" });
+  assert.equal(started.isError, false, started.text);
+  assert.match(started.text, /^npm audit of octo\/demo \(branch main\), production dependencies \(operation op-[a-z0-9-]+\): running\./);
+  const id = operationId(started.text);
+  assert.match((await client.callTool("run_audit", { repository: "octo/demo" })).text, /already in progress on octo\/demo/);
+
+  const done = await settledOperation(id);
+  assert.match(done.text, /: done\./);
+  assert.match(done.text, /Vulnerabilities: 2 found/);
+  assert.match(done.text, new RegExp(`Open in the GUI: http://localhost:${port}#/r/octo/demo/op/${id}`));
+  assert.match((await client.callTool("cancel_operation", { operation: id })).text, /is already done/);
+});
+
+test("the agent fixes without Claude, to the pull request; the result links to the operation in the GUI", { skip }, async () => {
+  const started = await client.callTool("fix_vulnerabilities", { repository: "octo/demo", claude: false });
+  assert.equal(started.isError, false, started.text);
+  const id = operationId(started.text);
+
+  const fixed = await settledOperation(id);
   assert.equal(fixed.isError, false, fixed.text);
-  assert.match(fixed.text, /^npm audit fix on octo\/demo, production dependencies \(operation op-[a-z0-9-]+\): done\./);
+  assert.match(fixed.text, /^Fix of octo\/demo \(branch main\), production dependencies \(operation op-[a-z0-9-]+\): done\./);
   assert.match(fixed.text, /Vulnerabilities: 2 found, 1 left after npm audit fix/);
   assert.match(fixed.text, /nth-check \(\w+, fix needs a major upgrade\)/);
   assert.match(fixed.text, /Pull request #\d+: https:\/\/github\.com\/octo\/demo\/pull\/\d+ \(branch fix\/npm-audit-/);
-  const link = new RegExp(`Open in the GUI: http://localhost:${port}#/r/octo/demo/op/(op-[a-z0-9-]+)`).exec(fixed.text);
-  assert.ok(link, fixed.text);
+  assert.doesNotMatch(fixed.text, /Fixes by Claude/);
 
-  const operation = await call("GET", `operations/${link[1]}`);
-  assert.equal(operation.json.operation.origin, "agent");
-  assert.equal(operation.json.operation.status, "done");
+  const operation = (await call("GET", `operations/${id}`)).json.operation;
+  assert.deepEqual([operation.origin, operation.status, operation.steps.repair], ["agent", "done", "skipped"]);
   const repo = await call("GET", "repos/octo/demo");
-  assert.equal(repo.json.latestOperation.id, link[1]);
+  assert.equal(repo.json.latestOperation.id, id);
   assert.equal(repo.json.activeOperation, null);
+});
+
+test("the agent cancels a running fix", { skip }, async () => {
+  const started = await client.callTool("fix_vulnerabilities", { repository: "octo/demo", claude: false });
+  const id = operationId(started.text);
+  const cancelled = await client.callTool("cancel_operation", { operation: id });
+  assert.equal(cancelled.isError, false, cancelled.text);
+  assert.match(cancelled.text, /\(cancelling\)/);
+  const settled = await settledOperation(id);
+  assert.match(settled.text, /: cancelled\./);
 });
 
 test("the GUI runs a fix to the pull request without any decision, and the PR tab marks it merged", { skip }, async () => {
@@ -371,18 +424,46 @@ test("the GUI runs a fix to the pull request without any decision, and the PR ta
   assert.deepEqual([afterMerge[0].kind, afterMerge[0].status, afterMerge[0].scope, afterMerge[0].baseBranch], ["audit", "done", "all", "main"], afterMerge[0].error);
 });
 
-test("the server creates CLONE_DIR at launch and refuses to start without it", async () => {
-  assert.ok(fs.statSync(path.join(temp.dir, "clones", "nested")).isDirectory());
-
-  const child = spawn(process.execPath, [SERVER_ENTRY], { env: { ...baseEnv(), MCP_DATA_DIR: path.join(temp.dir, "data-2") }, stdio: ["pipe", "pipe", "pipe"] });
+/** Lance le paquet avec `args` et `env`, et rend son code de sortie et sa sortie d'erreur. */
+async function runEntry(args: string[], env: Record<string, string | undefined>): Promise<{ code: number | null; stderr: string }> {
+  const child = spawn(process.execPath, [SERVER_ENTRY, ...args], { env, stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "";
   child.stderr.setEncoding("utf-8");
   child.stderr.on("data", (chunk: string) => (stderr += chunk));
   const code = await new Promise<number | null>((resolve) => child.once("exit", resolve));
-  assert.equal(code, 1);
-  assert.match(stderr, /CLONE_DIR is not set/);
+  return { code, stderr };
+}
+
+test("the server creates CLONE_DIR at launch and refuses to start without its settings", async () => {
+  assert.ok(fs.statSync(path.join(temp.dir, "clones", "nested")).isDirectory());
+
+  const env = { ...baseEnv(), MCP_DATA_DIR: path.join(temp.dir, "data-2") };
+  const noToken = await runEntry(["serve"], env);
+  assert.deepEqual([noToken.code, /GITHUB_TOKEN is not set/.test(noToken.stderr)], [1, true], noToken.stderr);
+  const noClones = await runEntry(["serve"], { ...env, GITHUB_TOKEN: "t" });
+  assert.deepEqual([noClones.code, /CLONE_DIR is not set/.test(noClones.stderr)], [1, true], noClones.stderr);
+  const noExposure = await runEntry(["serve"], { ...env, GITHUB_TOKEN: "t", CLONE_DIR: path.join(temp.dir, "clones-2") });
+  assert.deepEqual([noExposure.code, /Neither PROXY_URL nor APP_PORT is set/.test(noExposure.stderr)], [1, true], noExposure.stderr);
 });
 
-test("nothing from the server leaks onto stdout outside JSON-RPC", () => {
+test("the MCP mode refuses to start without the server address or the agent token, and the entry point without a command", async () => {
+  const noUrl = await runEntry(["mcp"], { ...baseEnv(), AGENT_TOKEN: "t" });
+  assert.deepEqual([noUrl.code, /SERVER_URL is not set/.test(noUrl.stderr)], [1, true], noUrl.stderr);
+  const noToken = await runEntry(["mcp"], { ...baseEnv(), SERVER_URL: baseUrl });
+  assert.deepEqual([noToken.code, /AGENT_TOKEN is not set/.test(noToken.stderr)], [1, true], noToken.stderr);
+  const noCommand = await runEntry([], baseEnv());
+  assert.deepEqual([noCommand.code, /Usage :/.test(noCommand.stderr)], [1, true], noCommand.stderr);
+});
+
+test("a revoked agent token closes the agent API at once", async () => {
+  assert.ok((await call("GET", "agent-tokens")).json.tokens[0].lastUsedAt, "the token records its last use");
+  assert.equal((await call("DELETE", `agent-tokens/${token.id}`)).status, 200);
+  const refused = await client.callTool("list_repositories");
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /This agent token is unknown or was revoked/);
+  assert.equal((await call("DELETE", `agent-tokens/${token.id}`)).status, 404);
+});
+
+test("nothing from the MCP mode leaks onto stdout outside JSON-RPC", () => {
   assert.deepEqual(client.strayStdout, []);
 });

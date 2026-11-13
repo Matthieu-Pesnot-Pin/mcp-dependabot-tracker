@@ -20,7 +20,7 @@ export function resolveDataDir(): string {
 export function resolveCloneDir(): string {
   const configured = process.env.CLONE_DIR?.trim();
   if (!configured) {
-    throw new Error("CLONE_DIR is not set: declare the folder where the repositories are cloned for npm audit in the env block of mcp-dependabot-tracker.");
+    throw new Error("CLONE_DIR is not set: declare the folder where the repositories are cloned for npm audit in the environment of the server.");
   }
   const dir = path.resolve(configured);
   fs.mkdirSync(dir, { recursive: true });

@@ -2,55 +2,26 @@ import fs from "fs";
 import path from "path";
 
 const SERVER_NAME = "mcp-dependabot-tracker";
-const PACKAGE_NAME = "@imenam/mcp-dependabot-tracker";
+export const PACKAGE_NAME = "@imenam/mcp-dependabot-tracker";
 
-/**
- * Comment la GUI sera exposée. `undefined` des deux côtés = rien n'a été passé
- * en ligne de commande : on retombe sur le placeholder PROXY_URL à compléter.
- */
-export interface GuiExposure {
-  proxyUrl?: string;
-  appPort?: number;
+/** Ce que le mode MCP doit connaître : l'adresse du serveur et un token d'agent. */
+export interface McpConnection {
+  serverUrl: string;
+  token: string;
 }
 
-/**
- * Valeurs volontairement vides : chaque variable est inactive tant qu'elle n'est
- * pas remplie (PROXY_URL et APP_PORT vides = GUI désactivée), sauf CLONE_DIR,
- * obligatoire. Les dépôts suivis ne dépendent pas du projet : le répertoire des
- * données reste celui par défaut.
- */
-function buildServerEntry(exposure: GuiExposure) {
-  // Un port explicite désactive le placeholder proxy : les deux variables ne
-  // doivent jamais être renseignées ensemble, PROXY_URL primant au runtime.
-  const proxyUrl = exposure.appPort !== undefined ? "" : exposure.proxyUrl ?? "http://localhost:";
+/** Commande qui déclare le mode MCP avec `connection` dans le `.mcp.json` du répertoire courant. */
+export function setupCommand({ serverUrl, token }: McpConnection): string {
+  return `npx -y ${PACKAGE_NAME} --claude-setup-mcp --server_url=${serverUrl} --token=${token}`;
+}
+
+function buildServerEntry({ serverUrl, token }: McpConnection) {
   return {
     command: "npx",
-    args: ["-y", PACKAGE_NAME],
-    env: {
-      GITHUB_TOKEN: "",
-      PROXY_URL: proxyUrl,
-      APP_PORT: exposure.appPort !== undefined ? String(exposure.appPort) : "",
-      APP_GROUP: "",
-      APP_NAME: "Dependabot Tracker",
-      APP_PATH: "/dependabot-tracker",
-      CLONE_DIR: "",
-      MCP_DATA_DIR: "",
-      MCP_LOG_DIR: "",
-    },
+    args: ["-y", PACKAGE_NAME, "mcp"],
+    env: { SERVER_URL: serverUrl, AGENT_TOKEN: token },
   };
 }
-
-const GENERATED_VARS = [
-  ["GITHUB_TOKEN", "token GitHub : Dependabot alerts (lecture), Contents et Pull requests (lecture et écriture)"],
-  ["PROXY_URL", "URL du proxy pour exposer la GUI (compléter le port)"],
-  ["APP_PORT", "port local si aucun proxy — la GUI est servie sur http://localhost:<port>"],
-  ["APP_GROUP", "groupe d'affichage dans le dashboard du proxy"],
-  ["APP_NAME", "nom affiché de la GUI dans le dashboard du proxy"],
-  ["APP_PATH", "chemin de montage de la GUI derrière le proxy"],
-  ["CLONE_DIR", "dossier des clones temporaires, créé s'il n'existe pas (obligatoire)"],
-  ["MCP_DATA_DIR", "répertoire des données (défaut : ~/.mcp-dependabot-tracker)"],
-  ["MCP_LOG_DIR", "répertoire des logs (défaut : <données>/logs)"],
-];
 
 /** Lit `--flag=valeur` (tirets ou underscores acceptés). */
 function readFlag(argv: string[], name: string): string | undefined {
@@ -62,52 +33,39 @@ function readFlag(argv: string[], name: string): string | undefined {
   return undefined;
 }
 
-/**
- * Traduit `--proxy_url=` / `--app_port=` en mode d'exposition de la GUI.
- * Les deux ensemble sont refusés : au runtime PROXY_URL primerait toujours,
- * donc un fichier portant les deux serait silencieusement trompeur.
- */
-export function parseGuiExposure(argv: string[]): { exposure: GuiExposure } | { error: string } {
-  const rawProxyUrl = readFlag(argv, "proxy_url");
-  const rawAppPort = readFlag(argv, "app_port");
-
-  if (rawProxyUrl !== undefined && rawAppPort !== undefined) {
-    return { error: "--proxy_url et --app_port sont exclusifs : la GUI passe par le proxy, ou écoute sur un port local." };
+/** Valide une adresse de serveur http ou https ; rend l'adresse sans barre finale, ou la raison du refus. */
+export function parseServerUrl(raw: string, label: string): { url: string } | { error: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return { error: `${label} invalide : "${raw}" n'est pas une URL absolue (ex : http://localhost:4700).` };
   }
-
-  if (rawProxyUrl !== undefined) {
-    if (rawProxyUrl === "") return { error: "--proxy_url attend une URL, ex : --proxy_url=http://localhost:3000" };
-    let parsed: URL;
-    try {
-      parsed = new URL(rawProxyUrl);
-    } catch {
-      return { error: `--proxy_url invalide : "${rawProxyUrl}" n'est pas une URL absolue (ex : http://localhost:3000).` };
-    }
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return { error: `--proxy_url invalide : protocole "${parsed.protocol}" non supporté (http ou https attendu).` };
-    }
-    // Une barre finale casserait la concaténation PROXY_URL + APP_PATH.
-    return { exposure: { proxyUrl: rawProxyUrl.replace(/\/+$/, "") } };
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { error: `${label} invalide : protocole "${parsed.protocol}" non supporté (http ou https attendu).` };
   }
+  return { url: raw.replace(/\/+$/, "") };
+}
 
-  if (rawAppPort !== undefined) {
-    const port = Number(rawAppPort);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      return { error: `--app_port invalide : "${rawAppPort}" n'est pas un entier entre 1 et 65535.` };
-    }
-    return { exposure: { appPort: port } };
-  }
-
-  return { exposure: {} };
+/** Lit `--server_url=` et `--token=`, tous deux obligatoires. */
+export function parseConnection(argv: string[]): { connection: McpConnection } | { error: string } {
+  const rawUrl = readFlag(argv, "server_url");
+  const token = readFlag(argv, "token");
+  if (!rawUrl) return { error: "--server_url est obligatoire : l'adresse du serveur Dependabot Tracker, ex : --server_url=http://localhost:4700" };
+  if (!token) return { error: "--token est obligatoire : un token d'agent, créé dans les réglages de l'interface du serveur." };
+  const url = parseServerUrl(rawUrl, "--server_url");
+  if ("error" in url) return url;
+  return { connection: { serverUrl: url.url, token } };
 }
 
 export interface SetupMcpOptions {
   cwd: string;
   force: boolean;
-  exposure?: GuiExposure;
+  connection: McpConnection;
 }
 
-export function runSetupMcp({ cwd, force, exposure = {} }: SetupMcpOptions): number {
+/** Crée ou complète le `.mcp.json` de `cwd` avec l'entrée du mode MCP ; rend le code de sortie de la commande. */
+export function runSetupMcp({ cwd, force, connection }: SetupMcpOptions): number {
   const target = path.join(cwd, ".mcp.json");
 
   let config: any = {};
@@ -141,27 +99,12 @@ export function runSetupMcp({ cwd, force, exposure = {} }: SetupMcpOptions): num
     return 1;
   }
 
-  config.mcpServers[SERVER_NAME] = buildServerEntry(exposure);
+  config.mcpServers[SERVER_NAME] = buildServerEntry(connection);
 
   fs.writeFileSync(target, JSON.stringify(config, null, 2) + "\n", "utf-8");
 
   const action = alreadyPresent ? "remplacée" : exists ? "ajoutée" : "créée";
   console.log(`Configuration ${SERVER_NAME} ${action} dans ${target}`);
-  console.log("");
-
-  if (exposure.appPort !== undefined) {
-    console.log(`GUI en accès direct : http://localhost:${exposure.appPort} (sans proxy).`);
-  } else if (exposure.proxyUrl !== undefined) {
-    console.log(`GUI exposée via le proxy ${exposure.proxyUrl}.`);
-  }
-
-  console.log('À compléter dans le champ "env" :');
-  for (const [name, description] of GENERATED_VARS) {
-    console.log(`  ${name.padEnd(16)} ${description}`);
-  }
-  console.log("");
-  console.log("Une variable laissée vide est simplement inactive, sauf CLONE_DIR : sans elle, le serveur refuse de démarrer.");
-  console.log("PROXY_URL et APP_PORT s'excluent : PROXY_URL prime si les deux sont renseignés.");
-
+  console.log(`Le mode MCP se connecte au serveur ${connection.serverUrl}.`);
   return 0;
 }

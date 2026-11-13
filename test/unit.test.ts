@@ -13,14 +13,16 @@ import { AuditAll } from "../src/core/audit-all.js";
 import { ConflictError } from "../src/core/errors.js";
 import { auditFindings, auditTargetRepos, cleanAudit, cleanProductionAudit, lastAudit, queuedRepos, operationSummary, pruneHandledAlerts, sortAlerts, sortRepos, staleRepos, trackerPullRequests, unfixablePackages } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
-import { parseGuiExposure, runSetupMcp } from "../src/cli/setup-mcp.js";
+import { parseConnection, runSetupMcp, setupCommand } from "../src/cli/setup-mcp.js";
+import { authenticateAgent, createAgentToken, listAgentTokens, revokeAgentToken } from "../src/core/agent-tokens.js";
+import { resolveExposure } from "../src/server/serve.js";
 import { describeOperation } from "../src/tools/format.js";
 import { assertSandboxAvailable } from "../src/core/repair.js";
 import { bwrapArgs, projectDir } from "../src/core/npm-sandbox.js";
 import { npmArgs } from "../src/npm-tools.js";
 import { organizerUrl } from "../src/core/organizer.js";
 import { readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
-import { DEFAULT_RIGHTS, type Alert, type Operation, type Repo } from "../shared/schemas/model.schema.js";
+import type { Alert, Operation, Repo } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS } from "../shared/schemas/settings.schema.js";
 import { makeTempDir } from "./helpers.js";
 
@@ -30,7 +32,7 @@ function alert(number: number, severity: Alert["severity"], pkg: string, scope: 
 
 function repo(id: string, alerts: Alert[] = [], syncedAt: string | null = null): Repo {
   const [owner, name] = id.split("/");
-  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", rights: DEFAULT_RIGHTS, alerts, handledAlerts: [], pullRequests: [], syncedAt, syncError: null, deprecatedAt: null, queuedAt: null, deployPendingAt: null };
+  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", alerts, handledAlerts: [], pullRequests: [], syncedAt, syncError: null, deprecatedAt: null, queuedAt: null, deployPendingAt: null };
 }
 
 function operation(overrides: Partial<Operation> = {}): Operation {
@@ -43,7 +45,6 @@ function operation(overrides: Partial<Operation> = {}): Operation {
     status: "running",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
-    pid: process.pid,
     workDir: null,
     baseBranch: "main",
     cancelRequested: false,
@@ -355,8 +356,8 @@ test("Store tracks repositories, refuses a duplicate and a second active operati
     store.addRepo(repo("Octo/Demo"));
     assert.throws(() => store.addRepo(repo("octo/demo")), /already tracked/);
     assert.equal(store.getRepo("OCTO/demo").id, "Octo/Demo");
-    store.updateRepo("octo/demo", (current) => ({ ...current, rights: { audit: true, fix: true, push: true } }));
-    assert.equal(store.getRepo("Octo/Demo").rights.push, true);
+    store.updateRepo("octo/demo", (current) => ({ ...current, branch: "develop" }));
+    assert.equal(store.getRepo("Octo/Demo").branch, "develop");
 
     store.createOperation(operation({ id: "op-a", repoId: "Octo/Demo", status: "running" }));
     assert.throws(() => store.createOperation(operation({ id: "op-b", repoId: "Octo/Demo" })), /already in progress/);
@@ -416,23 +417,57 @@ test("Store keeps categories unique by name and frees their repositories when de
   }
 });
 
-test("Store fails a running operation whose process is gone and deletes its clone", () => {
-  const temp = makeTempDir("tracker-orphan-");
+test("Store fails the operations a stop of the server interrupted and deletes their clone", () => {
+  const temp = makeTempDir("tracker-interrupted-");
   try {
     const store = new Store(temp.dir);
     store.addRepo(repo("octo/demo"));
     const workDir = path.join(temp.dir, "clone");
     fs.mkdirSync(workDir);
-    store.createOperation(operation({ id: "op-dead", pid: 999_999_999, workDir, steps: { clone: "done", audit: "running", fix: "pending", repair: "pending", push: "pending" } }));
-    const [failed] = store.failOrphanedOperations();
+    store.createOperation(operation({ id: "op-done", status: "done", createdAt: "2025-12-01T00:00:00.000Z" }));
+    store.createOperation(operation({ id: "op-cut", workDir, steps: { clone: "done", audit: "running", fix: "pending", repair: "pending", push: "pending" } }));
+    const [failed, ...others] = store.failInterruptedOperations();
+    assert.deepEqual(others, []);
+    assert.equal(failed.id, "op-cut");
     assert.equal(failed.status, "failed");
     assert.equal(failed.steps.audit, "failed");
     assert.equal(failed.workDir, null);
-    assert.match(failed.error ?? "", /Interrupted/);
+    assert.match(failed.error ?? "", /Interrupted: the server stopped/);
     assert.equal(fs.existsSync(workDir), false);
+    assert.equal(store.getOperation("op-done").status, "done");
   } finally {
     temp.cleanup();
   }
+});
+
+test("agent tokens are stored as hashes, shown by their last characters, and stop working once revoked", () => {
+  const temp = makeTempDir("tracker-tokens-");
+  try {
+    const { token, secret } = createAgentToken(temp.dir, "  Claude Code — portable ");
+    assert.match(secret, /^dtk_[A-Za-z0-9_-]{32}$/);
+    assert.deepEqual([token.name, token.hint, token.lastUsedAt], ["Claude Code — portable", secret.slice(-4), null]);
+    assert.ok(!fs.readFileSync(path.join(temp.dir, "agent-tokens.json"), "utf-8").includes(secret), "the token is never stored in clear");
+    assert.ok(!("hash" in listAgentTokens(temp.dir)[0]), "the GUI never receives the hash");
+
+    assert.equal(authenticateAgent(temp.dir, `${secret}x`), null);
+    assert.equal(authenticateAgent(temp.dir, secret)?.id, token.id);
+    assert.ok(listAgentTokens(temp.dir)[0].lastUsedAt);
+
+    revokeAgentToken(temp.dir, token.id);
+    assert.equal(authenticateAgent(temp.dir, secret), null);
+    assert.deepEqual(listAgentTokens(temp.dir), []);
+    assert.throws(() => revokeAgentToken(temp.dir, token.id), /does not exist/);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("the server is exposed through the proxy or on a local port, never both, never neither", () => {
+  assert.deepEqual(resolveExposure({ PROXY_URL: "http://localhost:3000/" }), { kind: "proxy", proxyUrl: "http://localhost:3000" });
+  assert.deepEqual(resolveExposure({ APP_PORT: "4700" }), { kind: "port", port: 4700 });
+  assert.throws(() => resolveExposure({ PROXY_URL: "http://x", APP_PORT: "4700" }), /both set/);
+  assert.throws(() => resolveExposure({}), /Neither PROXY_URL nor APP_PORT/);
+  assert.throws(() => resolveExposure({ APP_PORT: "99999" }), /APP_PORT is invalid/);
 });
 
 test("Store reads an operation saved without the vulnerabilities of its first audit", () => {
@@ -621,39 +656,52 @@ test("describeOperation reports counts, changes and the pull request", () => {
       pullRequest: { number: 7, url: "https://github.com/octo/demo/pull/7" },
     })
   );
-  assert.match(text, /^npm audit fix on octo\/demo, production dependencies \(operation op-1\): done\./);
+  assert.match(text, /^Fix of octo\/demo \(branch main\), production dependencies \(operation op-1\): done\./);
   assert.match(text, /npm projects: \.\/, gui\//);
   assert.match(text, /Vulnerabilities: 4 found, 2 left after npm audit fix/);
   assert.match(text, /Updated packages \(1\): gui\/lodash 4\.17\.20 → 4\.18\.1/);
   assert.match(text, /Pull request #7: https:\/\/github.com\/octo\/demo\/pull\/7 \(branch fix\/npm-audit-2026-10-28-143205\)/);
+
+  const running = describeOperation(
+    operation({
+      steps: { clone: "done", audit: "done", fix: "done", repair: "running", push: "pending" },
+      repair: { startedAt: "2026-01-01T00:00:00.000Z", endedAt: null, turns: 3, activity: ["Read package.json"], events: [], base: "abc", auditCommit: null, commit: null, report: null, task: null, error: null },
+    })
+  );
+  assert.match(running, /: running\.\n- In progress: fixes by Claude\n- Claude: 3 turn\(s\); last actions: Read package\.json/);
 });
 
-test("setup-mcp writes an entry with the token placeholder and rejects both exposures", () => {
+test("setup-mcp declares the MCP mode with the server address and an agent token", () => {
   const temp = makeTempDir("tracker-setup-");
   try {
-    assert.deepEqual(parseGuiExposure(["--proxy_url=http://localhost:3000/"]), { exposure: { proxyUrl: "http://localhost:3000" } });
-    assert.ok("error" in parseGuiExposure(["--proxy_url=http://x", "--app_port=4000"]));
-    assert.ok("error" in parseGuiExposure(["--app_port=99999"]));
+    assert.deepEqual(parseConnection(["--server_url=http://localhost:4700/", "--token=dtk_abc"]), { connection: { serverUrl: "http://localhost:4700", token: "dtk_abc" } });
+    assert.match((parseConnection(["--token=dtk_abc"]) as { error: string }).error, /--server_url est obligatoire/);
+    assert.match((parseConnection(["--server_url=http://localhost:4700"]) as { error: string }).error, /--token est obligatoire/);
+    assert.match((parseConnection(["--server_url=ftp://x", "--token=t"]) as { error: string }).error, /protocole "ftp:"/);
+    assert.equal(
+      setupCommand({ serverUrl: "http://localhost:4700", token: "dtk_abc" }),
+      "npx -y @imenam/mcp-dependabot-tracker --claude-setup-mcp --server_url=http://localhost:4700 --token=dtk_abc"
+    );
 
+    const connection = { serverUrl: "http://localhost:4700", token: "dtk_abc" };
     const log = console.log;
     console.log = () => {};
     try {
-      assert.equal(runSetupMcp({ cwd: temp.dir, force: false, exposure: { appPort: 4700 } }), 0);
+      assert.equal(runSetupMcp({ cwd: temp.dir, force: false, connection }), 0);
     } finally {
       console.log = log;
     }
     const config = JSON.parse(fs.readFileSync(path.join(temp.dir, ".mcp.json"), "utf-8"));
-    const entry = config.mcpServers["mcp-dependabot-tracker"];
-    assert.deepEqual(entry.args, ["-y", "@imenam/mcp-dependabot-tracker"]);
-    assert.equal(entry.env.GITHUB_TOKEN, "");
-    assert.equal(entry.env.CLONE_DIR, "");
-    assert.equal(entry.env.APP_PORT, "4700");
-    assert.equal(entry.env.PROXY_URL, "");
+    assert.deepEqual(config.mcpServers["mcp-dependabot-tracker"], {
+      command: "npx",
+      args: ["-y", "@imenam/mcp-dependabot-tracker", "mcp"],
+      env: { SERVER_URL: "http://localhost:4700", AGENT_TOKEN: "dtk_abc" },
+    });
 
     const error = console.error;
     console.error = () => {};
     try {
-      assert.equal(runSetupMcp({ cwd: temp.dir, force: false }), 1);
+      assert.equal(runSetupMcp({ cwd: temp.dir, force: false, connection }), 1);
     } finally {
       console.error = error;
     }
@@ -664,8 +712,8 @@ test("setup-mcp writes an entry with the token placeholder and rejects both expo
 
 test("the fixes by Claude check that bubblewrap can build a sandbox on Linux, and only there", async () => {
   await assertSandboxAvailable("win32", "no-such-bwrap");
-  await assert.rejects(assertSandboxAvailable("linux", "no-such-bwrap"), /need bubblewrap \(bwrap\).*not in the PATH of the MCP server\. Install it on the server: sudo apt-get install -y bubblewrap socat/);
-  await assert.rejects(assertSandboxAvailable("linux", process.execPath), /bubblewrap \(bwrap\) is installed but cannot create a sandbox for the account of the MCP server: .*--ro-bind[\s\S]*apparmor_restrict_unprivileged_userns/);
+  await assert.rejects(assertSandboxAvailable("linux", "no-such-bwrap"), /need bubblewrap \(bwrap\).*not in the PATH of the server\. Install it on the server: sudo apt-get install -y bubblewrap socat/);
+  await assert.rejects(assertSandboxAvailable("linux", process.execPath), /bubblewrap \(bwrap\) is installed but cannot create a sandbox for the account of the server: .*--ro-bind[\s\S]*apparmor_restrict_unprivileged_userns/);
 });
 
 test("operationSummary sums an operation up for the history of its repository", () => {

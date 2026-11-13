@@ -14,6 +14,12 @@ const PATHS = {
       <path d="M12 5v14" />
     </>
   ),
+  'key-round': (
+    <>
+      <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" />
+      <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
+    </>
+  ),
   'chevron-left': <path d="m15 18-6-6 6-6" />,
   'chevron-right': <path d="m9 18 6-6-6-6" />,
   'chevron-down': <path d="m6 9 6 6 6-6" />,
@@ -30,16 +36,6 @@ const PATHS = {
     <>
       <path d="m12 19-7-7 7-7" />
       <path d="M19 12H5" />
-    </>
-  ),
-  bot: (
-    <>
-      <path d="M12 8V4H8" />
-      <rect width="16" height="12" x="4" y="8" rx="2" />
-      <path d="M2 14h2" />
-      <path d="M20 14h2" />
-      <path d="M15 13v2" />
-      <path d="M9 13v2" />
     </>
   ),
   wrench: (

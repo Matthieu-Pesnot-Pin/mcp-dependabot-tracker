@@ -97,7 +97,7 @@ export function runCommand(command: "git" | "npm" | "bwrap", args: string[], opt
       finish(() =>
         reject(
           err.code === "ENOENT"
-            ? new TrackerError(`"${command}" is not installed or not in the PATH of the MCP server.`)
+            ? new TrackerError(`"${command}" is not installed or not in the PATH of the server.`)
             : new TrackerError(`Could not run ${command}: ${err.message}`)
         )
       );

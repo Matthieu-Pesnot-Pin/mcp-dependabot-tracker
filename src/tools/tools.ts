@@ -1,83 +1,109 @@
-import { AUDIT_SCOPES, DEFAULT_AUDIT_SCOPE, DEFAULT_COMMIT_MESSAGE, type Operation, type Repo, type Right } from "../../shared/schemas/model.schema.js";
-import type { RepoView } from "../../shared/schemas/api.schema.js";
-import type { GitHubConfig } from "../core/config.js";
-import { TrackerError } from "../core/errors.js";
-import { runAgentOperation, type OperationContext } from "../core/operations.js";
-import { listRepoViews, repoView, syncRepository } from "../core/repos.js";
-import type { Store } from "../core/store.js";
+import { AUDIT_SCOPES, DEFAULT_AUDIT_SCOPE } from "../../shared/schemas/model.schema.js";
+import type { AgentOperationResponse } from "../../shared/schemas/api.schema.js";
+import type { AgentClient } from "./client.js";
 import { describeAlerts, describeOperation, describeRepo } from "./format.js";
 import { errorResult, optionalBoolean, optionalEnum, optionalString, rejectUnknownFields, requireString, textResult, type Args, type ToolResult } from "./types.js";
 
-const RIGHT_LABELS: Record<Right, string> = {
-  audit: "run npm audit",
-  fix: "run npm audit fix",
-  push: "push a branch and open a pull request",
+const REPOSITORY_PROPERTY = { type: "string", description: "Tracked repository, as owner/name (see list_repositories)." };
+
+const OPERATION_PROPERTY = { type: "string", description: "Id of the operation, as returned by run_audit or fix_vulnerabilities." };
+
+const SCOPE_PROPERTY = {
+  type: "string",
+  enum: [...AUDIT_SCOPES],
+  description: "production (default): npm audit and its fixes run with --omit=dev and leave the devDependencies out. all: every dependency, devDependencies included.",
 };
 
-/** Refuse l'action si l'utilisateur n'a pas accordé ce droit à l'agent pour ce dépôt. */
-function assertAllowed(repo: Repo, right: Right): void {
-  if (!repo.rights[right]) {
-    throw new TrackerError(`The agent is not allowed to ${RIGHT_LABELS[right]} on ${repo.id}. Only the user can grant this right, in the GUI.`);
-  }
+/** Outils du mode MCP. */
+export const TOOLS = [
+  {
+    name: "list_repositories",
+    description:
+      "List the tracked repositories that are not deprecated, with their category, their analysed branch, their open Dependabot alerts by severity, the time of the last sync, the pull requests the tracker opened that are still open, and the operation in progress. Start here.",
+    inputSchema: {
+      type: "object" as const,
+      properties: { category: { type: "string", description: "Only list the repositories of this category, by name (case-insensitive). The user creates the categories in the GUI." } },
+    },
+  },
+  {
+    name: "get_alerts",
+    description:
+      "Read the open Dependabot alerts of a tracked repository from GitHub now, and list them from the most to the least severe: number, severity, package, ecosystem, manifest, whether the dependency is a runtime or a development one, summary, patched version and link.",
+    inputSchema: { type: "object" as const, properties: { repository: REPOSITORY_PROPERTY }, required: ["repository"] },
+  },
+  {
+    name: "run_audit",
+    description:
+      "Start npm audit on a temporary clone of the analysed branch, in every directory that holds a package-lock.json. Nothing is changed; the clone is deleted at the end. Returns at once with the id of the operation: follow it with get_operation.",
+    inputSchema: { type: "object" as const, properties: { repository: REPOSITORY_PROPERTY, scope: SCOPE_PROPERTY }, required: ["repository"] },
+  },
+  {
+    name: "fix_vulnerabilities",
+    description:
+      "Start the fix of the npm vulnerabilities of a tracked repository, the same as the user's Fix button: in a temporary clone of the analysed branch, npm audit, then npm audit fix --package-lock-only --ignore-scripts, then, when vulnerabilities remain, the fixes by Claude (Claude Code analyses and fixes them in the code, runs the tests and reports in an organizer task), then a commit on a new branch fix/npm-audit-<date>-<time>, its push and a pull request to the analysed branch. " +
+      "Returns at once with the id of the operation: follow it with get_operation. A fix with Claude can take several minutes.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        repository: REPOSITORY_PROPERTY,
+        scope: SCOPE_PROPERTY,
+        claude: { type: "boolean", description: "Let Claude fix what npm audit fix leaves (default true). false: only the fixes of npm audit fix are pushed." },
+      },
+      required: ["repository"],
+    },
+  },
+  {
+    name: "get_operation",
+    description:
+      "Read an operation: its status (running, done, failed, cancelled), the step in progress, the vulnerabilities before and after, the updated packages, the fixes by Claude, the pull request and the error. Call it again later while the operation is running.",
+    inputSchema: { type: "object" as const, properties: { operation: OPERATION_PROPERTY }, required: ["operation"] },
+  },
+  {
+    name: "cancel_operation",
+    description: "Cancel a running operation: its command is stopped, Claude Code included, the clone is deleted and nothing is pushed.",
+    inputSchema: { type: "object" as const, properties: { operation: OPERATION_PROPERTY }, required: ["operation"] },
+  },
+];
+
+/** Compte rendu d'une opération, suivi du lien vers son écran dans la GUI. */
+function operationResult({ operation, guiUrl }: AgentOperationResponse): ToolResult {
+  const text = `${describeOperation(operation)}\n\nOpen in the GUI: ${guiUrl}`;
+  return operation.status === "failed" ? errorResult(text) : textResult(text);
 }
 
-/** Dépôts suivis non dépréciés, tous ou ceux d'une catégorie désignée par son nom, sans tenir compte de la casse. */
-export function listRepositories(store: Store, args: Args): ToolResult {
-  rejectUnknownFields(args, ["category"]);
-  const categories = store.listCategories();
-  const categoryName = optionalString(args, "category");
-  let views = listRepoViews(store).filter((view) => view.repo.deprecatedAt === null);
-  let scope = "tracked";
-  if (categoryName !== undefined) {
-    const category = categories.find((candidate) => candidate.name.toLowerCase() === categoryName.trim().toLowerCase());
-    if (!category) {
-      const known = categories.length === 0 ? "the user has created none" : `existing categories: ${categories.map((candidate) => candidate.name).join(", ")}`;
-      throw new TrackerError(`Category "${categoryName}" does not exist (${known}).`);
+/** Exécute l'outil `name` par l'API des agents du serveur. */
+export async function callTool(client: AgentClient, name: string, args: Args): Promise<ToolResult> {
+  switch (name) {
+    case "list_repositories": {
+      rejectUnknownFields(args, ["category"]);
+      const category = optionalString(args, "category");
+      const { repos, category: found } = await client.listRepositories(category);
+      const where = found ? `in category ${found.name}` : "tracked";
+      if (repos.length === 0) return textResult(found ? `No repository ${where}.` : "No repository is tracked. The user adds repositories in the GUI.");
+      return textResult([`${repos.length} repositor${repos.length === 1 ? "y" : "ies"} ${where}:`, ...repos.map(describeRepo)].join("\n"));
     }
-    views = views.filter((view) => view.repo.categoryId === category.id);
-    scope = `in category ${category.name}`;
+    case "get_alerts": {
+      rejectUnknownFields(args, ["repository"]);
+      const view = await client.syncAlerts(requireString(args, "repository"));
+      if (view.repo.syncError) return errorResult(`Could not read the Dependabot alerts of ${view.repo.id}: ${view.repo.syncError}`);
+      return textResult(describeAlerts(view.repo));
+    }
+    case "run_audit": {
+      rejectUnknownFields(args, ["repository", "scope"]);
+      return operationResult(await client.startAudit(requireString(args, "repository"), optionalEnum(args, "scope", AUDIT_SCOPES, DEFAULT_AUDIT_SCOPE)));
+    }
+    case "fix_vulnerabilities": {
+      rejectUnknownFields(args, ["repository", "scope", "claude"]);
+      const scope = optionalEnum(args, "scope", AUDIT_SCOPES, DEFAULT_AUDIT_SCOPE);
+      return operationResult(await client.startFix(requireString(args, "repository"), scope, optionalBoolean(args, "claude", true)));
+    }
+    case "get_operation":
+      rejectUnknownFields(args, ["operation"]);
+      return operationResult(await client.getOperation(requireString(args, "operation")));
+    case "cancel_operation":
+      rejectUnknownFields(args, ["operation"]);
+      return operationResult(await client.cancelOperation(requireString(args, "operation")));
+    default:
+      throw new Error(`Tool not found: ${name}`);
   }
-  if (views.length === 0) {
-    return textResult(categoryName === undefined ? "No repository is tracked. The user adds repositories in the GUI." : `No repository ${scope}.`);
-  }
-  const categoryOf = (view: RepoView) => categories.find((category) => category.id === view.repo.categoryId) ?? null;
-  return textResult([`${views.length} repositor${views.length === 1 ? "y" : "ies"} ${scope}:`, ...views.map((view) => describeRepo(view, categoryOf(view)))].join("\n"));
-}
-
-/** Relit les alertes sur GitHub avant de les lister. */
-export async function getAlerts(store: Store, config: GitHubConfig, args: Args): Promise<ToolResult> {
-  rejectUnknownFields(args, ["repository"]);
-  const repo = await syncRepository(store, config, store.getRepo(requireString(args, "repository")).id);
-  if (repo.syncError) return errorResult(`Could not read the Dependabot alerts of ${repo.id}: ${repo.syncError}`);
-  return textResult(describeAlerts(repoView(store, repo).repo));
-}
-
-/** Résultat d'un outil qui a mené une opération, avec l'opération pour lier son écran de la GUI. */
-export interface OperationToolResult {
-  result: ToolResult;
-  operation: Operation;
-}
-
-function operationResult(operation: Operation): OperationToolResult {
-  const text = describeOperation(operation);
-  return { result: operation.status === "done" ? textResult(text) : errorResult(text), operation };
-}
-
-export async function runAudit(ctx: OperationContext, args: Args): Promise<OperationToolResult> {
-  rejectUnknownFields(args, ["repository", "scope"]);
-  const repo = ctx.store.getRepo(requireString(args, "repository"));
-  const scope = optionalEnum(args, "scope", AUDIT_SCOPES, DEFAULT_AUDIT_SCOPE);
-  assertAllowed(repo, "audit");
-  return operationResult(await runAgentOperation(ctx, repo.id, "audit", { scope, push: false, commitMessage: DEFAULT_COMMIT_MESSAGE }));
-}
-
-export async function fixVulnerabilities(ctx: OperationContext, args: Args): Promise<OperationToolResult> {
-  rejectUnknownFields(args, ["repository", "scope", "push", "commit_message"]);
-  const repo = ctx.store.getRepo(requireString(args, "repository"));
-  const scope = optionalEnum(args, "scope", AUDIT_SCOPES, DEFAULT_AUDIT_SCOPE);
-  const push = optionalBoolean(args, "push", false);
-  const commitMessage = optionalString(args, "commit_message") ?? DEFAULT_COMMIT_MESSAGE;
-  assertAllowed(repo, "fix");
-  if (push) assertAllowed(repo, "push");
-  return operationResult(await runAgentOperation(ctx, repo.id, "fix", { scope, push, commitMessage }));
 }

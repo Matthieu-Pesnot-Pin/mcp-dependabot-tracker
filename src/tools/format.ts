@@ -1,4 +1,4 @@
-import { ALERT_SEVERITIES, RIGHTS, type AuditScope, type Category, type Operation, type Repo } from "../../shared/schemas/model.schema.js";
+import { ALERT_SEVERITIES, STEP_NAMES, type AuditScope, type Operation, type Repo } from "../../shared/schemas/model.schema.js";
 import type { RepoView } from "../../shared/schemas/api.schema.js";
 import { pendingAlerts } from "../../shared/alerts.js";
 import { projectLabel } from "../core/npm-audit.js";
@@ -6,11 +6,6 @@ import { countBySeverity } from "../core/repos.js";
 
 /** Paquets cités en clair dans un résultat ; au-delà, le reste est compté. */
 const MAX_LISTED = 25;
-
-export function rightsLabel(repo: Repo): string {
-  const allowed = RIGHTS.filter((right) => repo.rights[right]);
-  return allowed.length === 0 ? "none" : allowed.join(", ");
-}
 
 /** Périmètre d'un audit, en clair. */
 function scopeLabel(scope: AuditScope): string {
@@ -33,9 +28,9 @@ function alertsLabel(repo: Repo): string {
   return `${pending.length} (${detail.join(", ")}${developmentNote})${handledNote}`;
 }
 
-/** Description d'un dépôt pour l'agent ; `category` est la catégorie où l'utilisateur l'a rangé. */
-export function describeRepo(view: RepoView, category: Category | null): string {
-  const { repo, activeOperation } = view;
+/** Description d'un dépôt pour l'agent. */
+export function describeRepo(view: RepoView): string {
+  const { repo, activeOperation, category } = view;
   const lines = [
     `- ${repo.id} (analysed branch ${repo.branch}${repo.branch === repo.defaultBranch ? ", the default one" : `; default branch ${repo.defaultBranch}`})`,
     `  Category: ${category ? category.name : "none"}`,
@@ -60,8 +55,7 @@ export function describeRepo(view: RepoView, category: Category | null): string 
       `  npm audit of ${at} (${scopeLabel(scope)}) found ${count} vulnerabilit${count === 1 ? "y" : "ies"} (worst: ${severity}) on the default branch although Dependabot reports none there: Dependabot has probably not caught up yet.`
     );
   }
-  lines.push(`  Agent rights: ${rightsLabel(repo)}`);
-  if (activeOperation) lines.push(`  Operation in progress: ${activeOperation.id} (${activeOperation.status})`);
+  if (activeOperation) lines.push(`  Operation in progress: ${activeOperation.id} (${activeOperation.kind})`);
   return lines.join("\n");
 }
 
@@ -83,17 +77,32 @@ function list<T>(items: T[], render: (item: T) => string): string {
   return shown.join(", ");
 }
 
-/** Compte rendu d'une opération pour l'agent : étapes, vulnérabilités, paquets modifiés, PR, erreur. */
+/** Libellé d'une étape, pour l'étape en cours. */
+const STEP_LABELS: Record<(typeof STEP_NAMES)[number], string> = {
+  clone: "cloning the repository",
+  audit: "npm audit",
+  fix: "npm audit fix",
+  repair: "fixes by Claude",
+  push: "commit, push and pull request",
+};
+
+/** Compte rendu d'une opération pour l'agent : avancement, vulnérabilités, paquets modifiés, corrections par Claude, PR, erreur. */
 export function describeOperation(operation: Operation): string {
-  const title = operation.kind === "audit" ? "npm audit" : "npm audit fix";
-  const lines = [`${title} on ${operation.repoId}, ${scopeLabel(operation.scope)} (operation ${operation.id}): ${operation.status}.`];
+  const title = operation.kind === "audit" ? "npm audit" : "Fix";
+  const lines = [`${title} of ${operation.repoId} (branch ${operation.baseBranch}), ${scopeLabel(operation.scope)} (operation ${operation.id}): ${operation.status}.`];
+  if (operation.status === "running") {
+    const step = STEP_NAMES.find((name) => operation.steps[name] === "running");
+    if (step) lines.push(`- In progress: ${STEP_LABELS[step]}${operation.cancelRequested ? " (cancelling)" : ""}`);
+    if (step === "repair" && operation.repair) lines.push(`- Claude: ${operation.repair.turns} turn(s); last actions: ${operation.repair.activity.join(" · ") || "none yet"}`);
+  }
   if (operation.projects.length > 0) {
     lines.push(`- npm projects: ${operation.projects.map((project) => projectLabel(project) || "./").join(", ")}`);
   }
-  const { initial, afterFix } = operation.counts;
+  const { initial, afterFix, afterRepair } = operation.counts;
   if (initial !== null) {
     const parts = [`${initial} found`];
     if (afterFix !== null) parts.push(`${afterFix} left after npm audit fix`);
+    if (afterRepair !== null) parts.push(`${afterRepair} left after the fixes by Claude`);
     lines.push(`- Vulnerabilities: ${parts.join(", ")}`);
   }
   if (operation.remaining.length > 0) {
@@ -112,10 +121,18 @@ export function describeOperation(operation: Operation): string {
       )}`
     );
   }
+  const repair = operation.repair;
+  if (repair?.error) lines.push(`- Fixes by Claude failed: ${repair.error}`);
+  if (repair?.report) {
+    lines.push(`- Fixes by Claude: ${repair.report.summary}`);
+    if (repair.report.changes.length > 0) lines.push(`- Files changed by Claude: ${list(repair.report.changes, (change) => change.file)}`);
+    lines.push(`- Tests after the fixes by Claude: ${repair.report.tests.outcome.replace("_", " ")} — ${repair.report.tests.detail}`);
+  }
+  if (repair?.task) lines.push(`- Report of Claude: organizer task ${repair.task.key} ${repair.task.url}`);
   if (operation.pullRequest) {
     lines.push(`- Pull request #${operation.pullRequest.number}: ${operation.pullRequest.url} (branch ${operation.branch})`);
-  } else if (operation.kind === "fix" && operation.status === "done" && operation.changes.length > 0) {
-    lines.push("- Nothing was pushed: the clone was discarded.");
+  } else if (operation.kind === "fix" && operation.status === "done") {
+    lines.push("- No pull request: there was nothing to fix, or the fixes left the files unchanged.");
   }
   if (operation.error) lines.push(`- Error: ${operation.error}`);
   return lines.join("\n");

@@ -1,5 +1,6 @@
 import type { AddableReposResponse, AppConfig, AuditAllResponse, AuditTarget, BranchesResponse, CategoriesResponse, OperationResponse, OperationsResponse, ReposResponse, RepoView } from '@shared/schemas/api.schema'
-import type { AuditScope, Category, Rights } from '@shared/schemas/model.schema'
+import type { AgentTokensResponse, CreatedAgentTokenResponse } from '@shared/schemas/agent-token.schema'
+import type { AuditScope, Category } from '@shared/schemas/model.schema'
 import type { SaveSettingsBody, SettingsView } from '@shared/schemas/settings.schema'
 
 /** Erreur HTTP de l'API ; `status` distingue un conflit (409) des autres échecs. */
@@ -15,7 +16,7 @@ export class ApiError extends Error {
 
 /**
  * Les routes sont relatives : la SPA est montée derrière un préfixe de proxy
- * variable, résolu par la balise <base> injectée par le GUI worker.
+ * variable, résolu par la balise <base> injectée par le serveur.
  */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`api/${path}`, {
@@ -80,7 +81,6 @@ export const api = {
   renameCategory: (id: string, name: string) => send<Category>('PUT', categoryPath(id), { name }),
   deleteCategory: (id: string) => send<{ deleted: true }>('DELETE', categoryPath(id)),
   queueCategory: (id: string) => send<ReposResponse>('PUT', `${categoryPath(id)}/queued`),
-  setRights: (repoId: string, rights: Rights) => send<RepoView>('PUT', `${repoPath(repoId)}/rights`, { rights }),
   startFix: (repoId: string, scope: AuditScope) => send<OperationResponse>('POST', `${repoPath(repoId)}/operations`, { scope }),
   getOperation: (id: string) => request<OperationResponse>(operationPath(id)),
   listOperations: (repoId: string) => request<OperationsResponse>(`${repoPath(repoId)}/operations`),
@@ -88,4 +88,7 @@ export const api = {
   getSettings: () => request<SettingsView>('settings'),
   saveSettings: (body: SaveSettingsBody) => send<SettingsView>('PUT', 'settings', body),
   testOrganizer: () => send<SettingsView>('POST', 'settings/organizer/test'),
+  listAgentTokens: () => request<AgentTokensResponse>('agent-tokens'),
+  createAgentToken: (name: string) => send<CreatedAgentTokenResponse>('POST', 'agent-tokens', { name }),
+  revokeAgentToken: (id: string) => send<{ revoked: true }>('DELETE', `agent-tokens/${encodeURIComponent(id)}`),
 }

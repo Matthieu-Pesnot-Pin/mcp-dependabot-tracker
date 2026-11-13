@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Point d'entrée compilé du serveur MCP. */
+/** Point d'entrée compilé du paquet : `serve` lance le serveur, `mcp` le mode MCP. */
 export const SERVER_ENTRY = path.resolve(__dirname, "../src/index.js");
 
 /** Projet npm vulnérable : lodash (corrigé par `npm audit fix`) et nth-check (corrigé seulement par `--force`). */
@@ -338,7 +338,31 @@ export class FakeOrganizer {
 }
 
 /**
- * Client JSON-RPC minimal sur stdio : lance le serveur MCP compilé avec
+ * Serveur Dependabot Tracker compilé, lancé par `serve` avec l'environnement
+ * fourni ; sa sortie d'erreur, où il journalise, est conservée pour les assertions.
+ */
+export class TrackerServer {
+  private readonly child: ChildProcessWithoutNullStreams;
+  readonly stderr: string[] = [];
+
+  constructor(env: Record<string, string | undefined>) {
+    this.child = spawn(process.execPath, [SERVER_ENTRY, "serve"], { env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
+    this.child.stdout.resume();
+    this.child.stderr.setEncoding("utf-8");
+    this.child.stderr.on("data", (chunk: string) => this.stderr.push(chunk));
+  }
+
+  /** Arrête le serveur et attend la fin du processus. */
+  async stop() {
+    if (this.child.exitCode !== null) return;
+    const exited = new Promise((resolve) => this.child.once("exit", resolve));
+    this.child.kill("SIGTERM");
+    await exited;
+  }
+}
+
+/**
+ * Client JSON-RPC minimal sur stdio : lance le mode MCP compilé avec
  * l'environnement fourni et associe chaque réponse à sa requête par `id`.
  */
 export class McpClient {
@@ -350,7 +374,7 @@ export class McpClient {
   readonly strayStdout: string[] = [];
 
   constructor(env: Record<string, string | undefined>) {
-    this.child = spawn(process.execPath, [SERVER_ENTRY], { env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
+    this.child = spawn(process.execPath, [SERVER_ENTRY, "mcp"], { env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
     this.child.stdout.setEncoding("utf-8");
     this.child.stdout.on("data", (chunk: string) => this.consume(chunk));
     this.child.stderr.setEncoding("utf-8");
@@ -412,7 +436,7 @@ export class McpClient {
     return { text: result.content.map((entry: { text: string }) => entry.text).join("\n"), isError: result.isError === true };
   }
 
-  /** Ferme stdin (le serveur arrête son GUI worker) puis attend la fin du processus. */
+  /** Ferme stdin puis attend la fin du processus. */
   async stop() {
     if (this.child.exitCode !== null) return;
     const exited = new Promise((resolve) => this.child.once("exit", resolve));
@@ -423,10 +447,12 @@ export class McpClient {
   }
 }
 
-/** Environnement du processus courant sans les variables qui activent la GUI, fixent les répertoires ou visent GitHub. */
+/** Environnement du processus courant sans les variables qui exposent le serveur, fixent les répertoires, visent GitHub ou le serveur du mode MCP. */
 export function baseEnv(): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
   for (const key of [
+    "SERVER_URL",
+    "AGENT_TOKEN",
     "PROXY_URL",
     "APP_PORT",
     "APP_PATH",

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AUDIT_SCOPES, RightsSchema, type AlertSeverity, type AuditScope, type Category, type Operation, type OrganizerTask, type Repo } from "./model.schema.js";
+import { AUDIT_SCOPES, type AlertSeverity, type AuditScope, type Category, type Operation, type OrganizerTask, type Repo } from "./model.schema.js";
 
 /** Corps de `POST /api/repos` : `propriétaire/nom` ou lien GitHub, et la catégorie où le ranger (aucune par défaut). */
 export const AddRepoBodySchema = z.object({
@@ -8,10 +8,6 @@ export const AddRepoBodySchema = z.object({
 });
 
 export type AddRepoBody = z.infer<typeof AddRepoBodySchema>;
-
-export const SetRightsBodySchema = z.object({ rights: RightsSchema });
-
-export type SetRightsBody = z.infer<typeof SetRightsBodySchema>;
 
 export const SetBranchBodySchema = z.object({ branch: z.string().trim().min(1) });
 
@@ -26,8 +22,6 @@ export type SetCategoryBody = z.infer<typeof SetCategoryBodySchema>;
 export const CategoryBodySchema = z.object({ name: z.string().trim().min(1).max(60) });
 
 export type CategoryBody = z.infer<typeof CategoryBodySchema>;
-
-export const CategoryRequestSchema = z.object({ categoryId: z.string().min(1) });
 
 /** Catégories dans l'ordre alphabétique. */
 export interface CategoriesResponse {
@@ -63,13 +57,28 @@ export const MergedBodySchema = z.object({ deploy: z.boolean() });
 
 export type MergedBody = z.infer<typeof MergedBodySchema>;
 
-/** Identifiant d'un dépôt dans une requête IPC. */
-export const RepoRequestSchema = z.object({ repoId: z.string().min(1) });
+/** Numéro GitHub d'une alerte, porté par le chemin de la requête. */
+export const AlertNumberSchema = z.coerce.number().int().positive();
 
-/** Alerte d'un dépôt, par son numéro GitHub. */
-export const AlertRequestSchema = z.object({ repoId: z.string().min(1), number: z.coerce.number().int().positive() });
+/**
+ * Corps de `POST /api/agent/repos/:owner/:name/fixes` : le périmètre, et les
+ * corrections par Claude quand `npm audit fix` laisse des vulnérabilités.
+ */
+export const AgentFixBodySchema = ScopeBodySchema.extend({ claude: z.boolean() });
 
-export const OperationRequestSchema = z.object({ operationId: z.string().min(1) });
+export type AgentFixBody = z.infer<typeof AgentFixBodySchema>;
+
+/** Dépôts non dépréciés renvoyés à un agent : tous, ou ceux de `category` quand il en a demandé une. */
+export interface AgentReposResponse {
+  repos: RepoView[];
+  category: Category | null;
+}
+
+/** Opération renvoyée à un agent, avec l'adresse de son écran dans la GUI. */
+export interface AgentOperationResponse {
+  operation: Operation;
+  guiUrl: string;
+}
 
 /** Vulnérabilités trouvées par un audit : leur nombre, la plus haute gravité, la date et le périmètre de l'audit. */
 export interface AuditFindings {
@@ -196,6 +205,5 @@ export interface OperationsResponse {
 export interface AppConfig {
   version: string;
   dataDir: string;
-  githubConfigured: boolean;
   githubServerUrl: string;
 }

@@ -47,15 +47,17 @@ export interface OperationContext {
   claude: ClaudeRuntime;
 }
 
-/** Choix de l'agent pour une opération qu'il mène d'un bout à l'autre. */
-export interface AgentPlan {
+/**
+ * Choix d'une correction : le périmètre, et les corrections par Claude quand
+ * `npm audit fix` laisse des vulnérabilités.
+ */
+export interface FixPlan {
   scope: AuditScope;
-  push: boolean;
-  commitMessage: string;
+  claude: boolean;
 }
 
-/** Intervalle de lecture de la demande d'annulation pendant une étape. */
-const CANCEL_POLL_MS = 500;
+/** Signal d'annulation de chaque opération en cours, par identifiant. */
+const runningOperations = new Map<string, AbortController>();
 
 const MAX_LOG_ENTRIES = 300;
 const MAX_LOG_TEXT = 4000;
@@ -136,7 +138,6 @@ function newOperation(repo: Repo, kind: OperationKind, origin: Origin, scope: Au
     status: "running",
     createdAt,
     updatedAt: createdAt,
-    pid: process.pid,
     workDir: null,
     baseBranch: repo.branch,
     cancelRequested: false,
@@ -511,20 +512,13 @@ function hasChangesToPush(operation: Operation): boolean {
 }
 
 /**
- * Exécute `body` pour l'opération `id`, avec un signal déclenché par une demande
- * d'annulation enregistrée par n'importe quel processus. Une erreur fait échouer
- * l'opération et l'étape en cours ; une opération terminée perd son clone.
+ * Exécute `body` pour l'opération `id`, avec un signal que déclenche
+ * `cancelOperation`. Une erreur fait échouer l'opération et l'étape en cours ;
+ * une opération terminée perd son clone.
  */
 async function execute(ctx: OperationContext, id: string, body: (runner: Runner) => Promise<void>): Promise<Operation> {
   const controller = new AbortController();
-  const watcher = setInterval(() => {
-    try {
-      if (ctx.store.getOperation(id).cancelRequested) controller.abort();
-    } catch {
-      // Lecture concurrente ou verrou occupé : la demande est relue au tour suivant.
-    }
-  }, CANCEL_POLL_MS);
-
+  runningOperations.set(id, controller);
   try {
     const runner = new Runner(ctx, id, controller.signal, ctx.githubConfig(), ctx.cloneDir());
     await body(runner);
@@ -542,7 +536,7 @@ async function execute(ctx: OperationContext, id: string, body: (runner: Runner)
       ) as Operation["steps"],
     }));
   } finally {
-    clearInterval(watcher);
+    runningOperations.delete(id);
   }
   return cleanUp(ctx, id);
 }
@@ -563,16 +557,17 @@ function inBackground(ctx: OperationContext, id: string, run: Promise<Operation>
 // --- Entrées ---------------------------------------------------------------------
 
 /**
- * Lance une correction depuis la GUI, sur le périmètre `scope`, menée en
+ * Lance une correction de la branche analysée, lancée par `origin`, menée en
  * arrière-plan jusqu'au bout sans intervention : clone, audit, `npm audit fix`,
- * corrections par Claude s'il reste des vulnérabilités, puis commit, push et
- * pull request s'il y a quelque chose à pousser. Refusé sur un dépôt déprécié.
+ * corrections par Claude s'il reste des vulnérabilités et que `plan` les
+ * demande, puis commit, push et pull request s'il y a quelque chose à pousser.
+ * Refusé si une opération est en cours sur le dépôt, ou s'il est déprécié.
  */
-export function startUserFix(ctx: OperationContext, repoId: string, scope: AuditScope): Operation {
+export function startFix(ctx: OperationContext, repoId: string, origin: Origin, plan: FixPlan): Operation {
   ctx.githubConfig();
   const repo = ctx.store.getRepo(repoId);
   assertNotDeprecated(repo);
-  const operation = ctx.store.createOperation(newOperation(repo, "fix", "user", scope));
+  const operation = ctx.store.createOperation(newOperation(repo, "fix", origin, plan.scope));
   inBackground(
     ctx,
     operation.id,
@@ -581,12 +576,34 @@ export function startUserFix(ctx: OperationContext, repoId: string, scope: Audit
       const vulnerabilities = await auditStep(runner);
       if (vulnerabilities.length === 0) return finish(runner);
       const remaining = await fixStep(runner, vulnerabilities);
-      if (remaining.length > 0) {
+      if (remaining.length > 0 && plan.claude) {
         await repairStep(runner, ctx);
       } else {
         runner.setStep("repair", "skipped");
       }
       if (hasChangesToPush(runner.operation)) await pushStep(runner);
+      finish(runner);
+    })
+  );
+  return operation;
+}
+
+/**
+ * Lance un audit de la branche analysée sur le périmètre `scope`, lancé par
+ * `origin` et mené en arrière-plan : clone et `npm audit`, sans rien modifier.
+ * Refusé si une opération est en cours sur le dépôt, ou s'il est déprécié.
+ */
+export function startAudit(ctx: OperationContext, repoId: string, origin: Origin, scope: AuditScope): Operation {
+  ctx.githubConfig();
+  const repo = ctx.store.getRepo(repoId);
+  assertNotDeprecated(repo);
+  const operation = ctx.store.createOperation(newOperation(repo, "audit", origin, scope));
+  inBackground(
+    ctx,
+    operation.id,
+    execute(ctx, operation.id, async (runner) => {
+      await cloneStep(runner);
+      await auditStep(runner);
       finish(runner);
     })
   );
@@ -642,35 +659,14 @@ export function startMergeAudit(ctx: OperationContext, repoId: string, numbers: 
 }
 
 /**
- * Demande l'annulation d'une opération en cours, lue par le processus qui
- * l'exécute, qui arrête sa commande.
+ * Annule une opération en cours : sa commande est arrêtée, Claude Code compris,
+ * et son clone supprimé ; rien n'est poussé.
  */
 export function cancelOperation(ctx: OperationContext, id: string): Operation {
-  ctx.store.failOrphanedOperations();
-  return ctx.store.updateOperation(id, (current) => {
+  const operation = ctx.store.updateOperation(id, (current) => {
     if (!isActive(current)) throw new ConflictError(`Operation ${id} is already ${current.status}.`);
     return { ...current, cancelRequested: true };
   });
-}
-
-/**
- * Opération menée par l'agent d'un bout à l'autre, sur le périmètre de `plan`,
- * attendue jusqu'à sa fin : `audit` s'arrête après `npm audit` ; `fix` enchaîne
- * `npm audit fix`, puis le push selon `plan`, sans corrections par Claude.
- * Refusé sur un dépôt déprécié.
- */
-export async function runAgentOperation(ctx: OperationContext, repoId: string, kind: OperationKind, plan: AgentPlan): Promise<Operation> {
-  ctx.githubConfig();
-  const repo = ctx.store.getRepo(repoId);
-  assertNotDeprecated(repo);
-  const operation = ctx.store.createOperation({ ...newOperation(repo, kind, "agent", plan.scope), commitMessage: plan.commitMessage });
-  return execute(ctx, operation.id, async (runner) => {
-    await cloneStep(runner);
-    const vulnerabilities = await auditStep(runner);
-    if (kind === "audit" || vulnerabilities.length === 0) return finish(runner);
-    await fixStep(runner, vulnerabilities);
-    runner.setStep("repair", "skipped");
-    if (plan.push && runner.operation.changes.length > 0) await pushStep(runner);
-    finish(runner);
-  });
+  runningOperations.get(id)?.abort();
+  return operation;
 }
