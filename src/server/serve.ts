@@ -18,7 +18,7 @@ import { runDefaultBranchAudit, type OperationContext } from "../core/operations
 import { OrganizerClient } from "../core/organizer.js";
 import { refreshReportTask } from "../core/repair.js";
 import { SYNC_INTERVAL_MS, staleRepos, syncRepository } from "../core/repos.js";
-import { readSettings, type SettingsChecks } from "../core/settings.js";
+import { encryptStoredTokens, readSettings, type SettingsChecks } from "../core/settings.js";
 import { readServerConfig, type ServerConfig } from "../core/server-config.js";
 import { Store } from "../core/store.js";
 import { parseVaultKey } from "../core/vault.js";
@@ -102,6 +102,8 @@ export async function serve(): Promise<void> {
   const deployServers = new DeployServerStore(dataDir, vaultKey);
   try {
     deployServers.verifyVault();
+    if (encryptStoredTokens(dataDir, vaultKey)) logger.info("The tokens of settings.json are now encrypted with VAULT_KEY.");
+    readSettings(dataDir, vaultKey);
   } catch (err: any) {
     logger.error(err.message);
     process.exit(1);
@@ -117,7 +119,7 @@ export async function serve(): Promise<void> {
     githubConfig: () => github,
     cloneDir: () => cloneDir,
     logError: (message) => logger.error(message),
-    settings: () => readSettings(dataDir),
+    settings: () => readSettings(dataDir, vaultKey),
     claude,
   };
   const auditAll = new AuditAll((repoId, scope) => runDefaultBranchAudit(operations, repoId, scope), (message) => logger.error(message));
@@ -132,6 +134,7 @@ export async function serve(): Promise<void> {
     settingsChecks,
     staticRoot: path.join(root, "gui", "dist"),
     auth,
+    vaultKey,
     appUrl: config.appUrl,
     trustsProxies: config.trustedProxies.length > 0,
   });
@@ -164,7 +167,7 @@ export async function serve(): Promise<void> {
       for (const repo of staleRepos(store, SYNC_INTERVAL_MS)) {
         const synced = await syncRepository(store, github, repo.id);
         if (synced.syncError) logger.warn(`Dependabot alerts of ${repo.id} not synced: ${synced.syncError}`);
-        await refreshReportTask(store, readSettings(dataDir), repo.id).catch((err: any) =>
+        await refreshReportTask(store, readSettings(dataDir, vaultKey), repo.id).catch((err: any) =>
           logger.warn(`Organizer task of ${repo.id} not refreshed: ${err?.message ?? err}`)
         );
       }

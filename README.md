@@ -32,7 +32,7 @@ mcp-dependabot-tracker serve
 
 Ou via `npx -y @imenam/mcp-dependabot-tracker serve`. Le serveur se lance comme un service (systemd, conteneur…) : il tourne en continu, que des agents soient connectés ou non, et une correction en cours survit à la fermeture de l'agent qui l'a lancée. `git` et `npm` (npm 7 ou plus récent) doivent être dans le `PATH` de la machine qui l'exécute, ainsi que bubblewrap sous Linux (`sudo apt-get install -y bubblewrap socat`) : toutes les commandes npm d'une opération y tournent en bac à sable. Claude Code, utilisé par les corrections par Claude, est une dépendance du package (`@anthropic-ai/claude-code`, Node 22 ou plus récent) : rien d'autre à installer.
 
-Le serveur exige une clé de coffre, `VAULT_KEY`, qui chiffre les clés privées SSH des serveurs de déploiement. Générez-la une fois et déclarez-la comme variable secrète du service :
+Le serveur exige une clé de coffre, `VAULT_KEY`, qui chiffre les clés privées SSH des serveurs de déploiement et les tokens de l'organizer et de Claude. Générez-la une fois et déclarez-la comme variable secrète du service :
 
 ```bash
 npx -y @imenam/mcp-dependabot-tracker --generate-vault-key
@@ -133,7 +133,7 @@ Elles se renseignent dans l'environnement du service, ou dans un fichier `.env` 
 |---|---|
 | `GITHUB_TOKEN` | **Obligatoire.** Token GitHub (voir ci-dessus). Sans lui, le serveur refuse de démarrer. |
 | `CLONE_DIR` | **Obligatoire.** Dossier où chaque opération crée son clone ; il est créé s'il n'existe pas. Sans lui, le serveur refuse de démarrer. |
-| `VAULT_KEY` | **Obligatoire.** 32 octets en base64 (`--generate-vault-key`), qui chiffrent en AES-256-GCM les clés privées des serveurs de déploiement. Sans elle, ou si elle ne déchiffre pas les clés déjà enregistrées, le serveur refuse de démarrer. La perdre oblige à reconnecter chaque serveur. |
+| `VAULT_KEY` | **Obligatoire.** 32 octets en base64 (`--generate-vault-key`), qui chiffrent en AES-256-GCM les clés privées des serveurs de déploiement et les tokens de l'organizer et de Claude. Sans elle, ou si elle ne déchiffre pas les clés et les tokens déjà enregistrés, le serveur refuse de démarrer. La perdre oblige à reconnecter chaque serveur et à ressaisir les deux tokens. |
 | `APP_PORT` | **Obligatoire.** Port d'écoute du serveur. |
 | `APP_URL` | **Obligatoire.** Adresse publique de l'interface, sans chemin : `https://…`, ou `http://localhost:<port>` sur la machine elle-même (voir [Exposition et authentification](#exposition-et-authentification)). |
 | `AUTH_SECRET` | **Obligatoire.** Secret de signature des sessions, 32 caractères au moins (`--generate-auth-secret`). |
@@ -234,7 +234,7 @@ Une tâche introuvable, sans le tag ou non assignée au propriétaire fait écho
 - **Corrections par Claude** — les limites d'une session.
 - **Accès des agents** — les tokens d'agent, un par ligne : nom, quatre derniers caractères, date de création et de dernière utilisation ; « Révoquer », au survol (en permanence sur un écran tactile), le révoque après un second clic de confirmation dans les 4 secondes. « Nouveau token » ouvre un champ en place pour le nommer (Entrée crée, Échap annule) ; le token s'affiche alors une seule fois, avec « Copier » et la commande `--claude-setup-mcp` qui déclare le mode MCP. Créer ou révoquer un token prend effet aussitôt, sans « Enregistrer ».
 
-Les tokens de l'organizer et de Claude sont enregistrés dans `<données>/settings.json`, ceux des agents par leur empreinte dans `<données>/agent-tokens.json`, lisibles par le seul compte du serveur ; la GUI n'en reçoit que les quatre derniers caractères. Claude Code garde sa configuration dans `<données>/claude`. L'écran est protégé comme le reste de l'interface, par la session de l'utilisateur.
+Les tokens de l'organizer et de Claude sont enregistrés dans `<données>/settings.json`, chiffrés avec `VAULT_KEY` (un fichier écrit en clair par une version antérieure est chiffré au démarrage), ceux des agents par leur empreinte dans `<données>/agent-tokens.json`, lisibles par le seul compte du serveur ; la GUI n'en reçoit que les quatre derniers caractères. Claude Code garde sa configuration dans `<données>/claude`. L'écran est protégé comme le reste de l'interface, par la session de l'utilisateur.
 
 **Suivi** — la tâche du dernier rapport de Claude s'affiche dans la colonne « Suivi » de la ligne du dépôt (« MNT-12 », qui ouvre la tâche sur l'organizer) tant qu'elle n'est pas terminée : son statut est relu sur l'organizer avec les alertes, toutes les 10 minutes. La pull request de la correction mentionne la clé de la tâche.
 

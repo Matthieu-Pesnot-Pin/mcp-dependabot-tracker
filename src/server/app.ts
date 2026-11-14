@@ -86,6 +86,8 @@ export interface ServerContext {
   staticRoot: string;
   /** Comptes et sessions de l'interface. */
   auth: Auth;
+  /** Clé du coffre (VAULT_KEY), qui chiffre les tokens des réglages. */
+  vaultKey: Buffer;
   /** Adresse publique du serveur (APP_URL), sans barre finale. */
   appUrl: string;
   /** Les proxies de confiance sont configurés : X-Forwarded-For est transmis au limiteur de débit. */
@@ -391,11 +393,11 @@ export function createApp(ctx: ServerContext): Hono {
 
   app.post("/api/deployments/:id/cancel", (c) => respond(c, async (): Promise<DeploymentResponse> => ({ deployment: await deployer.cancel(c.req.param("id")) })));
 
-  app.get("/api/settings", (c) => respond(c, () => settingsView(readSettings(dataDir))));
+  app.get("/api/settings", (c) => respond(c, () => settingsView(readSettings(dataDir, ctx.vaultKey))));
 
-  app.put("/api/settings", (c) => withBody(c, SaveSettingsBodySchema, (body) => saveSettings(dataDir, body, ctx.settingsChecks)));
+  app.put("/api/settings", (c) => withBody(c, SaveSettingsBodySchema, (body) => saveSettings(dataDir, ctx.vaultKey, body, ctx.settingsChecks)));
 
-  app.post("/api/settings/organizer/test", (c) => respond(c, () => testOrganizer(dataDir, ctx.settingsChecks)));
+  app.post("/api/settings/organizer/test", (c) => respond(c, () => testOrganizer(dataDir, ctx.vaultKey, ctx.settingsChecks)));
 
   app.get("/api/agent-tokens", (c) => respond(c, (): AgentTokensResponse => ({ tokens: listAgentTokens(dataDir) })));
 

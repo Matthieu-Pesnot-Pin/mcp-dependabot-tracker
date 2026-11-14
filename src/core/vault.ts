@@ -36,6 +36,12 @@ export function encryptSecret(plaintext: string, key: Buffer): string {
   return [FORMAT_VERSION, iv.toString("base64"), tag.toString("base64"), encrypted.toString("base64")].join(":");
 }
 
+/** Vrai pour une valeur au format de `encryptSecret`. */
+export function isEncrypted(value: string): boolean {
+  const parts = value.split(":");
+  return parts.length === 4 && parts[0] === FORMAT_VERSION;
+}
+
 /** Déchiffre un secret produit par `encryptSecret` ; échoue si la clé n'est pas la bonne. */
 export function decryptSecret(payload: string, key: Buffer): string {
   const parts = payload.split(":");

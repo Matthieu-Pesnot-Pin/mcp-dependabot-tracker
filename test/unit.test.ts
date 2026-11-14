@@ -22,7 +22,7 @@ import { describeOperation } from "../src/tools/format.js";
 import { assertSandboxAvailable, bwrapArgs, projectDir } from "../src/core/npm-sandbox.js";
 import { npmArgs } from "../src/npm-tools.js";
 import { organizerUrl } from "../src/core/organizer.js";
-import { readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
+import { encryptStoredTokens, readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
 import type { Alert, Operation, Repo } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS } from "../shared/schemas/settings.schema.js";
 import { makeTempDir } from "./helpers.js";
@@ -619,10 +619,11 @@ test("saveSettings tests a changed organizer connection, checks a new Claude tok
     },
   };
   const analysis = { maxTurns: 40, maxMinutes: 15 };
+  const key = parseVaultKey(generateVaultKey());
   try {
-    assert.deepEqual(readSettings(temp.dir), DEFAULT_SETTINGS);
+    assert.deepEqual(readSettings(temp.dir, key), DEFAULT_SETTINGS);
 
-    const view = await saveSettings(temp.dir, { organizerUrl: "https://organizer.example.com", organizerToken: "org-secret-1234", claudeToken: "sk-ant-oat01-abcd", analysis }, checks);
+    const view = await saveSettings(temp.dir, key, { organizerUrl: "https://organizer.example.com", organizerToken: "org-secret-1234", claudeToken: "sk-ant-oat01-abcd", analysis }, checks);
     assert.deepEqual(checked, ["organizer https://organizer.example.com org-secret-1234", "claude sk-ant-oat01-abcd"]);
     assert.deepEqual(view.organizer, { url: "https://organizer.example.com", tokenHint: "1234", space: "Maintenance", owner: "Matthieu Pin" });
     assert.equal(view.claude.tokenHint, "abcd");
@@ -631,13 +632,27 @@ test("saveSettings tests a changed organizer connection, checks a new Claude tok
     assert.ok(!JSON.stringify(view).includes("org-secret") && !JSON.stringify(view).includes("sk-ant"), "the GUI never receives a whole token");
 
     checked.length = 0;
-    const limits = await saveSettings(temp.dir, { organizerUrl: "https://organizer.example.com", analysis: { ...analysis, maxTurns: 60 } }, checks);
+    const limits = await saveSettings(temp.dir, key, { organizerUrl: "https://organizer.example.com", analysis: { ...analysis, maxTurns: 60 } }, checks);
     assert.deepEqual(checked, [], "an unchanged connection and no new Claude token need no check");
     assert.equal(limits.analysis.maxTurns, 60);
 
-    await assert.rejects(saveSettings(temp.dir, { organizerUrl: "https://organizer.example.com", claudeToken: "bad-token", analysis }, checks), /Invalid bearer token/);
-    assert.equal(readSettings(temp.dir).claude.token, "sk-ant-oat01-abcd", "a refused token saves nothing");
-    assert.equal(readSettings(temp.dir).analysis.maxTurns, 60);
+    await assert.rejects(saveSettings(temp.dir, key, { organizerUrl: "https://organizer.example.com", claudeToken: "bad-token", analysis }, checks), /Invalid bearer token/);
+    assert.equal(readSettings(temp.dir, key).claude.token, "sk-ant-oat01-abcd", "a refused token saves nothing");
+    assert.equal(readSettings(temp.dir, key).analysis.maxTurns, 60);
+
+    const file = path.join(temp.dir, "settings.json");
+    const written = fs.readFileSync(file, "utf-8");
+    assert.ok(!written.includes("org-secret-1234") && !written.includes("sk-ant-oat01-abcd"), "the tokens are encrypted in settings.json");
+    assert.throws(() => readSettings(temp.dir, parseVaultKey(generateVaultKey())), /cannot be read: VAULT_KEY does not decrypt/);
+
+    const legacy = JSON.parse(written);
+    legacy.organizer.token = "org-legacy-5678";
+    fs.writeFileSync(file, JSON.stringify(legacy));
+    assert.throws(() => readSettings(temp.dir, key), /cannot be read/, "a token in clear is never read as such");
+    assert.equal(encryptStoredTokens(temp.dir, key), true);
+    assert.equal(encryptStoredTokens(temp.dir, key), false, "the file is rewritten once");
+    assert.ok(!fs.readFileSync(file, "utf-8").includes("org-legacy-5678"));
+    assert.deepEqual([readSettings(temp.dir, key).organizer.token, readSettings(temp.dir, key).claude.token], ["org-legacy-5678", "sk-ant-oat01-abcd"]);
   } finally {
     temp.cleanup();
   }

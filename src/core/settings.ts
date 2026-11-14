@@ -4,11 +4,13 @@ import path from "path";
 import { DEFAULT_SETTINGS, SettingsSchema, type SaveSettingsBody, type Settings, type SettingsView } from "../../shared/schemas/settings.schema.js";
 import { TrackerError } from "./errors.js";
 import { organizerUrl, type OrganizerConnection, type OrganizerSpace } from "./organizer.js";
+import { decryptSecret, encryptSecret, isEncrypted } from "./vault.js";
 
 /**
  * Réglages des corrections par Claude, dans `<données>/settings.json`, lisible par
  * le seul compte du serveur : ils portent le token de l'organizer et celui de
- * Claude, que la GUI ne reçoit jamais en entier.
+ * Claude, chiffrés avec VAULT_KEY dans le fichier, que la GUI ne reçoit jamais
+ * en entier.
  */
 
 /** Durée de validité d'un token créé par `claude setup-token`. */
@@ -24,13 +26,14 @@ function settingsPath(dataDir: string): string {
   return path.join(dataDir, "settings.json");
 }
 
-export function readSettings(dataDir: string): Settings {
+/** Contenu de `settings.json` tel qu'il est écrit, tokens compris ; null sans fichier. */
+function readSettingsFile(dataDir: string): Settings | null {
   const file = settingsPath(dataDir);
   let raw: string;
   try {
     raw = fs.readFileSync(file, "utf-8");
   } catch (err: any) {
-    if (err.code === "ENOENT") return DEFAULT_SETTINGS;
+    if (err.code === "ENOENT") return null;
     throw err;
   }
   const parsed = SettingsSchema.safeParse(JSON.parse(raw));
@@ -38,7 +41,43 @@ export function readSettings(dataDir: string): Settings {
   return parsed.data;
 }
 
-function writeSettings(dataDir: string, settings: Settings): void {
+/** Applique `fn` à chaque token des réglages, null laissé tel quel. */
+function mapTokens(settings: Settings, fn: (token: string) => string): Settings {
+  const map = (token: string | null) => (token === null ? null : fn(token));
+  return { ...settings, organizer: { ...settings.organizer, token: map(settings.organizer.token) }, claude: { ...settings.claude, token: map(settings.claude.token) } };
+}
+
+/** Réglages, tokens déchiffrés avec `vaultKey` ; un token que la clé ne déchiffre pas lève une erreur. */
+export function readSettings(dataDir: string, vaultKey: Buffer): Settings {
+  const stored = readSettingsFile(dataDir);
+  if (stored === null) return DEFAULT_SETTINGS;
+  return mapTokens(stored, (token) => {
+    try {
+      return decryptSecret(token, vaultKey);
+    } catch (err: any) {
+      throw new TrackerError(`A token of ${settingsPath(dataDir)} cannot be read: ${err.message}`);
+    }
+  });
+}
+
+/**
+ * Chiffre avec `vaultKey` les tokens de `settings.json` écrits en clair par une
+ * version antérieure ; rend vrai si le fichier a été réécrit.
+ */
+export function encryptStoredTokens(dataDir: string, vaultKey: Buffer): boolean {
+  const stored = readSettingsFile(dataDir);
+  if (stored === null) return false;
+  const tokens = [stored.organizer.token, stored.claude.token].filter((token): token is string => token !== null);
+  if (tokens.every(isEncrypted)) return false;
+  writeSettingsFile(dataDir, mapTokens(stored, (token) => (isEncrypted(token) ? token : encryptSecret(token, vaultKey))));
+  return true;
+}
+
+function writeSettings(dataDir: string, vaultKey: Buffer, settings: Settings): void {
+  writeSettingsFile(dataDir, mapTokens(settings, (token) => encryptSecret(token, vaultKey)));
+}
+
+function writeSettingsFile(dataDir: string, settings: Settings): void {
   const file = settingsPath(dataDir);
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   try {
@@ -91,8 +130,8 @@ async function checkedOrganizer(organizer: Settings["organizer"], checks: Settin
  * testée, un nouveau token Claude vérifié : un échec refuse tout
  * l'enregistrement.
  */
-export async function saveSettings(dataDir: string, body: SaveSettingsBody, checks: SettingsChecks): Promise<SettingsView> {
-  const current = readSettings(dataDir);
+export async function saveSettings(dataDir: string, vaultKey: Buffer, body: SaveSettingsBody, checks: SettingsChecks): Promise<SettingsView> {
+  const current = readSettings(dataDir, vaultKey);
   const url = body.organizerUrl === "" ? null : organizerUrl(body.organizerUrl);
   const token = body.organizerToken ?? current.organizer.token;
   const organizerChanged = url !== current.organizer.url || token !== current.organizer.token;
@@ -105,15 +144,15 @@ export async function saveSettings(dataDir: string, body: SaveSettingsBody, chec
   }
 
   const next: Settings = { organizer, claude, analysis: body.analysis };
-  writeSettings(dataDir, next);
+  writeSettings(dataDir, vaultKey, next);
   return settingsView(next);
 }
 
 /** Teste la connexion enregistrée à l'organizer et relève son espace et son propriétaire. */
-export async function testOrganizer(dataDir: string, checks: SettingsChecks): Promise<SettingsView> {
-  const current = readSettings(dataDir);
+export async function testOrganizer(dataDir: string, vaultKey: Buffer, checks: SettingsChecks): Promise<SettingsView> {
+  const current = readSettings(dataDir, vaultKey);
   if (!organizerConnection(current)) throw new TrackerError("Set the organizer address and token first.");
   const next = { ...current, organizer: await checkedOrganizer(current.organizer, checks) };
-  writeSettings(dataDir, next);
+  writeSettings(dataDir, vaultKey, next);
   return settingsView(next);
 }
