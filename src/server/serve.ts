@@ -45,8 +45,8 @@ export function loadPackageEnv(): void {
   if (fs.existsSync(envFile)) dotenv.config({ path: envFile, override: true, quiet: true });
 }
 
-/** Met le serveur à l'écoute de `port` sur `hostname` (toutes les interfaces si absent) ; un port occupé arrête le serveur. */
-function listen(app: Hono, port: number, hostname: string | undefined): Promise<void> {
+/** Met le serveur à l'écoute de `port` sur l'adresse `hostname` ; un port occupé arrête le serveur. */
+function listen(app: Hono, port: number, hostname: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const server = serveHttp({ fetch: app.fetch, port, hostname }, () => resolve());
     server.on("error", (err: any) => {
@@ -151,7 +151,7 @@ export async function serve(): Promise<void> {
 
   for (const deployment of deployer.deployments.failInterrupted()) logger.warn(`Deployment ${deployment.id} on ${deployment.repoId} was interrupted by the last stop of the server.`);
   for (const operation of store.failInterruptedOperations()) logger.warn(`Operation ${operation.id} on ${operation.repoId} was interrupted by the last stop of the server.`);
-  logger.info(`Dependabot Tracker ${APP_VERSION} serves ${config.appUrl} (port ${config.port} on ${config.listenHost ?? "all interfaces"}, data dir ${dataDir}, clone dir ${cloneDir})`);
+  logger.info(`Dependabot Tracker ${APP_VERSION} serves ${config.appUrl} (port ${config.port} on ${config.listenHost}, data dir ${dataDir}, clone dir ${cloneDir})`);
   const users = await listUsers(auth);
   if (users.length === 0) logger.warn('No account exists yet: create one with "mcp-dependabot-tracker user add <email>".');
   for (const user of users.filter((candidate) => !candidate.twoFactor)) {

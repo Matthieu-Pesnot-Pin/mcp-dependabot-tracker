@@ -495,12 +495,17 @@ test("the server needs APP_PORT, an https APP_URL (http only on localhost) and a
   const secret = "x".repeat(32);
   assert.deepEqual(readServerConfig({ APP_PORT: "4700", APP_URL: "https://deps.example.com/", AUTH_SECRET: secret }), {
     port: 4700,
-    listenHost: undefined,
+    listenHost: "127.0.0.1",
     appUrl: "https://deps.example.com",
     authSecret: secret,
     trustedProxies: [],
   });
   assert.equal(readServerConfig({ APP_PORT: "4700", APP_URL: "http://localhost:4700", AUTH_SECRET: secret }).listenHost, "127.0.0.1");
+  assert.equal(readServerConfig({ APP_PORT: "4700", APP_URL: "https://a.b", AUTH_SECRET: secret, LISTEN_HOST: "0.0.0.0" }).listenHost, "0.0.0.0");
+  assert.equal(readServerConfig({ APP_PORT: "4700", APP_URL: "https://a.b", AUTH_SECRET: secret, LISTEN_HOST: " 10.0.0.5 " }).listenHost, "10.0.0.5");
+  assert.equal(readServerConfig({ APP_PORT: "4700", APP_URL: "http://localhost:4700", AUTH_SECRET: secret, LISTEN_HOST: "::1" }).listenHost, "::1");
+  assert.throws(() => readServerConfig({ APP_PORT: "4700", APP_URL: "https://a.b", AUTH_SECRET: secret, LISTEN_HOST: "example.com" }), /LISTEN_HOST is not an IP address/);
+  assert.throws(() => readServerConfig({ APP_PORT: "4700", APP_URL: "http://localhost:4700", AUTH_SECRET: secret, LISTEN_HOST: "0.0.0.0" }), /loopback address with an http APP_URL/);
   assert.deepEqual(readServerConfig({ APP_PORT: "1", APP_URL: "https://a.b", AUTH_SECRET: secret, TRUSTED_PROXIES: "127.0.0.1, 10.0.0.0/8,::1" }).trustedProxies, ["127.0.0.1", "10.0.0.0/8", "::1"]);
   assert.throws(() => readServerConfig({ APP_URL: "https://a.b", AUTH_SECRET: secret }), /APP_PORT is not set/);
   assert.throws(() => readServerConfig({ APP_PORT: "99999", APP_URL: "https://a.b", AUTH_SECRET: secret }), /APP_PORT is invalid/);

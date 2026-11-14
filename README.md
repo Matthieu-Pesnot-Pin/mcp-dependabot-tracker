@@ -47,7 +47,7 @@ Le serveur est une application autonome : il sert lui-même l'interface à l'adr
 - **L'interface et son API** exigent une session ouverte avec un compte e-mail et mot de passe ([Better Auth](https://www.better-auth.com)). Les sessions durent 7 jours, sont prolongées à l'usage et vivent dans un cookie `HttpOnly`, `SameSite=Lax`, `Secure` en https. Les tentatives de connexion sont limitées à 5 par minute et par client, toutes les requêtes d'authentification à 100 par minute. Une requête de modification venue d'un autre site est refusée (`Sec-Fetch-Site`, à défaut `Origin`).
 - **L'API des agents** (`/api/agent/…`) exige un token d'agent (`Authorization: Bearer dtk_…`), et rien d'autre.
 
-`APP_URL` est en https, sauf sur `localhost` : avec `http://localhost:<port>`, le serveur n'écoute que sur `127.0.0.1` ; avec une adresse https, il écoute sur toutes les interfaces, derrière le reverse proxy qui porte le certificat (Caddy, nginx…). Dans ce cas, déclarez l'adresse du reverse proxy dans `TRUSTED_PROXIES` : le limiteur de débit identifie alors le client par `X-Forwarded-For`, et non par l'adresse du proxy. Sans `TRUSTED_PROXIES`, `X-Forwarded-For` est ignoré.
+`APP_URL` est en https, derrière le reverse proxy qui porte le certificat (Caddy, nginx…), sauf sur `localhost` (`http://localhost:<port>`). Le serveur n'écoute que sur `127.0.0.1` par défaut : seul un reverse proxy de la même machine le joint, et le port HTTP en clair n'est jamais exposé. Si le reverse proxy est ailleurs (autre machine, autre conteneur), donnez dans `LISTEN_HOST` l'adresse sur laquelle écouter, ou `0.0.0.0` pour toutes les interfaces, et réservez le port au proxy par le pare-feu ; avec une `APP_URL` en http, seule la boucle locale est admise. Derrière un reverse proxy, déclarez l'adresse du reverse proxy dans `TRUSTED_PROXIES` : le limiteur de débit identifie alors le client par `X-Forwarded-For`, et non par l'adresse du proxy. Sans `TRUSTED_PROXIES`, `X-Forwarded-For` est ignoré.
 
 Exemple avec Caddy, qui obtient le certificat tout seul :
 
@@ -137,13 +137,14 @@ Elles se renseignent dans l'environnement du service, ou dans un fichier `.env` 
 | `APP_PORT` | **Obligatoire.** Port d'écoute du serveur. |
 | `APP_URL` | **Obligatoire.** Adresse publique de l'interface, sans chemin : `https://…`, ou `http://localhost:<port>` sur la machine elle-même (voir [Exposition et authentification](#exposition-et-authentification)). |
 | `AUTH_SECRET` | **Obligatoire.** Secret de signature des sessions, 32 caractères au moins (`--generate-auth-secret`). |
+| `LISTEN_HOST` | Adresse IP d'écoute (défaut `127.0.0.1`) ; `0.0.0.0` ou `::` pour toutes les interfaces, à n'utiliser que derrière un pare-feu qui réserve le port au reverse proxy. Une boucle locale seulement avec une `APP_URL` en http. |
 | `TRUSTED_PROXIES` | Adresses IP ou plages CIDR des reverse proxies, séparées par des virgules, dont l'en-tête `X-Forwarded-For` est cru. |
 | `GITHUB_API_URL` | API GitHub (défaut `https://api.github.com`), à changer pour GitHub Enterprise Server. |
 | `GITHUB_SERVER_URL` | Serveur git des clones (défaut `https://github.com`) : un dépôt se clone depuis `<serveur>/<propriétaire>/<nom>.git`. |
 | `MCP_DATA_DIR` | Répertoire des données (défaut `~/.mcp-dependabot-tracker`). Hors de Windows, le serveur le réserve à son compte (droits `700`) à chaque démarrage, et ses fichiers sont écrits en `600`. |
 | `MCP_LOG_DIR` | Répertoire des logs. Défaut : `<données>/logs`. |
 
-Sans une variable obligatoire, ou avec une valeur invalide (`APP_URL` en http hors `localhost`, `AUTH_SECRET` trop court), le serveur refuse de démarrer en nommant la variable.
+Sans une variable obligatoire, ou avec une valeur invalide (`APP_URL` en http hors `localhost`, `AUTH_SECRET` trop court, `LISTEN_HOST` qui n'est pas une adresse IP), le serveur refuse de démarrer en nommant la variable.
 
 ### Dans mcp-http-gateway
 

@@ -4,8 +4,8 @@ import net from "net";
 export interface ServerConfig {
   /** Port d'écoute. */
   port: number;
-  /** Interface d'écoute : la boucle locale quand `appUrl` est en http local, toutes les interfaces sinon. */
-  listenHost: string | undefined;
+  /** Adresse IP d'écoute : LISTEN_HOST, la boucle locale `127.0.0.1` par défaut. */
+  listenHost: string;
   /** Adresse publique de l'interface, sans barre finale (origine seule). */
   appUrl: string;
   /** Secret de signature des sessions, 32 caractères au moins. */
@@ -15,6 +15,7 @@ export interface ServerConfig {
 }
 
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const DEFAULT_LISTEN_HOST = "127.0.0.1";
 const MIN_SECRET_LENGTH = 32;
 
 function readPort(raw: string | undefined): number {
@@ -51,6 +52,25 @@ function readSecret(raw: string | undefined): string {
   return value;
 }
 
+/** Vrai pour une adresse de la boucle locale (`127.0.0.0/8`, `::1`). */
+function isLoopbackAddress(address: string): boolean {
+  return address === "::1" || (net.isIPv4(address) && address.startsWith("127."));
+}
+
+/**
+ * Lit LISTEN_HOST : une adresse IP de la machine, `0.0.0.0` ou `::` pour toutes
+ * les interfaces ; `127.0.0.1` sans valeur. Avec une APP_URL en http, seule la
+ * boucle locale est admise : rien ne doit transiter en clair hors de la machine.
+ */
+export function readListenHost(raw: string | undefined, httpAppUrl: boolean): string {
+  const value = raw?.trim() || DEFAULT_LISTEN_HOST;
+  if (net.isIP(value) === 0) throw new Error(`LISTEN_HOST is not an IP address (${value}): expected e.g. 127.0.0.1, or 0.0.0.0 for every interface.`);
+  if (httpAppUrl && !isLoopbackAddress(value)) {
+    throw new Error(`LISTEN_HOST must be a loopback address with an http APP_URL (${value}): use https in APP_URL to listen beyond this machine.`);
+  }
+  return value;
+}
+
 /** Lit TRUSTED_PROXIES : liste d'adresses IP ou de plages CIDR séparées par des virgules. */
 export function parseTrustedProxies(raw: string | undefined): string[] {
   const entries = (raw ?? "").split(",").map((entry) => entry.trim()).filter(Boolean);
@@ -77,5 +97,5 @@ export function readAuthEnv(env: NodeJS.ProcessEnv = process.env): AuthEnv & { l
 export function readServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const port = readPort(env.APP_PORT);
   const { loopback, ...auth } = readAuthEnv(env);
-  return { port, listenHost: loopback ? "127.0.0.1" : undefined, ...auth };
+  return { port, listenHost: readListenHost(env.LISTEN_HOST, loopback), ...auth };
 }

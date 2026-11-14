@@ -518,6 +518,7 @@ export function baseEnv(): Record<string, string | undefined> {
     "APP_URL",
     "AUTH_SECRET",
     "TRUSTED_PROXIES",
+    "LISTEN_HOST",
     "CLONE_DIR",
     "MCP_DATA_DIR",
     "MCP_LOG_DIR",
