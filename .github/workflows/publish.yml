@@ -1,9 +1,13 @@
 name: Publish to npm
 
-# Chaque push sur master (merge de pull request compris) : build, tests, version patch
-# commitée et taguée localement, publication npm par trusted publishing (OIDC), puis
-# push du commit de version et du tag sur master.
+# Chaque push sur master (merge de pull request compris) :
+# - job build, sans aucun droit d'écriture : installation, build et tests, puis
+#   le paquet compilé (dist/, gui/dist/) passe au job suivant comme artefact ;
+# - job publish : version patch commitée et taguée localement, publication npm
+#   par trusted publishing (OIDC) sans lancer aucun script ni installer aucune
+#   dépendance, puis push du commit de version et du tag sur master.
 # Le push du commit de version, fait avec GITHUB_TOKEN, ne relance pas ce workflow.
+# Les actions sont épinglées par SHA de commit, version en commentaire.
 
 on:
   push:
@@ -13,22 +17,24 @@ concurrency:
   group: publish
   cancel-in-progress: false
 
+permissions: {}
+
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      id-token: write
+      contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
 
-      - name: Install bubblewrap for the sandbox of the npm commands of Claude
+      - name: Install bubblewrap for the sandbox of the npm commands
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap
@@ -38,13 +44,41 @@ jobs:
       - run: npm run build
       - run: npm test
 
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package
+          path: |
+            dist/
+            gui/dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+
       - name: Bump the patch version
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           npm version patch
 
-      - run: npm publish
+      - run: npm publish --ignore-scripts
 
       - name: Push the version commit and tag
         run: git push --follow-tags

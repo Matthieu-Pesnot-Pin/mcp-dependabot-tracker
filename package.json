@@ -6,7 +6,7 @@
   "scripts": {
     "test": "node --test \"dist/test/*.test.js\"",
     "build:backend": "tsc",
-    "build:gui": "cd gui && npm install && npm run build",
+    "build:gui": "cd gui && npm ci && npm run build",
     "build": "npm run build:backend && npm run build:gui",
     "start": "node dist/src/index.js serve",
     "prepublishOnly": "npm run build",
