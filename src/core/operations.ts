@@ -65,6 +65,9 @@ const MAX_LOG_TEXT = 4000;
 /** Dossier du clone dans le répertoire temporaire de l'opération. */
 const CLONE_DIR = "repo";
 
+/** Dépôt git du clone, à côté de lui dans le répertoire temporaire de l'opération : le clone n'a pas de `.git`. */
+const GIT_DIR = "git";
+
 /** Paquets listés dans le corps de la pull request. */
 const MAX_PR_CHANGES = 60;
 
@@ -96,16 +99,29 @@ export function isTrackerBranch(branch: string): boolean {
   return /^fix\/npm-audit-\d{4}-\d{2}-\d{2}-\d{6}$/.test(branch);
 }
 
-/** Variables qui authentifient git auprès de GitHub par un en-tête HTTP, sans écrire le token dans le clone. */
-function gitAuthEnv(config: GitHubConfig): Record<string, string> {
+/** Réglage git passé à une commande par son environnement : clé et valeur. */
+type GitSetting = [key: string, value: string];
+
+/** Réglages de toutes les commandes git : aucun hook, aucun moniteur de fichiers. */
+const GIT_SETTINGS: GitSetting[] = [
+  ["core.hooksPath", "/dev/null"],
+  ["core.fsmonitor", "false"],
+];
+
+/** Réglage qui authentifie git auprès de GitHub par un en-tête HTTP, sans écrire le token dans le clone. */
+function gitAuthSetting(config: GitHubConfig): GitSetting {
   const basic = Buffer.from(`x-access-token:${config.token}`).toString("base64");
-  return {
-    GIT_TERMINAL_PROMPT: "0",
-    GCM_INTERACTIVE: "never",
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: `http.${config.serverUrl}/.extraheader`,
-    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
-  };
+  return [`http.${config.serverUrl}/.extraheader`, `AUTHORIZATION: basic ${basic}`];
+}
+
+/** Variables d'une commande git : aucune question posée à l'utilisateur, et `settings` en réglages. */
+function gitEnv(settings: GitSetting[]): Record<string, string> {
+  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GIT_CONFIG_COUNT: String(settings.length) };
+  settings.forEach(([key, value], index) => {
+    env[`GIT_CONFIG_KEY_${index}`] = key;
+    env[`GIT_CONFIG_VALUE_${index}`] = value;
+  });
+  return env;
 }
 
 /**
@@ -202,9 +218,21 @@ class Runner {
     return runCommand(command, args, { cwd, env, signal: this.signal });
   }
 
-  /** git dans le clone ; un code de sortie non nul lève une erreur avec la fin de stderr. */
+  get gitDir(): string {
+    const workDir = this.operation.workDir;
+    if (!workDir) throw new TrackerError(`Operation ${this.id} has no clone.`);
+    return path.join(workDir, GIT_DIR);
+  }
+
+  /**
+   * git dans le clone, sur le dépôt de l'opération désigné par GIT_DIR et
+   * GIT_WORK_TREE, ou dans `options.cwd` sans dépôt désigné ; un code de sortie
+   * non nul lève une erreur avec la fin de stderr.
+   */
   async git(args: string[], options: { cwd?: string; auth?: boolean } = {}): Promise<string> {
-    const result = await this.run("git", args, options.cwd ?? this.repoDir, options.auth ? gitAuthEnv(this.config) : {});
+    const env = gitEnv(options.auth ? [...GIT_SETTINGS, gitAuthSetting(this.config)] : GIT_SETTINGS);
+    if (options.cwd === undefined) Object.assign(env, { GIT_DIR: this.gitDir, GIT_WORK_TREE: this.repoDir });
+    const result = await this.run("git", args, options.cwd ?? this.repoDir, env);
     if (result.code !== 0) {
       const detail = tail(result.stderr) || tail(result.stdout);
       this.log(detail);
@@ -251,10 +279,11 @@ async function cloneStep(runner: Runner): Promise<void> {
   const workDir = fs.mkdtempSync(path.join(runner.cloneDir, "mcp-dependabot-tracker-"));
   runner.update((current) => ({ ...current, workDir }));
   const url = `${runner.config.serverUrl}/${owner}/${name}.git`;
-  await runner.git(["-c", "core.autocrlf=false", "clone", "--depth", "1", "--branch", operation.baseBranch, "--single-branch", url, CLONE_DIR], {
-    cwd: workDir,
-    auth: true,
-  });
+  await runner.git(
+    ["-c", "core.autocrlf=false", "clone", "--depth", "1", "--branch", operation.baseBranch, "--single-branch", "--separate-git-dir", GIT_DIR, url, CLONE_DIR],
+    { cwd: workDir, auth: true }
+  );
+  fs.rmSync(path.join(workDir, CLONE_DIR, ".git"));
 
   const files = (await runner.git(["ls-files", "-z"])).split("\0");
   const projects = files

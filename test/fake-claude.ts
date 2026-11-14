@@ -14,8 +14,9 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
  *   `idle`     corrections qui ne modifient rien ;
  *   `red`      corrections dont les tests échouent ;
  *   tout autre token : tâche créée, assignée et taguée selon la consigne.
- * Avec `--mcp-config`, il écrit `src/fixed.js` et un fichier dans
- * `node_modules`, appelle l'outil `npm_ls` du serveur `npm` de la
+ * Avec `--mcp-config`, il écrit `src/fixed.js`, un fichier dans
+ * `node_modules` et un hook `.git/hooks/pre-commit` qui crée
+ * `<CLAUDE_CONFIG_DIR>/hook-ran.txt`, appelle l'outil `npm_ls` du serveur `npm` de la
  * configuration et note sa réponse dans `<CLAUDE_CONFIG_DIR>/npm-tools.txt`,
  * puis crée la tâche du rapport sur le faux organizer, avec l'adresse et le
  * token de la configuration ; sans, il répond simplement.
@@ -32,7 +33,7 @@ const home = process.env.CLAUDE_CONFIG_DIR ?? process.cwd();
 fs.mkdirSync(home, { recursive: true });
 fs.appendFileSync(
   path.join(home, "calls.jsonl"),
-  JSON.stringify({ args, cwd: process.cwd(), env: Object.keys(process.env), home: process.env.HOME, token }) + "\n"
+  JSON.stringify({ args, cwd: process.cwd(), env: Object.keys(process.env), home: process.env.HOME, token, gitInCwd: fs.existsSync(".git") }) + "\n"
 );
 
 const emit = (event: unknown) => process.stdout.write(JSON.stringify(event) + "\n");
@@ -91,6 +92,8 @@ async function repair(url: string, organizerToken: string, ownerId: string, tag:
   }
   fs.mkdirSync("node_modules", { recursive: true });
   fs.writeFileSync(path.join("node_modules", "installed.txt"), "installed by npm ci\n");
+  fs.mkdirSync(path.join(".git", "hooks"), { recursive: true });
+  fs.writeFileSync(path.join(".git", "hooks", "pre-commit"), `#!/bin/sh\necho ran > "${path.join(home, "hook-ran.txt").replace(/\\/g, "/")}"\n`, { mode: 0o755 });
   emit({ type: "assistant", message: { id: "m-3", content: [{ type: "tool_use", name: "Edit", input: {} }] } });
   fs.writeFileSync(path.join(home, "npm-tools.txt"), await callMcpTool(npm, "npm_ls", { project: "", package: "lodash" }));
   if (token === "broken") {

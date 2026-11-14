@@ -40,7 +40,7 @@ function claudeSettings(claudeToken: string, maxMinutes = 5): Settings {
 }
 
 /** Appels reçus par le faux Claude, dans l'ordre. */
-function claudeCalls(): { args: string[]; cwd: string; env: string[]; home: string; token: string }[] {
+function claudeCalls(): { args: string[]; cwd: string; env: string[]; home: string; token: string; gitInCwd: boolean }[] {
   const file = path.join(temp.dir, "claude", "calls.jsonl");
   if (!fs.existsSync(file)) return [];
   return fs
@@ -230,6 +230,9 @@ test("Claude analyses and fixes in one session, reports in one organizer task, a
     assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): apply the fixes by Claude", "fix(deps): resolve npm audit vulnerabilities", "initial"]);
     assert.equal(remotes.show(owner, name, done.branch!, "src/fixed.js"), "// correctif\n");
     assert.throws(() => remotes.show(owner, name, done.branch!, "node_modules/installed.txt"), "node_modules is never committed");
+    assert.equal(call.gitInCwd, false, "the clone holds no .git: the git repository of the operation is out of reach of Claude and of the npm commands");
+    assert.ok(!fs.existsSync(path.join(call.home, "hook-ran.txt")), "a git hook written in the clone never runs");
+    assert.throws(() => remotes.show(owner, name, done.branch!, ".git/hooks/pre-commit"), "a .git folder written in the clone is never committed");
     const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
     assert.doesNotMatch(pull.body, /WARNING/);
     assert.match(pull.body, new RegExp(`Fixes by Claude Code, reported in organizer task ${task.key}:`));
