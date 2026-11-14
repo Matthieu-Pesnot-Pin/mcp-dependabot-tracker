@@ -33,7 +33,7 @@ const SCRIPT_FILE = "deploy.sh";
 function writeJsonAtomic(target: string, value: unknown): void {
   const tmp = `${target}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   try {
-    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), "utf-8");
+    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { encoding: "utf-8", mode: 0o600 });
     fs.renameSync(tmp, target);
   } catch (err) {
     fs.rmSync(tmp, { force: true });
@@ -122,7 +122,7 @@ export class DeploymentStore {
 
   constructor(dataDir: string) {
     this.dir = path.join(dataDir, "deployments");
-    fs.mkdirSync(this.dir, { recursive: true });
+    fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
   }
 
   private pathOf(id: string): string {

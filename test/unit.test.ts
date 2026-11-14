@@ -17,6 +17,7 @@ import { parseConnection, runSetupMcp, setupCommand } from "../src/cli/setup-mcp
 import { authenticateAgent, createAgentToken, listAgentTokens, revokeAgentToken } from "../src/core/agent-tokens.js";
 import { crossSiteRejection } from "../src/server/app.js";
 import { readServerConfig } from "../src/core/server-config.js";
+import { resolveDataDir } from "../src/core/data-dir.js";
 import { describeOperation } from "../src/tools/format.js";
 import { assertSandboxAvailable, bwrapArgs, projectDir } from "../src/core/npm-sandbox.js";
 import { npmArgs } from "../src/npm-tools.js";
@@ -149,6 +150,28 @@ test("commands run without the secrets of the server in their environment", asyn
       if (previous[index] === undefined) delete process.env[name];
       else process.env[name] = previous[index];
     });
+  }
+});
+
+test("the data directory is created for the account of the server alone", { skip: process.platform === "win32" ? "Windows has no POSIX modes" : false }, () => {
+  const temp = makeTempDir("data-dir-");
+  const previous = process.env.MCP_DATA_DIR;
+  try {
+    const existing = path.join(temp.dir, "existing");
+    fs.mkdirSync(existing, { mode: 0o755 });
+    fs.chmodSync(existing, 0o755);
+    for (const dir of [existing, path.join(temp.dir, "new", "nested")]) {
+      process.env.MCP_DATA_DIR = dir;
+      assert.equal(resolveDataDir(), dir);
+      assert.equal(fs.statSync(dir).mode & 0o777, 0o700, dir);
+    }
+    const store = new Store(existing);
+    store.createCategory("Web");
+    assert.equal(fs.statSync(path.join(existing, "repos.json")).mode & 0o777, 0o600);
+  } finally {
+    if (previous === undefined) delete process.env.MCP_DATA_DIR;
+    else process.env.MCP_DATA_DIR = previous;
+    temp.cleanup();
   }
 });
 

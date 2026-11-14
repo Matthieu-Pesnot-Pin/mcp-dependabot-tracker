@@ -17,11 +17,11 @@ const KEPT_OPERATIONS_PER_REPO = 20;
 
 const OPERATION_ID_PATTERN = /^[a-z0-9-]+$/;
 
-/** Écriture atomique : fichier temporaire unique puis `rename`, JSON indenté. */
+/** Écriture atomique : fichier temporaire unique puis `rename`, JSON indenté, lisible par le seul compte du serveur. */
 function writeJsonAtomic(target: string, value: unknown): void {
   const tmp = `${target}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   try {
-    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), "utf-8");
+    fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { encoding: "utf-8", mode: 0o600 });
     fs.renameSync(tmp, target);
   } catch (err) {
     fs.rmSync(tmp, { force: true });
@@ -128,7 +128,7 @@ export class Store {
     this.dataDir = dataDir;
     this.reposPath = path.join(dataDir, "repos.json");
     this.operationsDir = path.join(dataDir, "operations");
-    fs.mkdirSync(this.operationsDir, { recursive: true });
+    fs.mkdirSync(this.operationsDir, { recursive: true, mode: 0o700 });
   }
 
   // --- Dépôts et catégories ----------------------------------------------------

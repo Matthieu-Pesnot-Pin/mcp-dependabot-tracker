@@ -140,7 +140,7 @@ Elles se renseignent dans l'environnement du service, ou dans un fichier `.env` 
 | `TRUSTED_PROXIES` | Adresses IP ou plages CIDR des reverse proxies, séparées par des virgules, dont l'en-tête `X-Forwarded-For` est cru. |
 | `GITHUB_API_URL` | API GitHub (défaut `https://api.github.com`), à changer pour GitHub Enterprise Server. |
 | `GITHUB_SERVER_URL` | Serveur git des clones (défaut `https://github.com`) : un dépôt se clone depuis `<serveur>/<propriétaire>/<nom>.git`. |
-| `MCP_DATA_DIR` | Répertoire des données (défaut `~/.mcp-dependabot-tracker`). |
+| `MCP_DATA_DIR` | Répertoire des données (défaut `~/.mcp-dependabot-tracker`). Hors de Windows, le serveur le réserve à son compte (droits `700`) à chaque démarrage, et ses fichiers sont écrits en `600`. |
 | `MCP_LOG_DIR` | Répertoire des logs. Défaut : `<données>/logs`. |
 
 Sans une variable obligatoire, ou avec une valeur invalide (`APP_URL` en http hors `localhost`, `AUTH_SECRET` trop court), le serveur refuse de démarrer en nommant la variable.

@@ -33,7 +33,7 @@ const BACKUP_CODE_COUNT = 10;
 
 /** Base SQLite des comptes et des sessions, dans le répertoire des données. */
 function openDatabase(dataDir: string): BetterAuthOptions["database"] {
-  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const db = new Database(path.join(dataDir, "auth.sqlite"));
   db.pragma("journal_mode = WAL");
   return db;
