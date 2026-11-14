@@ -3,6 +3,7 @@ import path from "path";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
+import { secureHeaders } from "hono/secure-headers";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { z } from "zod";
 
@@ -109,6 +110,31 @@ export function crossSiteRejection(method: string, headers: { secFetchSite?: str
   return `Cross-site request refused (Origin: ${headers.origin}).`;
 }
 
+/**
+ * En-têtes de sécurité de toutes les réponses : la page ne charge que des
+ * ressources du serveur (polices intégrées en `data:` comprises), ne se laisse
+ * afficher dans aucun cadre, et n'envoie pas de référent. HSTS n'est envoyé
+ * qu'avec une adresse publique en https.
+ */
+export function securityHeaders(appUrl: string) {
+  return secureHeaders({
+    contentSecurityPolicy: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      fontSrc: ["'self'", "data:"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+    xFrameOptions: "DENY",
+    strictTransportSecurity: appUrl.startsWith("https:") ? "max-age=31536000; includeSubDomains" : false,
+  });
+}
+
 function statusOf(err: unknown): ContentfulStatusCode {
   if (err instanceof NotFoundError) return 404;
   if (err instanceof ConflictError) return 409;
@@ -163,6 +189,8 @@ export function createApp(ctx: ServerContext): Hono {
     operation,
     guiUrl: `${ctx.appUrl}#/r/${operation.repoId}/op/${operation.id}`,
   });
+
+  app.use("*", securityHeaders(ctx.appUrl));
 
   app.get("/health", (c) => c.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() }));
 

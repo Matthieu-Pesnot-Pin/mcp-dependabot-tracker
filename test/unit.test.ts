@@ -15,7 +15,8 @@ import { auditFindings, auditTargetRepos, cleanAudit, cleanProductionAudit, last
 import { Store } from "../src/core/store.js";
 import { parseConnection, runSetupMcp, setupCommand } from "../src/cli/setup-mcp.js";
 import { authenticateAgent, createAgentToken, listAgentTokens, revokeAgentToken } from "../src/core/agent-tokens.js";
-import { crossSiteRejection } from "../src/server/app.js";
+import { crossSiteRejection, securityHeaders } from "../src/server/app.js";
+import { Hono } from "hono";
 import { readServerConfig } from "../src/core/server-config.js";
 import { resolveDataDir } from "../src/core/data-dir.js";
 import { describeOperation } from "../src/tools/format.js";
@@ -151,6 +152,17 @@ test("commands run without the secrets of the server in their environment", asyn
       else process.env[name] = previous[index];
     });
   }
+});
+
+test("the security headers send HSTS with an https address only", async () => {
+  const hsts = async (appUrl: string) => {
+    const app = new Hono();
+    app.use("*", securityHeaders(appUrl));
+    app.get("/", (c) => c.text("ok"));
+    return (await app.request("/")).headers.get("strict-transport-security");
+  };
+  assert.equal(await hsts("https://deps.example.com"), "max-age=31536000; includeSubDomains");
+  assert.equal(await hsts("http://localhost:4700"), null);
 });
 
 test("the data directory is created for the account of the server alone", { skip: process.platform === "win32" ? "Windows has no POSIX modes" : false }, () => {

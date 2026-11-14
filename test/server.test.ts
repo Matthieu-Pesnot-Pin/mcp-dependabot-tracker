@@ -107,6 +107,14 @@ test("the MCP mode lists its tools; the server serves the GUI page", async () =>
   );
   const page = await fetch(`${baseUrl}/`);
   assert.equal(page.status, 200);
+  const csp = page.headers.get("content-security-policy") ?? "";
+  for (const directive of ["default-src 'self'", "script-src 'self'", "frame-ancestors 'none'", "object-src 'none'"]) assert.ok(csp.includes(directive), csp);
+  assert.deepEqual(
+    ["x-frame-options", "x-content-type-options", "referrer-policy", "strict-transport-security"].map((name) => page.headers.get(name)),
+    ["DENY", "nosniff", "no-referrer", null],
+    "HSTS is only sent with an https address"
+  );
+  assert.equal((await fetch(`${baseUrl}/api/repos`)).headers.get("x-frame-options"), "DENY", "the API answers carry the headers too");
   assert.match(await page.text(), /<div id="root">/);
   const config = await call("GET", "config");
   assert.equal(config.json.githubServerUrl, remotes.serverUrl);
