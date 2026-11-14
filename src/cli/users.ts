@@ -1,4 +1,5 @@
 import readline from "readline";
+import QRCode from "qrcode";
 
 import { addUser, createAuth, currentTotpCode, disableTotp, enableTotp, listUsers, migrateAuth, prepareTotp, removeUser, setUserPassword, type Auth } from "../core/auth.js";
 import { resolveDataDir } from "../core/data-dir.js";
@@ -43,13 +44,23 @@ function promptLine(question: string): Promise<string> {
 /** Essais du code de l'application avant l'abandon de l'activation. */
 const TOTP_CONFIRMATION_TRIES = 3;
 
+/** QR code de `text` en caractères, pour un terminal : deux modules par caractère, sur fond clair. */
+export function terminalQrCode(text: string): Promise<string> {
+  return QRCode.toString(text, { type: "terminal", small: true });
+}
+
 /**
  * Prépare la double authentification du compte, affiche sa clé et ses codes de
- * secours, puis l'active. Sur un terminal, l'activation attend le code affiché
- * par l'application d'authentification ; sans code juste, rien n'est enregistré.
+ * secours, puis l'active. Sur un terminal, la clé est aussi affichée en QR code,
+ * et l'activation attend le code affiché par l'application d'authentification ;
+ * sans code juste, rien n'est enregistré.
  */
 async function runTotp(auth: Auth, email: string): Promise<number> {
   const enrollment = await prepareTotp(auth, email);
+  if (process.stdout.isTTY) {
+    console.log("QR code à scanner avec l'application d'authentification :");
+    console.log(await terminalQrCode(enrollment.uri));
+  }
   console.log(`Clé à saisir dans l'application d'authentification : ${enrollment.key}`);
   console.log(`Adresse de la clé : ${enrollment.uri}`);
   console.log("Codes de secours, à conserver (un seul usage chacun) :");

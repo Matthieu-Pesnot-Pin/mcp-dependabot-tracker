@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test, { after, before } from "node:test";
 
+import { terminalQrCode } from "../src/cli/users.js";
 import { TEST_AUTH_SECRET, TEST_VAULT_KEY, TrackerServer, baseEnv, cookiesOf, freePort, makeTempDir, runUserCommand, signIn, totpCode, waitFor } from "./helpers.js";
 
 /**
@@ -46,7 +47,8 @@ test("an account with two-factor authentication signs in with its password, then
 
   const enabled = await runUserCommand(serverEnv, ["totp", user.email]);
   assert.equal(enabled.code, 0, enabled.stderr);
-  const key = /authentification : ([A-Z2-7]+)/.exec(enabled.stdout)?.[1] ?? "";
+  assert.ok(!enabled.stdout.includes("QR code") && !enabled.stdout.includes("\u001b["), "outside a terminal, the output holds no QR code nor escape sequence");
+  const key =/authentification : ([A-Z2-7]+)/.exec(enabled.stdout)?.[1] ?? "";
   assert.ok(enabled.stdout.includes(`otpauth://totp/Dependabot%20Tracker:${encodeURIComponent(user.email)}?secret=${key}&issuer=Dependabot+Tracker&digits=6&period=30`), enabled.stdout);
   const backupCodes = enabled.stdout.match(/^  \S{5}-\S{5}$/gm)?.map((line) => line.trim()) ?? [];
   assert.equal(backupCodes.length, 10);
@@ -82,4 +84,15 @@ test("an account with two-factor authentication signs in with its password, then
 
   assert.equal((await runUserCommand(serverEnv, ["totp", user.email, "--remove"])).code, 0);
   assert.match((await runUserCommand(serverEnv, ["list"])).stdout, /totp@example\.com\t.*\tsans 2FA\n/);
+});
+
+test("the QR code of the key is drawn with block characters, one line per two rows of modules", async () => {
+  const uri = "otpauth://totp/Dependabot%20Tracker:a%40example.com?secret=GEZDGNBVGY3TQOJQ&issuer=Dependabot+Tracker&digits=6&period=30";
+  const lines = (await terminalQrCode(uri))
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .split("\n")
+    .filter((line) => line.trim() !== "");
+  assert.ok(lines.length >= 15, `${lines.length} lines`);
+  assert.ok(lines.every((line) => /[▀▄█ ]/.test(line)));
+  assert.notEqual(await terminalQrCode(uri), await terminalQrCode(uri.replace("GEZDGNBVGY3TQOJQ", "MFRGGZDFMZTWQ2LK")), "the code depends on the key");
 });
