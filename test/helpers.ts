@@ -167,6 +167,22 @@ export function runUserCommand(env: Record<string, string | undefined>, args: st
   });
 }
 
+/** En-tête Cookie fait des cookies posés par `response`. */
+export function cookiesOf(response: Response): string {
+  return response.headers.getSetCookie().map((cookie) => cookie.split(";")[0]).filter((cookie) => !cookie.endsWith("=")).join("; ");
+}
+
+/** Code TOTP (RFC 6238, SHA-1, six chiffres, pas de 30 s) de la clé base32 `key`, comme le calcule une application d'authentification. */
+export function totpCode(key: string, at = Date.now()): string {
+  const bits = [...key.toUpperCase()].map((char) => "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".indexOf(char).toString(2).padStart(5, "0")).join("");
+  const secret = Buffer.from((bits.match(/.{8}/g) ?? []).map((byte) => parseInt(byte, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(at / 30_000)));
+  const digest = crypto.createHmac("sha1", secret).update(counter).digest();
+  const offset = digest[digest.length - 1] & 15;
+  return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, "0");
+}
+
 /** Ouvre une session avec `TEST_USER` (ou `user`) ; rend l'en-tête Cookie à renvoyer. */
 export async function signIn(baseUrl: string, user: { email: string; password: string } = TEST_USER): Promise<string> {
   const response = await fetch(`${baseUrl}/api/auth/sign-in/email`, {

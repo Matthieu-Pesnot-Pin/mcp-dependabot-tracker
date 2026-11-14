@@ -4,7 +4,7 @@
  * Point d'entrée du paquet :
  *   serve                                          le serveur Dependabot Tracker (interface, API, opérations) ;
  *   mcp                                            le mode MCP, lancé par un agent, qui pilote un serveur ;
- *   user add|password|remove|list                  gère les comptes de l'interface ;
+ *   user add|password|totp|remove|list             gère les comptes de l'interface ;
  *   --claude-setup-mcp --server_url=… --token=…    déclare le mode MCP dans le .mcp.json du répertoire courant ;
  *   --generate-vault-key                           affiche une nouvelle VAULT_KEY ;
  *   --generate-auth-secret                         affiche un nouvel AUTH_SECRET.

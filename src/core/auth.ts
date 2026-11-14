@@ -3,7 +3,9 @@ import fs from "fs";
 import path from "path";
 import Database from "better-sqlite3";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
+import { generateRandomString, symmetricEncrypt } from "better-auth/crypto";
 import { getMigrations } from "better-auth/db/migration";
+import { twoFactor } from "better-auth/plugins/two-factor";
 
 import { ConflictError, NotFoundError, TrackerError } from "./errors.js";
 import type { AuthEnv } from "./server-config.js";
@@ -20,6 +22,15 @@ export const AUTH_BASE_PATH = "/api/auth";
 
 const MIN_PASSWORD_LENGTH = 12;
 
+const APP_NAME = "Dependabot Tracker";
+
+/** Table des secrets TOTP et des codes de secours du plugin de double authentification. */
+const TWO_FACTOR_TABLE = "twoFactor";
+
+const TOTP_DIGITS = 6;
+const TOTP_PERIOD_SECONDS = 30;
+const BACKUP_CODE_COUNT = 10;
+
 /** Base SQLite des comptes et des sessions, dans le répertoire des données. */
 function openDatabase(dataDir: string): BetterAuthOptions["database"] {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -30,11 +41,13 @@ function openDatabase(dataDir: string): BetterAuthOptions["database"] {
 
 /**
  * Instance Better Auth : comptes e-mail + mot de passe créés en ligne de
- * commande (inscription fermée), sessions en base, limitation de débit active.
+ * commande (inscription fermée), sessions en base, limitation de débit active,
+ * double authentification par code TOTP ou code de secours pour les comptes qui
+ * l'ont activée.
  */
 export function createAuth(dataDir: string, env: AuthEnv) {
   return betterAuth({
-    appName: "Dependabot Tracker",
+    appName: APP_NAME,
     baseURL: env.appUrl,
     basePath: AUTH_BASE_PATH,
     secret: env.authSecret,
@@ -64,6 +77,7 @@ export function createAuth(dataDir: string, env: AuthEnv) {
         trustedProxies: env.trustedProxies,
       },
     },
+    plugins: [twoFactor({ issuer: APP_NAME, totpOptions: { digits: TOTP_DIGITS, period: TOTP_PERIOD_SECONDS } })],
   });
 }
 
@@ -84,6 +98,12 @@ export interface UserSummary {
   email: string;
   name: string;
   createdAt: Date;
+  /** La double authentification est activée. */
+  twoFactor: boolean;
+}
+
+function summaryOf(user: { email: string; name: string; createdAt: Date; twoFactorEnabled?: boolean | null }): UserSummary {
+  return { email: user.email, name: user.name, createdAt: user.createdAt, twoFactor: user.twoFactorEnabled === true };
 }
 
 function normalizeEmail(raw: string): string {
@@ -115,7 +135,7 @@ export async function addUser(auth: Auth, input: { email: string; name: string; 
   const hash = await checkedHash(auth, input.password);
   const user = await ctx.internalAdapter.createUser({ email, name: input.name.trim() || email, emailVerified: true }, { method: "email-password" });
   await ctx.internalAdapter.linkAccount({ userId: user.id, providerId: "credential", accountId: user.id, password: hash });
-  return { email: user.email, name: user.name, createdAt: user.createdAt };
+  return summaryOf(user);
 }
 
 /** Remplace le mot de passe d'un compte et ferme toutes ses sessions. */
@@ -138,10 +158,73 @@ export async function removeUser(auth: Auth, email: string): Promise<void> {
 export async function listUsers(auth: Auth): Promise<UserSummary[]> {
   const ctx = await auth.$context;
   const users = await ctx.internalAdapter.listUsers(undefined, undefined, { field: "createdAt", direction: "asc" });
-  return users.map((user) => ({ email: user.email, name: user.name, createdAt: user.createdAt }));
+  return users.map(summaryOf);
 }
 
-/** Nombre de comptes. */
-export async function countUsers(auth: Auth): Promise<number> {
-  return (await auth.$context).internalAdapter.countTotalUsers();
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+/** Encodage base32 (RFC 4648) sans remplissage, celui des clés des applications d'authentification. */
+export function base32Encode(bytes: Uint8Array): string {
+  let bits = "";
+  for (const byte of bytes) bits += byte.toString(2).padStart(8, "0");
+  let encoded = "";
+  for (let index = 0; index < bits.length; index += 5) encoded += BASE32_ALPHABET[parseInt(bits.slice(index, index + 5).padEnd(5, "0"), 2)];
+  return encoded;
+}
+
+/** Double authentification préparée pour un compte, pas encore enregistrée. */
+export interface TotpEnrollment {
+  /** Secret TOTP, tel que le plugin l'enregistre. */
+  secret: string;
+  /** Clé à saisir dans l'application d'authentification : le secret en base32. */
+  key: string;
+  /** Adresse `otpauth://` de la clé, pour un QR code ou un gestionnaire de mots de passe. */
+  uri: string;
+  /** Codes de secours, chacun utilisable une fois à la place du code de l'application. */
+  backupCodes: string[];
+}
+
+/** Prépare un secret TOTP et des codes de secours pour le compte `email`, sans rien enregistrer. */
+export async function prepareTotp(auth: Auth, email: string): Promise<TotpEnrollment> {
+  const user = await requireUser(auth, email);
+  const secret = generateRandomString(32);
+  const key = base32Encode(new TextEncoder().encode(secret));
+  const parameters = new URLSearchParams({ secret: key, issuer: APP_NAME, digits: String(TOTP_DIGITS), period: String(TOTP_PERIOD_SECONDS) });
+  const backupCodes = Array.from({ length: BACKUP_CODE_COUNT }, () => generateRandomString(10, "a-z", "0-9", "A-Z")).map((code) => `${code.slice(0, 5)}-${code.slice(5)}`);
+  return { secret, key, uri: `otpauth://totp/${encodeURIComponent(APP_NAME)}:${encodeURIComponent(user.email)}?${parameters}`, backupCodes };
+}
+
+/** Code TOTP du moment pour `secret`. */
+export async function currentTotpCode(auth: Auth, secret: string): Promise<string> {
+  return (await auth.api.generateTOTP({ body: { secret } })).code;
+}
+
+/**
+ * Active la double authentification du compte avec `enrollment`, à la place de
+ * celle qu'il avait, et ferme toutes ses sessions.
+ */
+export async function enableTotp(auth: Auth, email: string, enrollment: TotpEnrollment): Promise<void> {
+  const ctx = await auth.$context;
+  const user = await requireUser(auth, email);
+  const data = {
+    secret: await symmetricEncrypt({ key: ctx.secretConfig, data: enrollment.secret }),
+    backupCodes: await symmetricEncrypt({ key: ctx.secretConfig, data: JSON.stringify(enrollment.backupCodes) }),
+    verified: true,
+    failedVerificationCount: 0,
+    lockedUntil: null,
+  };
+  const where = [{ field: "userId", value: user.id }];
+  const existing = await ctx.adapter.findOne({ model: TWO_FACTOR_TABLE, where });
+  if (existing) await ctx.adapter.update({ model: TWO_FACTOR_TABLE, where, update: data });
+  else await ctx.adapter.create({ model: TWO_FACTOR_TABLE, data: { ...data, userId: user.id } });
+  await ctx.internalAdapter.updateUser(user.id, { twoFactorEnabled: true });
+  await ctx.internalAdapter.deleteUserSessions(user.id);
+}
+
+/** Retire la double authentification du compte : son secret et ses codes de secours sont effacés. */
+export async function disableTotp(auth: Auth, email: string): Promise<void> {
+  const ctx = await auth.$context;
+  const user = await requireUser(auth, email);
+  await ctx.adapter.delete({ model: TWO_FACTOR_TABLE, where: [{ field: "userId", value: user.id }] });
+  await ctx.internalAdapter.updateUser(user.id, { twoFactorEnabled: false });
 }

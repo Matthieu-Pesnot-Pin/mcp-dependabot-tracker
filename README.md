@@ -70,13 +70,16 @@ Il n'y a pas d'inscription : les comptes se créent sur la machine du serveur, a
 ```bash
 mcp-dependabot-tracker user add admin@example.com --name="Admin"
 mcp-dependabot-tracker user password admin@example.com
+mcp-dependabot-tracker user totp admin@example.com
 mcp-dependabot-tracker user remove admin@example.com
 mcp-dependabot-tracker user list
 ```
 
 Changer le mot de passe ou supprimer le compte ferme aussitôt ses sessions. Sans terminal, le mot de passe est lu sur la première ligne de l'entrée standard. Tant qu'aucun compte n'existe, le serveur le signale au démarrage. Comptes et sessions sont enregistrés dans `<données>/auth.sqlite`.
 
-`AUTH_SECRET` signe les sessions. Générez-le une fois et déclarez-le comme variable secrète du service ; le changer ferme toutes les sessions :
+**Double authentification** — un compte ouvre l'exécution de scripts sur les serveurs de déploiement : protégez-le par un second facteur. `user totp <email>` affiche la clé à saisir dans une application d'authentification (TOTP, six chiffres, 30 s), son adresse `otpauth://` et dix codes de secours à usage unique, puis demande le code affiché par l'application : la double authentification n'est activée qu'avec un code juste, et les sessions du compte sont alors fermées. Sans terminal, elle est activée sans cette vérification. La connexion se fait ensuite en deux étapes : e-mail et mot de passe, puis le code de l'application ou un code de secours ; le mot de passe seul n'ouvre aucune session. Cinq codes faux ferment la vérification en cours, dix d'affilée verrouillent le compte un quart d'heure. Relancer `user totp <email>` remplace la clé et les codes de secours ; `user totp <email> --remove` retire la double authentification. `user list` indique pour chaque compte s'il l'a activée, et le serveur signale au démarrage ceux qui ne l'ont pas.
+
+`AUTH_SECRET` signe les sessions et chiffre les clés TOTP. Générez-le une fois et déclarez-le comme variable secrète du service ; le changer ferme toutes les sessions et rend les clés TOTP illisibles (relancez alors `user totp` pour chaque compte) :
 
 ```bash
 npx -y @imenam/mcp-dependabot-tracker --generate-auth-secret
@@ -375,12 +378,12 @@ cd gui && npm run lint   # oxlint
 | `src/core/` | Stockage, tokens d'agent, client GitHub, commandes `git`/`npm`, rapports `npm audit` et lockfiles, opérations, dépôts ; coffre (`vault.ts`), connexion SSH (`ssh.ts`), serveurs de déploiement (`deploy-servers.ts`) et déploiements (`deployments.ts`) ; configuration du serveur (`server-config.ts`) et authentification (`auth.ts`). |
 | `src/npm-tools.ts` | Serveur MCP des commandes npm fourni à Claude Code pendant ses corrections. |
 | `src/cli/setup-mcp.ts` | Commande `--claude-setup-mcp`. |
-| `src/cli/users.ts` | Commandes `user add`, `user password`, `user remove`, `user list`. |
+| `src/cli/users.ts` | Commandes `user add`, `user password`, `user totp`, `user remove`, `user list`. |
 | `shared/schemas/` | Schémas zod communs au serveur et à la GUI. |
 | `gui/` | Vite + React 19 + zustand, CSS écrit à la main. |
 | `test/` | Tests `node --test`. |
 
-Les tests utilisent une fausse API GitHub (dépôts, alertes paginées, utilisateur, création et liste des pull requests) et des dépôts nus locaux servis par `file://` (`GITHUB_API_URL`, `GITHUB_SERVER_URL`). `test/operations.test.ts` et `test/server.test.ts` lancent un vrai `npm audit` sur un petit projet vulnérable (`test/fixtures/vulnerable` : `lodash`, corrigé par `audit fix`, et `nth-check`, qui demande une montée majeure ; `test/fixtures/vulnerable-dev`, le même avec `nth-check` en devDependency, pour le périmètre production) : ils ont besoin du registre npm et sont ignorés, avec la raison, s'il est injoignable. `test/server.test.ts` crée un compte (`user add`), lance le serveur (`serve`) sur un port libre, ouvre une session, vérifie l'authentification (session exigée, inscription fermée, requêtes d'un autre site, commandes `user`, limitation des connexions), crée un token d'agent par l'API de l'interface, puis lance le mode MCP (`mcp`) sur stdio : il parcourt les outils, les tokens et la correction complète depuis l'API de l'interface. Les corrections par Claude passent par un faux Claude Code (`test/fake-claude.ts`, qui note ses appels, appelle les outils du serveur `npm` du tracker et répond en `stream-json`) et un faux organizer (tâches, assignations, tags). `test/deploy.test.ts` connecte un serveur et déploie sur un faux serveur SSH (`test/fake-ssh.ts`, bâti sur `ssh2`) qui n'accepte que les clés du fichier dédié, en respectant leur option `from`, et exécute réellement les commandes avec bash : `bash` doit être dans le `PATH` (Git Bash sous Windows).
+Les tests utilisent une fausse API GitHub (dépôts, alertes paginées, utilisateur, création et liste des pull requests) et des dépôts nus locaux servis par `file://` (`GITHUB_API_URL`, `GITHUB_SERVER_URL`). `test/operations.test.ts` et `test/server.test.ts` lancent un vrai `npm audit` sur un petit projet vulnérable (`test/fixtures/vulnerable` : `lodash`, corrigé par `audit fix`, et `nth-check`, qui demande une montée majeure ; `test/fixtures/vulnerable-dev`, le même avec `nth-check` en devDependency, pour le périmètre production) : ils ont besoin du registre npm et sont ignorés, avec la raison, s'il est injoignable. `test/server.test.ts` crée un compte (`user add`), lance le serveur (`serve`) sur un port libre, ouvre une session, vérifie l'authentification (session exigée, inscription fermée, requêtes d'un autre site, commandes `user`, limitation des connexions), crée un token d'agent par l'API de l'interface, puis lance le mode MCP (`mcp`) sur stdio : il parcourt les outils, les tokens et la correction complète depuis l'API de l'interface. Les corrections par Claude passent par un faux Claude Code (`test/fake-claude.ts`, qui note ses appels, appelle les outils du serveur `npm` du tracker et répond en `stream-json`) et un faux organizer (tâches, assignations, tags). `test/deploy.test.ts` connecte un serveur et déploie sur un faux serveur SSH (`test/fake-ssh.ts`, bâti sur `ssh2`) qui n'accepte que les clés du fichier dédié, en respectant leur option `from`, et exécute réellement les commandes avec bash : `bash` doit être dans le `PATH` (Git Bash sous Windows). `test/two-factor.test.ts` active la double authentification d'un compte (`user totp`) sur son propre serveur et vérifie la connexion en deux étapes, par code TOTP puis par code de secours.
 
 ## Publication
 

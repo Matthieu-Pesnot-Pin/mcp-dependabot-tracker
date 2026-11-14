@@ -1,12 +1,13 @@
 import readline from "readline";
 
-import { addUser, createAuth, listUsers, migrateAuth, removeUser, setUserPassword, type Auth } from "../core/auth.js";
+import { addUser, createAuth, currentTotpCode, disableTotp, enableTotp, listUsers, migrateAuth, prepareTotp, removeUser, setUserPassword, type Auth } from "../core/auth.js";
 import { resolveDataDir } from "../core/data-dir.js";
 import { readAuthEnv } from "../core/server-config.js";
 
 export const USERS_USAGE = [
   "  mcp-dependabot-tracker user add <email> [--name=<nom>]               crée un compte (mot de passe demandé)",
   "  mcp-dependabot-tracker user password <email>                         change le mot de passe et ferme les sessions",
+  "  mcp-dependabot-tracker user totp <email> [--remove]                  active la double authentification (clé TOTP, codes de secours), ou la retire",
   "  mcp-dependabot-tracker user remove <email>                           supprime le compte",
   "  mcp-dependabot-tracker user list                                     liste les comptes",
 ].join("\n");
@@ -26,6 +27,46 @@ function promptHidden(question: string): Promise<string> {
     });
     muted = true;
   });
+}
+
+/** Lit une ligne sur le terminal. */
+function promptLine(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+/** Essais du code de l'application avant l'abandon de l'activation. */
+const TOTP_CONFIRMATION_TRIES = 3;
+
+/**
+ * Prépare la double authentification du compte, affiche sa clé et ses codes de
+ * secours, puis l'active. Sur un terminal, l'activation attend le code affiché
+ * par l'application d'authentification ; sans code juste, rien n'est enregistré.
+ */
+async function runTotp(auth: Auth, email: string): Promise<number> {
+  const enrollment = await prepareTotp(auth, email);
+  console.log(`Clé à saisir dans l'application d'authentification : ${enrollment.key}`);
+  console.log(`Adresse de la clé : ${enrollment.uri}`);
+  console.log("Codes de secours, à conserver (un seul usage chacun) :");
+  for (const code of enrollment.backupCodes) console.log(`  ${code}`);
+
+  if (process.stdin.isTTY) {
+    let confirmed = false;
+    for (let attempt = 0; attempt < TOTP_CONFIRMATION_TRIES && !confirmed; attempt += 1) {
+      const code = await promptLine("Code affiché par l'application : ");
+      confirmed = code.replaceAll(" ", "") === (await currentTotpCode(auth, enrollment.secret));
+      if (!confirmed) console.error("Code incorrect.");
+    }
+    if (!confirmed) throw new Error("la double authentification n'est pas activée, aucun code juste n'a été saisi.");
+  }
+  await enableTotp(auth, email, enrollment);
+  console.log(`Double authentification activée pour ${email} ; ses sessions sont fermées.`);
+  return 0;
 }
 
 /** Lignes de l'entrée standard quand elle n'est pas un terminal. */
@@ -86,6 +127,14 @@ export async function runUsers(argv: string[]): Promise<number> {
       console.log(`Mot de passe changé pour ${email} ; ses sessions sont fermées.`);
       return 0;
     }
+    if (action === "totp") {
+      const email = requireEmail(args, "user totp <email> [--remove]");
+      const auth = await openAuth();
+      if (!args.includes("--remove")) return await runTotp(auth, email);
+      await disableTotp(auth, email);
+      console.log(`Double authentification retirée pour ${email}.`);
+      return 0;
+    }
     if (action === "remove") {
       const email = requireEmail(args, "user remove <email>");
       await removeUser(await openAuth(), email);
@@ -95,7 +144,7 @@ export async function runUsers(argv: string[]): Promise<number> {
     if (action === "list") {
       const users = await listUsers(await openAuth());
       if (users.length === 0) console.log("Aucun compte.");
-      for (const user of users) console.log(`${user.email}\t${user.name}\t${user.createdAt.toISOString()}`);
+      for (const user of users) console.log(`${user.email}\t${user.name}\t${user.createdAt.toISOString()}\t${user.twoFactor ? "2FA" : "sans 2FA"}`);
       return 0;
     }
     console.error(`Usage :\n${USERS_USAGE}`);

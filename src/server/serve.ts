@@ -7,7 +7,7 @@ import { createLogger, setupLogging } from "@imenam/mcp-gui-interface";
 import type { Hono } from "hono";
 
 import { AuditAll } from "../core/audit-all.js";
-import { countUsers, createAuth, migrateAuth, type Auth } from "../core/auth.js";
+import { createAuth, listUsers, migrateAuth, type Auth } from "../core/auth.js";
 import { checkClaudeToken, packagedClaudeCommand, type ClaudeRuntime } from "../core/claude.js";
 import { readGitHubConfig, type GitHubConfig } from "../core/config.js";
 import { resolveCloneDir, resolveDataDir } from "../core/data-dir.js";
@@ -149,7 +149,11 @@ export async function serve(): Promise<void> {
   for (const deployment of deployer.deployments.failInterrupted()) logger.warn(`Deployment ${deployment.id} on ${deployment.repoId} was interrupted by the last stop of the server.`);
   for (const operation of store.failInterruptedOperations()) logger.warn(`Operation ${operation.id} on ${operation.repoId} was interrupted by the last stop of the server.`);
   logger.info(`Dependabot Tracker ${APP_VERSION} serves ${config.appUrl} (port ${config.port} on ${config.listenHost ?? "all interfaces"}, data dir ${dataDir}, clone dir ${cloneDir})`);
-  if ((await countUsers(auth)) === 0) logger.warn('No account exists yet: create one with "mcp-dependabot-tracker user add <email>".');
+  const users = await listUsers(auth);
+  if (users.length === 0) logger.warn('No account exists yet: create one with "mcp-dependabot-tracker user add <email>".');
+  for (const user of users.filter((candidate) => !candidate.twoFactor)) {
+    logger.warn(`The account ${user.email} signs in with its password alone: enable two-factor authentication with "mcp-dependabot-tracker user totp ${user.email}".`);
+  }
 
   let syncing = false;
   /** Relit les alertes des dépôts lus il y a plus de 10 minutes, et le statut de la tâche organizer du dernier rapport de Claude. */
