@@ -9,15 +9,42 @@ import { TrackerError } from "./errors.js";
  * fix`) et celles lancées pour Claude pendant ses corrections, hors du bac à
  * sable de Claude Code, qui garde en lecture seule les manifestes, les lockfiles
  * et `node_modules`. Sous Linux, chaque commande tourne dans un bac à sable
- * bubblewrap du tracker : système en lecture seule (`/usr`, `/etc`, Node.js…),
- * clone et cache npm de l'opération en écriture, `/tmp` vide, aucun autre
- * dossier du serveur visible (ni les données du tracker, ni les autres clones),
+ * bubblewrap du tracker : système en lecture seule (`/usr`, Node.js, et de
+ * `/etc` les seuls fichiers de `ETC_ENTRIES`), clone et cache npm de l'opération
+ * en écriture, `/tmp` vide, aucun autre dossier du serveur visible (ni `/opt`,
+ * ni `/home`, ni les données du tracker, ni les autres clones),
  * environnement réduit à PATH, LANG, HOME et au cache npm. Ailleurs, la
  * commande tourne directement dans le clone, avec le cache de l'opération.
  */
 
 /** Dossiers système montés en lecture seule, ou recréés en lien symbolique quand ils en sont un. */
-const SYSTEM_DIRS = ["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc", "/opt", "/run/systemd/resolve"];
+const SYSTEM_DIRS = ["/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/run/systemd/resolve"];
+
+/**
+ * Fichiers et dossiers de `/etc` montés en lecture seule : résolution de noms,
+ * comptes, certificats, éditeur de liens, alternatives de Debian, fuseau horaire
+ * et identité du système. Le reste de `/etc` est absent du bac à sable.
+ */
+const ETC_ENTRIES = [
+  "/etc/resolv.conf",
+  "/etc/hosts",
+  "/etc/host.conf",
+  "/etc/gai.conf",
+  "/etc/nsswitch.conf",
+  "/etc/passwd",
+  "/etc/group",
+  "/etc/ssl",
+  "/etc/ca-certificates",
+  "/etc/ca-certificates.conf",
+  "/etc/pki",
+  "/etc/crypto-policies",
+  "/etc/ld.so.cache",
+  "/etc/ld.so.conf",
+  "/etc/ld.so.conf.d",
+  "/etc/alternatives",
+  "/etc/localtime",
+  "/etc/os-release",
+];
 
 /** Bac à sable minimal, du type de ceux où le tracker lance les commandes npm sous Linux. */
 const BWRAP_PROBE = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-user", "--unshare-pid", "--unshare-net", "true"];
@@ -106,6 +133,15 @@ export function bwrapArgs(sandbox: NpmSandbox, cwd: string, args: string[], extr
     }
     if (stat.isSymbolicLink()) mounts.push("--symlink", fs.readlinkSync(dir), dir);
     else mounts.push("--ro-bind", dir, dir);
+  }
+  for (const entry of ETC_ENTRIES) {
+    let target: string;
+    try {
+      target = fs.realpathSync(entry);
+    } catch {
+      continue;
+    }
+    mounts.push("--ro-bind", target, entry);
   }
   const env = Object.entries(npmEnv(sandbox, "/tmp", extraEnv)).flatMap(([name, value]) => ["--setenv", name, value]);
   return [

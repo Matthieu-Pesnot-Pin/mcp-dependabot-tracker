@@ -789,6 +789,8 @@ test("the npm tools of Claude only run in a project folder of the clone", () => 
     const pairs = (flag: string) => args.flatMap((arg, index) => (arg === flag ? [[args[index + 1], args[index + 2]]] : []));
     assert.deepEqual(pairs("--bind"), [[root, root], [sandbox.cache, sandbox.cache]], "only the clone and the npm cache are writable");
     assert.ok(!pairs("--ro-bind").some(([source]) => source === "/" || source === temp.dir), "the rest of the server stays hidden");
+    assert.ok(!pairs("--ro-bind").some(([, target]) => target === "/etc" || target === "/opt" || target === "/home"), "/etc is mounted file by file, /opt and /home not at all");
+    assert.ok(pairs("--ro-bind").every(([, target]) => !target.startsWith("/etc/") || /^\/etc\/(resolv\.conf|hosts|host\.conf|gai\.conf|nsswitch\.conf|passwd|group|ssl|ca-certificates(\.conf)?|pki|crypto-policies|ld\.so\.(cache|conf|conf\.d)|alternatives|localtime|os-release)$/.test(target)));
     assert.ok(args.includes("--clearenv"));
     assert.deepEqual(args.slice(args.indexOf("--chdir"), args.indexOf("--chdir") + 2), ["--chdir", path.join(root, "web")]);
     assert.deepEqual(args.slice(-2), ["npm", "ci"]);
