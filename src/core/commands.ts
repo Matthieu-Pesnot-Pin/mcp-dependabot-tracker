@@ -37,15 +37,58 @@ export function killTree(pid: number): void {
   }
 }
 
-/** Environnement du serveur transmis aux commandes, sans le token GitHub. */
+/**
+ * Variables du serveur transmises aux commandes : chemins et dossiers du
+ * système, compte, langue, proxy et certificats. Aucun secret du serveur
+ * (GITHUB_TOKEN, VAULT_KEY, AUTH_SECRET…) n'en fait partie.
+ */
+const PASSED_ENV = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "LANG",
+  "LC_ALL",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "SystemRoot",
+  "SystemDrive",
+  "windir",
+  "ComSpec",
+  "PATHEXT",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "ProgramData",
+  "ProgramFiles",
+  "ProgramFiles(x86)",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+  "GIT_SSL_CAINFO",
+];
+
+/** Environnement du serveur transmis aux commandes : les seules variables de `PASSED_ENV`. */
 function inheritedEnv(): NodeJS.ProcessEnv {
-  const { GITHUB_TOKEN: _token, ...env } = process.env;
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of PASSED_ENV) {
+    if (process.env[name] !== undefined) env[name] = process.env[name];
+  }
   return env;
 }
 
 /**
  * Lance `git`, `npm` ou `bwrap` sans shell, et attend sa fin. La commande reçoit
- * l'environnement du serveur sans GITHUB_TOKEN, plus `options.env`. Sous Windows,
+ * les variables système du serveur (`PASSED_ENV`), sans aucun de ses secrets, plus `options.env`. Sous Windows,
  * `npm` est un script `.cmd` que Node ne lance qu'à travers un shell : ses
  * arguments sont alors des options fixes, jamais une valeur venue de
  * l'utilisateur. Le code de sortie n'est pas interprété ici ; un dépassement de

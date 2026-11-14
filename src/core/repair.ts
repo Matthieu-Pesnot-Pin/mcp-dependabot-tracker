@@ -1,4 +1,3 @@
-import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -6,8 +5,8 @@ import { z } from "zod";
 import { RepairReportSchema, TEST_OUTCOMES, type AuditScope, type Operation, type OrganizerTask, type RepairReport, type SessionEvent } from "../../shared/schemas/model.schema.js";
 import type { Settings } from "../../shared/schemas/settings.schema.js";
 import { runClaudeSession, type ClaudeRuntime } from "./claude.js";
-import { tail } from "./commands.js";
 import { TrackerError } from "./errors.js";
+import { NPM_CACHE_DIR, assertSandboxAvailable } from "./npm-sandbox.js";
 import { OrganizerClient, type OrganizerConnection } from "./organizer.js";
 import { organizerConnection } from "./settings.js";
 import type { Store } from "./store.js";
@@ -47,45 +46,6 @@ const MAX_FACTS_CHARS = 20_000;
 
 /** Chemins d'installation gardés par vulnérabilité. */
 const MAX_NODES = 5;
-
-/** Bac à sable minimal, du type de ceux où le tracker lance les commandes npm sous Linux. */
-const BWRAP_PROBE = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--unshare-user", "--unshare-pid", "--unshare-net", "true"];
-
-/** Durée maximale du test de bubblewrap. */
-const BWRAP_PROBE_TIMEOUT_MS = 10_000;
-
-/**
- * Vérifie, sous Linux, que bubblewrap crée un bac à sable pour le compte et
- * avec les restrictions du serveur : le tracker s'en sert pour lancer les
- * commandes npm de Claude, et Claude Code refuse de démarrer sans lui. Lève une erreur qui
- * dit quoi installer ou régler ; sans effet sur les autres systèmes.
- */
-export function assertSandboxAvailable(platform: NodeJS.Platform = process.platform, command = "bwrap"): Promise<void> {
-  if (platform !== "linux") return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, BWRAP_PROBE, { stdio: ["ignore", "ignore", "pipe"], timeout: BWRAP_PROBE_TIMEOUT_MS });
-    let stderr = "";
-    child.stderr.on("data", (chunk) => (stderr += String(chunk)));
-    child.on("error", (err: any) =>
-      reject(
-        new TrackerError(
-          err.code === "ENOENT"
-            ? "The fixes by Claude need bubblewrap (bwrap), which isolates the npm commands of Claude on Linux, and it is not in the PATH of the server. Install it on the server: sudo apt-get install -y bubblewrap socat"
-            : `The fixes by Claude need bubblewrap (bwrap), which could not be started: ${err.message}`
-        )
-      )
-    );
-    child.on("close", (code) => {
-      if (code === 0) return resolve();
-      reject(
-        new TrackerError(
-          `bubblewrap (bwrap) is installed but cannot create a sandbox for the account of the server${stderr.trim() ? `: ${tail(stderr, 3)}` : "."} ` +
-            "Check the AppArmor restriction on user namespaces (kernel.apparmor_restrict_unprivileged_userns on Ubuntu 24.04 and later) and the hardening of the service (RestrictNamespaces, PrivateUsers, SystemCallFilter)."
-        )
-      );
-    });
-  });
-}
 
 /** Vulnérabilités d'un rapport `npm audit --json`, réduites à ce qui sert les corrections. */
 export function auditFacts(report: any, project: string): unknown[] {
@@ -211,7 +171,7 @@ export async function repairVulnerabilities(input: RepairInput): Promise<{ repor
   const tag = input.repoId.split("/")[1];
 
   const configFile = path.join(input.workDir, "repair-mcp.json");
-  const servers = { [ORGANIZER_SERVER]: organizerServer(connection), [NPM_SERVER]: npmServer(input, path.join(input.workDir, "npm-cache")) };
+  const servers = { [ORGANIZER_SERVER]: organizerServer(connection), [NPM_SERVER]: npmServer(input, path.join(input.workDir, NPM_CACHE_DIR)) };
   fs.writeFileSync(configFile, JSON.stringify({ mcpServers: servers }), { encoding: "utf-8", mode: 0o600 });
   let structured: unknown;
   try {

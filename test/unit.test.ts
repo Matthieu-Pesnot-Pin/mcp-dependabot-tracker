@@ -18,8 +18,7 @@ import { authenticateAgent, createAgentToken, listAgentTokens, revokeAgentToken 
 import { crossSiteRejection } from "../src/server/app.js";
 import { readServerConfig } from "../src/core/server-config.js";
 import { describeOperation } from "../src/tools/format.js";
-import { assertSandboxAvailable } from "../src/core/repair.js";
-import { bwrapArgs, projectDir } from "../src/core/npm-sandbox.js";
+import { assertSandboxAvailable, bwrapArgs, projectDir } from "../src/core/npm-sandbox.js";
 import { npmArgs } from "../src/npm-tools.js";
 import { organizerUrl } from "../src/core/organizer.js";
 import { readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
@@ -137,16 +136,19 @@ test("diffLockfiles lists changed, added and removed packages", () => {
   assert.throws(() => parseLockfile('{"lockfileVersion":1,"dependencies":{}}', "gui"), /gui\/package-lock.json has no "packages" section/);
 });
 
-test("commands run without GITHUB_TOKEN in their environment", async () => {
-  const previous = process.env.GITHUB_TOKEN;
-  process.env.GITHUB_TOKEN = "secret-token";
+test("commands run without the secrets of the server in their environment", async () => {
+  const secrets = ["GITHUB_TOKEN", "VAULT_KEY", "AUTH_SECRET"];
+  const previous = secrets.map((name) => process.env[name]);
+  for (const name of secrets) process.env[name] = "secret-value";
   try {
-    const result = await runCommand("git", ["-c", "alias.showtoken=!echo token=[$GITHUB_TOKEN]", "showtoken"], { cwd: process.cwd() });
+    const result = await runCommand("git", ["-c", "alias.showsecrets=!echo secrets=[$GITHUB_TOKEN$VAULT_KEY$AUTH_SECRET] path=[${PATH:+set}]", "showsecrets"], { cwd: process.cwd() });
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout.trim(), "token=[]");
+    assert.equal(result.stdout.trim(), "secrets=[] path=[set]");
   } finally {
-    if (previous === undefined) delete process.env.GITHUB_TOKEN;
-    else process.env.GITHUB_TOKEN = previous;
+    secrets.forEach((name, index) => {
+      if (previous[index] === undefined) delete process.env[name];
+      else process.env[name] = previous[index];
+    });
   }
 });
 
@@ -737,7 +739,7 @@ test("setup-mcp declares the MCP mode with the server address and an agent token
   }
 });
 
-test("the fixes by Claude check that bubblewrap can build a sandbox on Linux, and only there", async () => {
+test("the npm commands check that bubblewrap can build a sandbox on Linux, and only there", async () => {
   await assertSandboxAvailable("win32", "no-such-bwrap");
   await assert.rejects(assertSandboxAvailable("linux", "no-such-bwrap"), /need bubblewrap \(bwrap\).*not in the PATH of the server\. Install it on the server: sudo apt-get install -y bubblewrap socat/);
   await assert.rejects(assertSandboxAvailable("linux", process.execPath), /bubblewrap \(bwrap\) is installed but cannot create a sandbox for the account of the server: .*--ro-bind[\s\S]*apparmor_restrict_unprivileged_userns/);
@@ -790,6 +792,8 @@ test("the npm tools of Claude only run in a project folder of the clone", () => 
     assert.ok(args.includes("--clearenv"));
     assert.deepEqual(args.slice(args.indexOf("--chdir"), args.indexOf("--chdir") + 2), ["--chdir", path.join(root, "web")]);
     assert.deepEqual(args.slice(-2), ["npm", "ci"]);
+    const extra = bwrapArgs(sandbox, root, ["audit"], { npm_config_fund: "false" });
+    assert.ok(extra.join(" ").includes("--setenv npm_config_fund false"), "the variables of the command are set inside the sandbox");
   } finally {
     temp.cleanup();
   }

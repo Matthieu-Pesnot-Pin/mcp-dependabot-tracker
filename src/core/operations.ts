@@ -29,6 +29,7 @@ import {
   projectLabel,
   type Lockfile,
 } from "./npm-audit.js";
+import { NPM_CACHE_DIR, assertSandboxAvailable, runSandboxedNpm } from "./npm-sandbox.js";
 import { auditFacts, repairVulnerabilities } from "./repair.js";
 import { assertNotDeprecated, isActive, type Store } from "./store.js";
 
@@ -129,7 +130,7 @@ function gitEnv(settings: GitSetting[]): Record<string, string> {
  * archives de paquets à `bundleDependencies` (ex. `@tailwindcss/oxide-wasm32-wasi`),
  * que npm 12 classe en dépendances distantes avec `--package-lock-only`.
  */
-const NPM_ENV = { npm_config_update_notifier: "false", npm_config_fund: "false", npm_config_allow_remote: "all" };
+const NPM_ENV = { npm_config_fund: "false", npm_config_allow_remote: "all" };
 
 /** Options npm qui limitent l'audit et ses corrections au périmètre `scope`. */
 function scopeArgs(scope: AuditScope): string[] {
@@ -213,9 +214,9 @@ class Runner {
     return path.join(workDir, CLONE_DIR);
   }
 
-  private async run(command: "git" | "npm", args: string[], cwd: string, env: Record<string, string> = {}): Promise<CommandResult> {
-    this.log(`$ ${command} ${args.join(" ")}`);
-    return runCommand(command, args, { cwd, env, signal: this.signal });
+  private async run(args: string[], cwd: string, env: Record<string, string>): Promise<CommandResult> {
+    this.log(`$ git ${args.join(" ")}`);
+    return runCommand("git", args, { cwd, env, signal: this.signal });
   }
 
   get gitDir(): string {
@@ -232,7 +233,7 @@ class Runner {
   async git(args: string[], options: { cwd?: string; auth?: boolean } = {}): Promise<string> {
     const env = gitEnv(options.auth ? [...GIT_SETTINGS, gitAuthSetting(this.config)] : GIT_SETTINGS);
     if (options.cwd === undefined) Object.assign(env, { GIT_DIR: this.gitDir, GIT_WORK_TREE: this.repoDir });
-    const result = await this.run("git", args, options.cwd ?? this.repoDir, env);
+    const result = await this.run(args, options.cwd ?? this.repoDir, env);
     if (result.code !== 0) {
       const detail = tail(result.stderr) || tail(result.stdout);
       this.log(detail);
@@ -241,9 +242,15 @@ class Runner {
     return result.stdout;
   }
 
-  /** npm dans le dossier d'un projet du clone ; sa sortie JSON est lue même avec un code de sortie non nul. */
+  /**
+   * npm dans le dossier d'un projet du clone, dans le bac à sable des commandes
+   * npm, avec le cache de l'opération ; sa sortie JSON est lue même avec un code
+   * de sortie non nul.
+   */
   async npm(project: string, args: string[]): Promise<any> {
-    const result = await this.run("npm", args, path.join(this.repoDir, project), NPM_ENV);
+    this.log(`$ npm ${args.join(" ")}`);
+    const sandbox = { root: this.repoDir, cache: path.join(this.operation.workDir!, NPM_CACHE_DIR) };
+    const result = await runSandboxedNpm(sandbox, project, args, { env: NPM_ENV, signal: this.signal });
     return parseNpmJson(result.stdout, result.stderr, `npm ${args.slice(0, args.indexOf("--json")).join(" ")} in ${projectLabel(project) || "./"}`);
   }
 
@@ -274,6 +281,7 @@ class Runner {
 
 async function cloneStep(runner: Runner): Promise<void> {
   runner.setStep("clone", "running");
+  await assertSandboxAvailable();
   const operation = runner.operation;
   const [owner, name] = operation.repoId.split("/");
   const workDir = fs.mkdtempSync(path.join(runner.cloneDir, "mcp-dependabot-tracker-"));
