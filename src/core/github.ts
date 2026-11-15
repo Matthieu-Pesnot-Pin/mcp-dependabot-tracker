@@ -17,6 +17,19 @@ export interface GitHubUser {
   name: string | null;
 }
 
+/** Compte d'un token et sa date d'expiration (ISO), null pour un token sans expiration. */
+export interface TokenCheck {
+  login: string;
+  expiresAt: string | null;
+}
+
+/** Date d'expiration d'un token telle que GitHub l'envoie (`2026-12-14 14:31:47 UTC`), en ISO. */
+export function tokenExpiration(header: string | null): string | null {
+  if (!header) return null;
+  const date = new Date(header.trim().replace(/ UTC$/, "Z").replace(" ", "T"));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 /** Pull request créée ; `createdAt` est sa date d'ouverture. */
 export interface CreatedPullRequest {
   number: number;
@@ -61,7 +74,7 @@ export class GitHubClient {
     private readonly tokenName = "GITHUB_TOKEN"
   ) {}
 
-  private async request(method: string, url: string, body?: unknown): Promise<{ json: any; link: string | null }> {
+  private async request(method: string, url: string, body?: unknown): Promise<{ json: any; link: string | null; expiration: string | null }> {
     let response: Response;
     try {
       response = await fetch(url.startsWith("http") ? url : `${this.config.apiUrl}${url}`, {
@@ -93,7 +106,7 @@ export class GitHubClient {
       if (response.status === 401) throw new TrackerError(`GitHub rejected ${this.tokenName} (401: ${message}).`);
       throw new GitHubApiError(response.status, `GitHub API ${method} ${url} failed (${response.status}): ${message}`);
     }
-    return { json, link: response.headers.get("link") };
+    return { json, link: response.headers.get("link"), expiration: response.headers.get("github-authentication-token-expiration") };
   }
 
   async getRepository(owner: string, name: string): Promise<GitHubRepository> {
@@ -162,6 +175,12 @@ export class GitHubClient {
     const sha = json?.commit?.sha;
     if (typeof sha !== "string") throw new TrackerError(`GitHub API returned no commit for the branch ${branch} of ${owner}/${name}.`);
     return sha;
+  }
+
+  /** Compte du token et sa date d'expiration ; un token refusé lève une erreur. */
+  async checkToken(): Promise<TokenCheck> {
+    const { json, expiration } = await this.request("GET", "/user");
+    return { login: json.login, expiresAt: tokenExpiration(expiration) };
   }
 
   async getAuthenticatedUser(): Promise<GitHubUser> {

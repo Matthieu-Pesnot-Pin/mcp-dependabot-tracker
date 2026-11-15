@@ -9,7 +9,7 @@ import type { Hono } from "hono";
 import { AuditAll } from "../core/audit-all.js";
 import { createAuth, listUsers, migrateAuth, type Auth } from "../core/auth.js";
 import { checkClaudeToken, packagedClaudeCommand, type ClaudeRuntime } from "../core/claude.js";
-import { readGitHubConfig, type GitHubConfig } from "../core/config.js";
+import { gitHubConfig, readGitHubServers, type GitHubConfig } from "../core/config.js";
 import { GitHubClient } from "../core/github.js";
 import { resolveCloneDir, resolveDataDir } from "../core/data-dir.js";
 import { DeployServerStore } from "../core/deploy-servers.js";
@@ -19,7 +19,7 @@ import { runDefaultBranchAudit, type OperationContext } from "../core/operations
 import { OrganizerClient } from "../core/organizer.js";
 import { refreshReportTask } from "../core/repair.js";
 import { SYNC_INTERVAL_MS, staleRepos, syncRepository } from "../core/repos.js";
-import { deployToken, encryptStoredTokens, readSettings, type SettingsChecks } from "../core/settings.js";
+import { adoptEnvGitHubToken, deployToken, encryptStoredTokens, githubToken, readSettings, type SettingsChecks } from "../core/settings.js";
 import { readServerConfig, type ServerConfig } from "../core/server-config.js";
 import { Store } from "../core/store.js";
 import { parseVaultKey } from "../core/vault.js";
@@ -84,12 +84,10 @@ export async function serve(): Promise<void> {
     process.exit(1);
   });
 
-  let github: GitHubConfig;
   let cloneDir: string;
   let config: ServerConfig;
   let vaultKey: Buffer;
   try {
-    github = readGitHubConfig();
     cloneDir = resolveCloneDir(dataDir);
     config = readServerConfig();
     vaultKey = parseVaultKey(process.env.VAULT_KEY);
@@ -116,18 +114,25 @@ export async function serve(): Promise<void> {
     logger.error(err.message);
     process.exit(1);
   }
-  const deployer = new Deployer(store, deployServers, new DeploymentStore(dataDir), github, (message) => logger.error(message), () => deployToken(readSettings(dataDir, vaultKey)));
+  const githubServers = readGitHubServers();
+  /** Configuration GitHub avec le token du tracker, relu dans les réglages à chaque usage. */
+  const github = (): GitHubConfig => gitHubConfig(githubServers, githubToken(readSettings(dataDir, vaultKey)));
   const claude: ClaudeRuntime = { command: packagedClaudeCommand(), home: path.join(dataDir, "claude") };
   const settingsChecks: SettingsChecks = {
     organizer: (connection) => new OrganizerClient(connection).space(),
     claudeToken: (token) => checkClaudeToken(claude, token),
-    deployToken: async (token) => {
-      await new GitHubClient({ ...github, token }, "the deployment token").getAuthenticatedUser();
-    },
+    githubToken: (token) => new GitHubClient({ ...githubServers, token }, "the token").checkToken(),
   };
+  const adoption = await adoptEnvGitHubToken(dataDir, vaultKey, process.env.GITHUB_TOKEN, settingsChecks);
+  if (adoption.status === "adopted") {
+    logger.info("GITHUB_TOKEN is now the GitHub token of the tracker in the settings, encrypted with VAULT_KEY: it can be removed from the environment.");
+    if (adoption.warning) logger.warn(`GITHUB_TOKEN was taken over, but GitHub did not accept it: ${adoption.warning}`);
+  }
+  if (adoption.status === "ignored") logger.warn("GITHUB_TOKEN is ignored: the GitHub token of the tracker is the one of the settings. Remove the variable from the environment.");
+  const deployer = new Deployer(store, deployServers, new DeploymentStore(dataDir), github, (message) => logger.error(message), () => deployToken(readSettings(dataDir, vaultKey)));
   const operations: OperationContext = {
     store,
-    githubConfig: () => github,
+    githubConfig: github,
     cloneDir: () => cloneDir,
     logError: (message) => logger.error(message),
     settings: () => readSettings(dataDir, vaultKey),
@@ -139,6 +144,7 @@ export async function serve(): Promise<void> {
     store,
     dataDir,
     github,
+    githubServerUrl: githubServers.serverUrl,
     operations,
     auditAll,
     deployer,
@@ -168,15 +174,24 @@ export async function serve(): Promise<void> {
   for (const user of users.filter((candidate) => !candidate.twoFactor)) {
     logger.warn(`The account ${user.email} signs in with its password alone: enable two-factor authentication with "mcp-dependabot-tracker user totp ${user.email}".`);
   }
+  if (githubToken(readSettings(dataDir, vaultKey)) === null) {
+    logger.warn("The GitHub token of the tracker is not set: enter it in the settings of the interface (Réglages › GitHub). Until then, nothing is synced, audited or fixed.");
+  }
 
   let syncing = false;
   /** Relit les alertes des dépôts lus il y a plus de 10 minutes, et le statut de la tâche organizer du dernier rapport de Claude. */
   const syncStaleRepos = async () => {
     if (syncing) return;
+    let config: GitHubConfig;
+    try {
+      config = github();
+    } catch {
+      return;
+    }
     syncing = true;
     try {
       for (const repo of staleRepos(store, SYNC_INTERVAL_MS)) {
-        const synced = await syncRepository(store, github, repo.id);
+        const synced = await syncRepository(store, config, repo.id);
         if (synced.syncError) logger.warn(`Dependabot alerts of ${repo.id} not synced: ${synced.syncError}`);
         await refreshReportTask(store, readSettings(dataDir, vaultKey), repo.id).catch((err: any) =>
           logger.warn(`Organizer task of ${repo.id} not refreshed: ${err?.message ?? err}`)

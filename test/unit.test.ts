@@ -23,7 +23,9 @@ import { describeOperation } from "../src/tools/format.js";
 import { assertSandboxAvailable, bwrapArgs, projectDir } from "../src/core/npm-sandbox.js";
 import { npmArgs } from "../src/npm-tools.js";
 import { organizerUrl } from "../src/core/organizer.js";
-import { encryptStoredTokens, readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
+import { adoptEnvGitHubToken, encryptStoredTokens, readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
+import { tokenExpiration } from "../src/core/github.js";
+import { gitHubConfig, readGitHubServers } from "../src/core/config.js";
 import type { Alert, Operation, Repo } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS } from "../shared/schemas/settings.schema.js";
 import { makeTempDir } from "./helpers.js";
@@ -657,9 +659,9 @@ test("saveSettings tests a changed organizer connection, checks a new Claude tok
       checked.push(`claude ${token}`);
       if (token === "bad-token") throw new Error("The Claude token was refused: Invalid bearer token");
     },
-    deployToken: async (token) => {
-      checked.push(`deploy ${token}`);
-      if (token === "bad-deploy") throw new Error("GitHub rejected the deployment token (401: Bad credentials).");
+    githubToken: async (token) => {
+      checked.push(`github ${token}`);
+      return { login: "octo", expiresAt: null };
     },
   };
   const analysis = { maxTurns: 40, maxMinutes: 15 };
@@ -702,7 +704,7 @@ test("saveSettings tests a changed organizer connection, checks a new Claude tok
   }
 });
 
-test("saveSettings checks a new deployment token, keeps it encrypted, and removes it on null", async () => {
+test("saveSettings checks the GitHub tokens with their account and expiry, keeps them encrypted, and removes the deployment token on null", async () => {
   const temp = makeTempDir("tracker-deploy-token-");
   const checked: string[] = [];
   const checks: SettingsChecks = {
@@ -710,30 +712,67 @@ test("saveSettings checks a new deployment token, keeps it encrypted, and remove
       throw new Error("no organizer here");
     },
     claudeToken: async () => {},
-    deployToken: async (token) => {
+    githubToken: async (token) => {
       checked.push(token);
-      if (token === "bad-deploy") throw new Error("GitHub rejected the deployment token (401: Bad credentials).");
+      if (token.startsWith("bad")) throw new Error("GitHub rejected the token (401: Bad credentials).");
+      return { login: "Matthieu-Pesnot-Pin", expiresAt: "2026-12-14T14:31:47.000Z" };
     },
   };
   const analysis = { maxTurns: 40, maxMinutes: 15 };
   const key = parseVaultKey(generateVaultKey());
   try {
-    assert.deepEqual(readSettings(temp.dir, key).deploy, { token: null, savedAt: null }, "a settings file without the deployment token reads it as absent");
-    const saved = await saveSettings(temp.dir, key, { organizerUrl: "", deployToken: "github_pat_read_only_9876", analysis }, checks);
-    assert.deepEqual(checked, ["github_pat_read_only_9876"]);
+    assert.deepEqual(readSettings(temp.dir, key).deploy, { token: null, savedAt: null, login: null, expiresAt: null }, "a settings file without the deployment token reads it as absent");
+    const saved = await saveSettings(temp.dir, key, { organizerUrl: "", githubToken: "github_pat_tracker_1234", deployToken: "github_pat_read_only_9876", analysis }, checks);
+    assert.deepEqual(checked, ["github_pat_tracker_1234", "github_pat_read_only_9876"]);
+    assert.deepEqual([saved.github.tokenHint, saved.github.login, saved.github.expiresAt], ["1234", "Matthieu-Pesnot-Pin", "2026-12-14T14:31:47.000Z"]);
     assert.equal(saved.deploy.tokenHint, "9876");
     assert.ok(saved.deploy.savedAt);
+    assert.equal(readSettings(temp.dir, key).github.token, "github_pat_tracker_1234");
+    await assert.rejects(saveSettings(temp.dir, key, { organizerUrl: "", githubToken: "bad-tracker", analysis }, checks), /rejected the token/);
+    assert.equal(readSettings(temp.dir, key).github.token, "github_pat_tracker_1234", "a refused tracker token saves nothing");
     assert.ok(!JSON.stringify(saved).includes("github_pat"), "the GUI never receives the whole token");
     assert.ok(!fs.readFileSync(path.join(temp.dir, "settings.json"), "utf-8").includes("github_pat"), "the token is encrypted in settings.json");
     assert.equal(readSettings(temp.dir, key).deploy.token, "github_pat_read_only_9876");
 
-    await assert.rejects(saveSettings(temp.dir, key, { organizerUrl: "", deployToken: "bad-deploy", analysis }, checks), /deployment token/);
+    await assert.rejects(saveSettings(temp.dir, key, { organizerUrl: "", deployToken: "bad-deploy", analysis }, checks), /rejected the token/);
     assert.equal(readSettings(temp.dir, key).deploy.token, "github_pat_read_only_9876", "a refused token saves nothing");
     assert.equal((await saveSettings(temp.dir, key, { organizerUrl: "", analysis }, checks)).deploy.tokenHint, "9876", "an absent token keeps the saved one");
 
     const removed = await saveSettings(temp.dir, key, { organizerUrl: "", deployToken: null, analysis }, checks);
-    assert.deepEqual(removed.deploy, { tokenHint: null, savedAt: null });
+    assert.deepEqual(removed.deploy, { tokenHint: null, savedAt: null, login: null, expiresAt: null });
     assert.equal(readSettings(temp.dir, key).deploy.token, null);
+    assert.equal(readSettings(temp.dir, key).github.token, "github_pat_tracker_1234", "removing the deployment token keeps the tracker token");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("GITHUB_TOKEN is taken over into the settings once, checked and encrypted, then ignored", async () => {
+  const temp = makeTempDir("tracker-env-token-");
+  const key = parseVaultKey(generateVaultKey());
+  let accept = false;
+  const checks: SettingsChecks = {
+    organizer: async () => {
+      throw new Error("no organizer here");
+    },
+    claudeToken: async () => {},
+    githubToken: async () => {
+      if (!accept) throw new Error("GitHub rejected the token (401: Bad credentials).");
+      return { login: "octo", expiresAt: null };
+    },
+  };
+  try {
+    assert.deepEqual(await adoptEnvGitHubToken(temp.dir, key, undefined, checks), { status: "none" });
+    assert.deepEqual(await adoptEnvGitHubToken(temp.dir, key, "  ", checks), { status: "none" });
+    const refused = await adoptEnvGitHubToken(temp.dir, key, "ghp_from_env_0000", checks);
+    assert.equal(refused.status, "adopted");
+    assert.match((refused as any).warning, /rejected the token/, "a token GitHub refuses is taken over anyway, with a warning");
+    const stored = readSettings(temp.dir, key).github;
+    assert.deepEqual([stored.token, stored.login], ["ghp_from_env_0000", null]);
+    assert.ok(!fs.readFileSync(path.join(temp.dir, "settings.json"), "utf-8").includes("ghp_from_env"), "the token is encrypted");
+    accept = true;
+    assert.deepEqual(await adoptEnvGitHubToken(temp.dir, key, "ghp_other_1111", checks), { status: "ignored" });
+    assert.equal(readSettings(temp.dir, key).github.token, "ghp_from_env_0000", "the token of the settings wins");
   } finally {
     temp.cleanup();
   }
@@ -939,6 +978,16 @@ test("the key line and the installation command target the dedicated file, and k
   assert.deepEqual(validateServerInput({ name: " web ", host: "10.0.0.1", port: 2222, username: "deploy" }), { name: "web", host: "10.0.0.1", port: 2222, username: "deploy" });
   assert.throws(() => validateServerInput({ name: "web", host: "10.0.0.1", port: 70000, username: "deploy" }), /port/);
   assert.throws(() => validateServerInput({ name: "web", host: "10.0.0.1", port: 22, username: "a b" }), /Utilisateur invalide/);
+});
+
+test("the GitHub servers come from the environment and the tracker token from the settings", () => {
+  assert.deepEqual(readGitHubServers({}), { apiUrl: "https://api.github.com", serverUrl: "https://github.com" });
+  assert.deepEqual(readGitHubServers({ GITHUB_API_URL: "https://ghe.example.com/api/v3/", GITHUB_SERVER_URL: "https://ghe.example.com/" }), { apiUrl: "https://ghe.example.com/api/v3", serverUrl: "https://ghe.example.com" });
+  assert.throws(() => gitHubConfig(readGitHubServers({}), null), /not set: enter it in the settings \(Réglages › GitHub\)/);
+  assert.equal(gitHubConfig(readGitHubServers({}), "t").token, "t");
+  assert.equal(tokenExpiration("2026-12-14 14:31:47 UTC"), "2026-12-14T14:31:47.000Z");
+  assert.equal(tokenExpiration(null), null);
+  assert.equal(tokenExpiration("not a date"), null);
 });
 
 test("the deployment token becomes the git variables of the script, and nothing without token", () => {

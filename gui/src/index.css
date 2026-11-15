@@ -1839,6 +1839,57 @@ code {
   color: var(--text);
 }
 
+.github-token {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.github-token:last-child {
+  border-bottom: none;
+}
+
+.github-token-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.github-token-missing {
+  color: var(--text);
+}
+
+.github-token-rights {
+  margin: 12px 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.github-token-input {
+  max-width: 520px;
+}
+
+.link-danger {
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.link-danger:hover {
+  text-decoration: underline;
+}
+
+.settings-note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin: -16px 0 28px;
+  font-size: 12px;
+  color: var(--faint);
+}
+
 .claude-token-input {
   padding-left: 34px;
 }

@@ -112,9 +112,18 @@ La commande crée (ou complète) le `.mcp.json` du répertoire courant avec une 
 
 `SERVER_URL` est l'adresse publique du serveur, `APP_URL`. Le mode MCP appelle `<SERVER_URL>/api/agent/…` avec l'en-tête `Authorization: Bearer <token>` : l'adresse doit joindre le serveur sans autre authentification. Sans `SERVER_URL` ou `AGENT_TOKEN`, le mode MCP refuse de démarrer.
 
-### Token GitHub
+### Tokens GitHub
 
-Un token à grain fin, limité aux dépôts suivis, avec les permissions :
+Le tracker utilise deux tokens GitHub, saisis dans l'interface (écran Réglages, section « GitHub — accès aux dépôts ») et chiffrés avec `VAULT_KEY` dans `<données>/settings.json`. Chacun est vérifié auprès de GitHub à l'enregistrement : un token refusé n'est pas enregistré, et l'écran affiche ses quatre derniers caractères, son compte et sa date d'expiration. Ils se remplacent sans redémarrer le serveur.
+
+- **Token du tracker** — lit les alertes, clone les dépôts, pousse les branches de correction et ouvre les pull requests. Il ne quitte jamais le processus du tracker. Sans lui, le serveur démarre et l'interface fonctionne, mais rien n'est synchronisé, audité ni corrigé : ces actions renvoient vers les Réglages, et le journal le signale au démarrage. Il se remplace, il ne se retire pas.
+- **Token de déploiement** — facultatif, en lecture seule, transmis aux scripts de déploiement pour leur `git pull` (voir [Accès au code des dépôts privés](#le-déploiement)).
+
+Deux tokens plutôt qu'un : le token de déploiement voyage jusqu'aux serveurs cibles, où les scripts d'installation des paquets peuvent le lire ; il ne doit donc rien permettre de plus que lire du code déjà présent sur ces serveurs. Le token du tracker, qui écrit sur les dépôts, reste dans le tracker.
+
+**Reprise de `GITHUB_TOKEN`** — tant que les réglages n'ont pas de token du tracker, une variable `GITHUB_TOKEN` présente dans l'environnement est reprise au démarrage : vérifiée auprès de GitHub (un refus est signalé dans le journal, le token est repris quand même), chiffrée, puis enregistrée dans les réglages. Ensuite, c'est le token des réglages qui compte : une variable `GITHUB_TOKEN` encore présente est ignorée, avec un avertissement dans le journal. Retirez-la de l'environnement une fois reprise.
+
+Le token du tracker est un token à grain fin, limité aux dépôts suivis, avec les permissions :
 
 | Permission | Accès | Pour |
 |---|---|---|
@@ -123,7 +132,7 @@ Un token à grain fin, limité aux dépôts suivis, avec les permissions :
 | Pull requests | lecture et écriture | ouvrir la pull request, suivre celles qui attendent d'être mergées |
 | Metadata | lecture | imposée par GitHub ; liste les dépôts proposés à l'ajout |
 
-Un token classique convient aussi, avec les scopes `repo` et `security_events`. Les commits sont signés du compte du token, avec son adresse `noreply` GitHub. Le token est transmis à `git` par un en-tête HTTP (`http.<serveur>/.extraheader`, dans l'environnement de la commande) : il n'est écrit ni dans le clone ni dans la ligne de commande. Les commandes `git` et `npm` ne reçoivent du serveur que ses variables système (`PATH`, `HOME`, langue, dossiers temporaires, proxy et certificats) : ni `GITHUB_TOKEN`, ni `VAULT_KEY`, ni `AUTH_SECRET`, ni aucune autre variable du service.
+Un token classique convient aussi, avec le scope `repo` (qui comprend `security_events`), mais il ouvre tous vos dépôts, organisations comprises. Les commits sont signés du compte du token, avec son adresse `noreply` GitHub. Le token est transmis à `git` par un en-tête HTTP (`http.<serveur>/.extraheader`, dans l'environnement de la commande) : il n'est écrit ni dans le clone ni dans la ligne de commande. Les commandes `git` et `npm` ne reçoivent du serveur que ses variables système (`PATH`, `HOME`, langue, dossiers temporaires, proxy et certificats) : ni les tokens GitHub, ni `VAULT_KEY`, ni `AUTH_SECRET`, ni aucune autre variable du service.
 
 ### Variables d'environnement du serveur
 
@@ -131,7 +140,7 @@ Elles se renseignent dans l'environnement du service, ou dans un fichier `.env` 
 
 | Variable | Rôle |
 |---|---|
-| `GITHUB_TOKEN` | **Obligatoire.** Token GitHub (voir ci-dessus). Sans lui, le serveur refuse de démarrer. |
+| `GITHUB_TOKEN` | Facultatif. Repris au premier démarrage comme token du tracker, puis ignoré : le token se règle dans l'interface (voir [Tokens GitHub](#tokens-github)). |
 | `DATA_DIR` | **Obligatoire, sans défaut.** Répertoire des données : comptes, sessions, tokens, scripts de déploiement, et clones des opérations dans `<DATA_DIR>/clones`. Il est créé s'il n'existe pas ; hors de Windows, le serveur le réserve à son compte (droits `700`) à chaque démarrage, et ses fichiers sont écrits en `600`. Requis par les modes `serve` et `user` ; le mode `mcp` ne stocke rien. |
 | `VAULT_KEY` | **Obligatoire.** 32 octets en base64 (`--generate-vault-key`), qui chiffrent en AES-256-GCM les clés privées des serveurs de déploiement et les tokens de l'organizer et de Claude. Sans elle, ou si elle ne déchiffre pas les clés et les tokens déjà enregistrés, le serveur refuse de démarrer. La perdre oblige à reconnecter chaque serveur et à ressaisir les deux tokens. |
 | `APP_PORT` | **Obligatoire.** Port d'écoute du serveur. |
@@ -229,13 +238,13 @@ Une tâche introuvable, sans le tag ou non assignée au propriétaire fait écho
 
 **Réglages** (écran Réglages, roue dentée de l'accueil) :
 
+- **GitHub** — le token du tracker et le token de déploiement (voir [Tokens GitHub](#tokens-github)) ; « Retirer », confirmé par un second clic, supprime le token de déploiement.
 - **Organizer** — adresse du site (https, sauf pour un site de cette machine) et token d'agent, créé dans l'organizer (Paramètres › Agents) : il couvre un espace, avec les droits de son créateur. Une connexion modifiée est testée à l'enregistrement ; « Tester » la reteste. L'écran affiche l'espace et son propriétaire.
 - **Claude** — un token d'abonnement (Pro, Max, Team ou Enterprise) : lancer `claude setup-token` sur un poste avec navigateur, autoriser l'accès, puis coller le token affiché (valable un an). Il est vérifié à l'enregistrement par une requête minimale ; un token refusé n'est pas enregistré. L'écran affiche sa date d'enregistrement et d'expiration.
 - **Corrections par Claude** — les limites d'une session.
-- **Déploiements** — le token de déploiement, transmis aux scripts de déploiement pour leur `git pull` (voir [Accès au code des dépôts privés](#accès-au-code-des-dépôts-privés)). Il est vérifié auprès de GitHub à l'enregistrement ; un token refusé n'est pas enregistré. L'écran affiche ses quatre derniers caractères et sa date d'enregistrement ; « Retirer » le supprime.
 - **Accès des agents** — les tokens d'agent, un par ligne : nom, quatre derniers caractères, date de création et de dernière utilisation ; « Révoquer », au survol (en permanence sur un écran tactile), le révoque après un second clic de confirmation dans les 4 secondes. « Nouveau token » ouvre un champ en place pour le nommer (Entrée crée, Échap annule) ; le token s'affiche alors une seule fois, avec « Copier » et la commande `--claude-setup-mcp` qui déclare le mode MCP. Créer ou révoquer un token prend effet aussitôt, sans « Enregistrer ».
 
-Les tokens de l'organizer, de Claude et de déploiement sont enregistrés dans `<données>/settings.json`, chiffrés avec `VAULT_KEY` (un fichier écrit en clair par une version antérieure est chiffré au démarrage), ceux des agents par leur empreinte dans `<données>/agent-tokens.json`, lisibles par le seul compte du serveur ; la GUI n'en reçoit que les quatre derniers caractères. Claude Code garde sa configuration dans `<données>/claude`. L'écran est protégé comme le reste de l'interface, par la session de l'utilisateur.
+Les tokens GitHub, de l'organizer et de Claude sont enregistrés dans `<données>/settings.json`, chiffrés avec `VAULT_KEY` (un fichier écrit en clair par une version antérieure est chiffré au démarrage), ceux des agents par leur empreinte dans `<données>/agent-tokens.json`, lisibles par le seul compte du serveur ; la GUI n'en reçoit que les quatre derniers caractères. Claude Code garde sa configuration dans `<données>/claude`. L'écran est protégé comme le reste de l'interface, par la session de l'utilisateur.
 
 **Suivi** — la tâche du dernier rapport de Claude s'affiche dans la colonne « Suivi » de la ligne du dépôt (« MNT-12 », qui ouvre la tâche sur l'organizer) tant qu'elle n'est pas terminée : son statut est relu sur l'organizer avec les alertes, toutes les 10 minutes. La pull request de la correction mentionne la clé de la tâche.
 
@@ -263,11 +272,11 @@ Le renouvellement et la révocation valent pour tous les dépôts qui utilisent 
 
 **Déploiement** — « Déployer », actif quand le serveur est testé et le script écrit, lance le script sur le serveur et le suit en direct. Le script est copié dans un dossier temporaire du serveur (`mktemp -d`, supprimé à la fin), puis exécuté avec bash depuis le dossier personnel, l'entrée venant de `/dev/null` ; sa sortie (stdout et stderr) s'affiche au fil de l'eau, et sa ligne en cours est lue dans la trace de bash (`set -x`, sur un descripteur à part : la sortie n'en contient rien). Un déploiement réussi (code 0) retire la marque « à déployer » du dépôt ; un échec donne le code de sortie et la ligne du script en cours. « Interrompre » envoie SIGTERM à tout le groupe de processus du script, puis ferme la connexion. Un seul déploiement à la fois par dépôt ; le retrait d'un dépôt est refusé pendant un déploiement. Un déploiement que l'arrêt du serveur a interrompu passe en échec au démarrage suivant. Les 20 derniers déploiements de chaque dépôt sont conservés, avec le script lancé et la sortie (ses 200 000 derniers caractères).
 
-**Accès au code des dépôts privés** — le `git pull` d'un script de déploiement doit s'authentifier auprès de GitHub pour un dépôt privé ; lancé par le tracker, il n'a ni terminal ni assistant d'identifiants (celui de VS Code n'existe que dans ses sessions). Le tracker lui fournit un **token de déploiement**, réglé une fois dans les Réglages : un token à grain fin en **lecture seule** (permission *Contents* : *Read-only*, *Metadata* imposée), limité aux dépôts déployés (*Only select repositories*). Un dépôt s'y ajoute en modifiant le token sur GitHub : sa valeur ne change pas, rien n'est à refaire. Ce n'est jamais `GITHUB_TOKEN`, qui écrit sur les dépôts et ne quitte pas le processus du tracker.
+**Accès au code des dépôts privés** — le `git pull` d'un script de déploiement doit s'authentifier auprès de GitHub pour un dépôt privé ; lancé par le tracker, il n'a ni terminal ni assistant d'identifiants (celui de VS Code n'existe que dans ses sessions). Le tracker lui fournit un **token de déploiement**, réglé une fois dans les Réglages : un token à grain fin en **lecture seule** (permission *Contents* : *Read-only*, *Metadata* imposée), limité aux dépôts déployés (*Only select repositories*). Un dépôt s'y ajoute en modifiant le token sur GitHub : sa valeur ne change pas, rien n'est à refaire. Ce n'est jamais le token du tracker, qui écrit sur les dépôts et ne quitte pas le processus du tracker.
 
 À chaque déploiement, le tracker relit le token et l'exporte dans l'environnement du script sous forme de réglage git (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0` = `http.<serveur GitHub>/.extraheader`, `GIT_CONFIG_VALUE_0` = en-tête `AUTHORIZATION`), avec `GIT_TERMINAL_PROMPT=0` : un simple `git pull` sur un remote https s'authentifie sans autre réglage, et un échec d'authentification est immédiat. Ces variables sont exportées avant le début de la trace de bash : le token n'apparaît ni dans la trace, ni dans le script enregistré. Rien n'est écrit sur le serveur cible : ni token, ni `~/.git-credentials`, ni configuration git, et les sessions VS Code ne sont pas touchées.
 
-Tout processus lancé par le script hérite de ces variables, `npm ci` compris : retirez-les juste après le `git pull`, pour que les scripts d'installation des paquets ne voient pas le token :
+Tout processus lancé par le script hérite de ces variables, `npm ci` compris : retirez-les juste après le `git pull`, pour ne pas les transmettre aux commandes suivantes. Ce n'est pas une barrière étanche : l'environnement de départ du script reste lisible dans `/proc/<pid>/environ`, et du code qui tourne en root lit tout le serveur. La sécurité repose sur les droits du token : en lecture seule, limité à des dépôts dont le code est déjà sur le serveur cible, un token volé n'ouvre rien de plus.
 
 ```bash
 git pull

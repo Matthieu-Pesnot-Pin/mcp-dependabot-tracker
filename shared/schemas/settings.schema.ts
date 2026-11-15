@@ -11,14 +11,18 @@ export const AnalysisSettingsSchema = z.object({
 export type AnalysisSettings = z.infer<typeof AnalysisSettingsSchema>;
 
 /**
- * Token GitHub en lecture seule que le tracker transmet aux scripts de
- * déploiement, pour que leur `git pull` s'authentifie ; `savedAt` est sa date
- * d'enregistrement.
+ * Token GitHub enregistré : `savedAt` est sa date d'enregistrement, `login` le
+ * compte et `expiresAt` la date d'expiration relevés par GitHub à sa
+ * vérification (null pour un token sans expiration ou pas encore vérifié).
  */
-export const DeploySettingsSchema = z.object({
+export const GitHubTokenSettingsSchema = z.object({
   token: z.string().nullable(),
   savedAt: z.string().nullable(),
+  login: z.string().nullable().default(null),
+  expiresAt: z.string().nullable().default(null),
 });
+
+const NO_TOKEN = { token: null, savedAt: null, login: null, expiresAt: null };
 
 /**
  * Réglages enregistrés dans `<données>/settings.json`. `organizer.space` et
@@ -38,7 +42,10 @@ export const SettingsSchema = z.object({
     savedAt: z.string().nullable(),
   }),
   analysis: AnalysisSettingsSchema,
-  deploy: DeploySettingsSchema.default({ token: null, savedAt: null }),
+  /** Token du tracker : alertes, clones, branches de correction, pull requests. */
+  github: GitHubTokenSettingsSchema.default(NO_TOKEN),
+  /** Token en lecture seule transmis aux scripts de déploiement, pour leur `git pull`. */
+  deploy: GitHubTokenSettingsSchema.default(NO_TOKEN),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -47,8 +54,17 @@ export const DEFAULT_SETTINGS: Settings = {
   organizer: { url: null, token: null, space: null, owner: null },
   claude: { token: null, savedAt: null },
   analysis: { maxTurns: 40, maxMinutes: 15 },
-  deploy: { token: null, savedAt: null },
+  github: NO_TOKEN,
+  deploy: NO_TOKEN,
 };
+
+/** Token GitHub tel que la GUI le reçoit : ses quatre derniers caractères, jamais sa valeur. */
+export interface GitHubTokenView {
+  tokenHint: string | null;
+  savedAt: string | null;
+  login: string | null;
+  expiresAt: string | null;
+}
 
 /**
  * Réglages tels que la GUI les reçoit : les tokens n'y figurent que par leurs
@@ -60,18 +76,20 @@ export interface SettingsView {
   claude: { tokenHint: string | null; savedAt: string | null; expiresAt: string | null };
   analysis: AnalysisSettings;
   ready: boolean;
-  deploy: { tokenHint: string | null; savedAt: string | null };
+  github: GitHubTokenView;
+  deploy: GitHubTokenView;
 }
 
 /**
  * Corps de `PUT /api/settings`. Un token absent garde la valeur enregistrée ;
  * une adresse vide retire la connexion à l'organizer, `deployToken: null` retire
- * le token de déploiement.
+ * le token de déploiement. Le token du tracker se remplace, il ne se retire pas.
  */
 export const SaveSettingsBodySchema = z.object({
   organizerUrl: z.string().trim(),
   organizerToken: z.string().trim().min(1).optional(),
   claudeToken: z.string().trim().min(1).optional(),
+  githubToken: z.string().trim().min(1).optional(),
   deployToken: z.string().trim().min(1).nullable().optional(),
   analysis: AnalysisSettingsSchema,
 });

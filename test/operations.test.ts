@@ -36,7 +36,8 @@ function claudeSettings(claudeToken: string, maxMinutes = 5): Settings {
     organizer: { url: organizer.url, token: organizer.token, space: "Maintenance", owner: organizer.owner.name },
     claude: { token: claudeToken, savedAt: new Date().toISOString() },
     analysis: { maxTurns: 10, maxMinutes },
-    deploy: { token: null, savedAt: null },
+    github: DEFAULT_SETTINGS.github,
+    deploy: DEFAULT_SETTINGS.deploy,
   };
 }
 

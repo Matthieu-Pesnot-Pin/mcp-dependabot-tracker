@@ -156,7 +156,7 @@ test("the deployment token authenticates git in the script; it is checked on sav
   const analysis = { maxTurns: 40, maxMinutes: 15 };
   const refused = await call("PUT", "settings", { organizerUrl: "", deployToken: "not-a-github-token", analysis });
   assert.equal(refused.status, 400);
-  assert.match(refused.json.error, /GitHub rejected the deployment token \(401/);
+  assert.match(refused.json.error, /GitHub rejected the token \(401/);
 
   const saved = await call("PUT", "settings", { organizerUrl: "", deployToken: github.token, analysis });
   assert.equal(saved.status, 200, saved.json.error);

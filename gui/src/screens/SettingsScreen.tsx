@@ -1,5 +1,5 @@
-import { ANALYSIS_LIMITS, type SaveSettingsBody, type SettingsView } from '@shared/schemas/settings.schema'
-import { useState } from 'react'
+import { ANALYSIS_LIMITS, type GitHubTokenView, type SaveSettingsBody, type SettingsView } from '@shared/schemas/settings.schema'
+import { useEffect, useState } from 'react'
 import { AgentTokens } from '../components/AgentTokens'
 import { Icon } from '../components/Icon'
 import { usePolling } from '../hooks/usePolling'
@@ -8,6 +8,112 @@ import { api } from '../utils/api'
 import { hrefs } from '../utils/router'
 
 const SETUP_TOKEN_COMMAND = 'claude setup-token'
+
+/** Ligne qui retire le token de déploiement de l'environnement d'un script, après son git pull. */
+const UNSET_DEPLOY_TOKEN = 'unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0'
+
+/** Délai pendant lequel un second clic confirme le retrait du token de déploiement. */
+const CONFIRM_MS = 4000
+
+/** Date courte : « 14 déc. 2026 ». */
+function shortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+async function copy(text: string, what: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    useNotice.getState().show('info', `${what} copiée.`)
+  } catch (err) {
+    showError(err)
+  }
+}
+
+interface GitHubTokenProps {
+  title: string
+  description: string
+  view: GitHubTokenView
+  /** Statut affiché sans token enregistré. */
+  missing: string
+  /** Droits à donner au token. */
+  rights: string
+  /** Valeur saisie ; null tant qu'un token enregistré n'est pas remplacé. */
+  value: string | null
+  onChange: (value: string | null) => void
+  /** Retrait du token enregistré, absent pour un token qui ne se retire pas. */
+  onRemove?: () => Promise<void>
+}
+
+/**
+ * Token GitHub : enregistré, ses quatre derniers caractères, son compte et son
+ * expiration, avec « Remplacer » (et « Retirer », confirmé par un second clic,
+ * quand il se retire) ; sinon son statut, les droits à lui donner et le champ.
+ */
+function GitHubToken({ title, description, view, missing, rights, value, onChange, onRemove }: GitHubTokenProps) {
+  const [confirming, setConfirming] = useState(false)
+
+  useEffect(() => {
+    if (!confirming) return
+    const timer = setTimeout(() => setConfirming(false), CONFIRM_MS)
+    return () => clearTimeout(timer)
+  }, [confirming])
+
+  async function remove() {
+    if (!confirming) {
+      setConfirming(true)
+      return
+    }
+    setConfirming(false)
+    await onRemove?.()
+  }
+
+  const saved = view.tokenHint !== null
+  return (
+    <div className="github-token">
+      <div className="right-label">{title}</div>
+      <div className="right-description">{description}</div>
+      {saved && value === null ? (
+        <div className="github-token-status">
+          <Icon name="circle-check" className="text-ok" />
+          <span>
+            •••• {view.tokenHint}
+            {view.login && ` · compte ${view.login}`}
+            {view.expiresAt ? ` · expire le ${shortDate(view.expiresAt)}` : view.login ? ' · sans expiration' : ''}
+          </span>
+          <span className="spacer" />
+          <button type="button" className="link" onClick={() => onChange('')}>
+            Remplacer
+          </button>
+          {onRemove && (
+            <button type="button" className="link-danger" onClick={() => void remove()}>
+              {confirming ? 'Confirmer le retrait' : 'Retirer'}
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          {!saved && (
+            <div className="github-token-status">
+              <Icon name="circle-alert" className="text-warning" />
+              <span className="github-token-missing">{missing}</span>
+            </div>
+          )}
+          <div className="github-token-rights">{rights}</div>
+          <input
+            className="input mono github-token-input"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            aria-label={title}
+            placeholder="github_pat_…"
+            value={value ?? ''}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        </>
+      )}
+    </div>
+  )
+}
 
 function day(iso: string): string {
   return new Date(iso).toLocaleDateString('fr-FR')
@@ -44,6 +150,8 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
   const [url, setUrl] = useState(view.organizer.url ?? '')
   const [organizerToken, setOrganizerToken] = useState<string | null>(null)
   const [claudeToken, setClaudeToken] = useState<string | null>(view.claude.tokenHint === null ? '' : null)
+  const [githubToken, setGithubToken] = useState<string | null>(view.github.tokenHint === null ? '' : null)
+  const [deployToken, setDeployToken] = useState<string | null>(view.deploy.tokenHint === null ? '' : null)
   const [analysis, setAnalysis] = useState(view.analysis)
   const [busy, setBusy] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -52,11 +160,15 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
     const body: SaveSettingsBody = { organizerUrl: url.trim(), analysis }
     if (organizerToken?.trim()) body.organizerToken = organizerToken.trim()
     if (claudeToken?.trim()) body.claudeToken = claudeToken.trim()
+    if (githubToken?.trim()) body.githubToken = githubToken.trim()
+    if (deployToken?.trim()) body.deployToken = deployToken.trim()
     setBusy(true)
     try {
       const saved = await api.saveSettings(body)
       setOrganizerToken(null)
       setClaudeToken(saved.claude.tokenHint === null ? '' : null)
+      setGithubToken(saved.github.tokenHint === null ? '' : null)
+      setDeployToken(saved.deploy.tokenHint === null ? '' : null)
       onSaved(saved)
       useNotice.getState().show('info', 'Réglages enregistrés.')
     } catch (err) {
@@ -76,10 +188,13 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
     setTesting(false)
   }
 
-  async function copyCommand() {
+  /** Retire le token de déploiement aussitôt, sans enregistrer les autres champs en cours de saisie. */
+  async function removeDeployToken() {
     try {
-      await navigator.clipboard.writeText(SETUP_TOKEN_COMMAND)
-      useNotice.getState().show('info', 'Commande copiée.')
+      const saved = await api.saveSettings({ organizerUrl: view.organizer.url ?? '', analysis: view.analysis, deployToken: null })
+      setDeployToken('')
+      onSaved(saved)
+      useNotice.getState().show('info', 'Token de déploiement retiré.')
     } catch (err) {
       showError(err)
     }
@@ -98,13 +213,43 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
         </a>
         <div className="page-head-text">
           <h1 className="page-title">Réglages</h1>
-          <p className="subtitle">Corrections par Claude quand npm audit fix ne suffit pas</p>
+          <p className="subtitle">Accès à GitHub, corrections par Claude et agents</p>
         </div>
         <div className="page-actions">
           <button type="button" className="button button-primary" disabled={busy} onClick={() => void save()}>
             {busy ? 'Enregistrement…' : 'Enregistrer'}
           </button>
         </div>
+      </div>
+
+      <p className="section-label">GitHub — accès aux dépôts</p>
+      <div className="panel settings-card">
+        <GitHubToken
+          title="Token du tracker"
+          description="Lit les alertes, clone les dépôts, pousse les corrections et ouvre les pull requests"
+          view={view.github}
+          missing="Manquant — ni synchronisation, ni audit, ni correction"
+          rights="Token à grain fin : Dependabot alerts en lecture, Contents et Pull requests en lecture et écriture"
+          value={githubToken}
+          onChange={setGithubToken}
+        />
+        <GitHubToken
+          title="Token de déploiement"
+          description="Transmis aux scripts de déploiement, pour leur git pull"
+          view={view.deploy}
+          missing="Absent — le git pull d'un dépôt privé échoue pendant un déploiement"
+          rights="Token à grain fin en lecture seule : Contents en lecture, limité aux dépôts que vous déployez"
+          value={deployToken}
+          onChange={setDeployToken}
+          onRemove={removeDeployToken}
+        />
+      </div>
+      <div className="settings-note">
+        <span>Dans un script de déploiement, retirez le token après le git pull, pour ne pas le transmettre aux commandes suivantes :</span>
+        <button type="button" className="code-chip mono" onClick={() => void copy(UNSET_DEPLOY_TOKEN, 'Ligne')} title="Copier la ligne">
+          {UNSET_DEPLOY_TOKEN}
+          <Icon name="copy" size={14} />
+        </button>
       </div>
 
       <p className="section-label">Organizer — où Claude dépose son rapport</p>
@@ -167,7 +312,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
             <li>
               <span className="step-number">1</span>
               Sur un poste avec navigateur, lancez
-              <button type="button" className="code-chip mono" onClick={() => void copyCommand()} title="Copier la commande">
+              <button type="button" className="code-chip mono" onClick={() => void copy(SETUP_TOKEN_COMMAND, 'Commande')} title="Copier la commande">
                 {SETUP_TOKEN_COMMAND}
                 <Icon name="copy" size={14} />
               </button>
@@ -233,7 +378,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
   )
 }
 
-/** Réglages : connexion à l'organizer, token d'abonnement Claude, limites d'une session de Claude, tokens d'accès des agents. */
+/** Réglages : tokens GitHub, connexion à l'organizer, token d'abonnement Claude, limites d'une session de Claude, tokens d'accès des agents. */
 export function SettingsScreen() {
   const polled = usePolling('settings', () => api.getSettings(), null, { remember: false })
   const [saved, setSaved] = useState<SettingsView | null>(null)
