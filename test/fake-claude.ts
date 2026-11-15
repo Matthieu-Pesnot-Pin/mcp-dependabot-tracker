@@ -15,7 +15,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
  *   `red`      corrections dont les tests échouent ;
  *   tout autre token : tâche créée, assignée et taguée selon la consigne.
  * Avec `--mcp-config`, il écrit `src/fixed.js`, un fichier dans
- * `node_modules` et un hook `.git/hooks/pre-commit` qui crée
+ * `node_modules`, les fichiers vides `.npmrc` et `yarn.lock` que crée le bac à
+ * sable de Claude Code, et un hook `.git/hooks/pre-commit` qui crée
  * `<CLAUDE_CONFIG_DIR>/hook-ran.txt`, appelle l'outil `npm_ls` du serveur `npm` de la
  * configuration et note sa réponse dans `<CLAUDE_CONFIG_DIR>/npm-tools.txt`,
  * puis crée la tâche du rapport sur le faux organizer, avec l'adresse et le
@@ -92,6 +93,7 @@ async function repair(url: string, organizerToken: string, ownerId: string, tag:
   }
   fs.mkdirSync("node_modules", { recursive: true });
   fs.writeFileSync(path.join("node_modules", "installed.txt"), "installed by npm ci\n");
+  for (const placeholder of [".npmrc", "yarn.lock"]) if (!fs.existsSync(placeholder)) fs.writeFileSync(placeholder, "");
   fs.mkdirSync(path.join(".git", "hooks"), { recursive: true });
   fs.writeFileSync(path.join(".git", "hooks", "pre-commit"), `#!/bin/sh\necho ran > "${path.join(home, "hook-ran.txt").replace(/\\/g, "/")}"\n`, { mode: 0o755 });
   emit({ type: "assistant", message: { id: "m-3", content: [{ type: "tool_use", name: "Edit", input: {} }] } });

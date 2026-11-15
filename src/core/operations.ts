@@ -81,6 +81,13 @@ const SESSION_EVENTS = 500;
 /** Fichiers suivis par les commits du tracker : tout le clone, sauf les node_modules qu'installe Claude. */
 const STAGED_PATHS = ["--", ".", ":(exclude,glob)**/node_modules/**"];
 
+/**
+ * Fichiers que le bac à sable de Claude Code garde en lecture seule. Absents
+ * du dépôt, il les crée vides dans le clone pour les monter : ces fichiers-là
+ * ne font pas partie des corrections.
+ */
+const SANDBOX_PLACEHOLDERS = new Set([".gitmodules", ".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml", "pnpm-lock.yaml", "yarn.lock"]);
+
 /** Co-auteur du commit des corrections par Claude. */
 const CLAUDE_TRAILER = "Co-Authored-By: Claude <noreply@anthropic.com>";
 
@@ -389,11 +396,22 @@ async function commitAuditFixes(runner: Runner): Promise<{ base: string; auditCo
   return { base, auditCommit: committed ? base : null };
 }
 
+/** Supprime les fichiers vides non suivis que le bac à sable de Claude Code a créés pour les monter. */
+async function removeSandboxPlaceholders(runner: Runner): Promise<void> {
+  const untracked = (await runner.git(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
+  for (const file of untracked) {
+    if (!SANDBOX_PLACEHOLDERS.has(path.posix.basename(file))) continue;
+    const full = path.join(runner.repoDir, file);
+    if (fs.lstatSync(full).isFile() && fs.statSync(full).size === 0) fs.rmSync(full);
+  }
+}
+
 /**
  * Remplace le commit des corrections par Claude par un seul commit de tout ce
  * qui a changé depuis `base` ; rend ce commit, ou null quand rien n'a changé.
  */
 async function commitRepair(runner: Runner, base: string, message: string): Promise<string | null> {
+  await removeSandboxPlaceholders(runner);
   await runner.git(["reset", "--soft", base]);
   await runner.git(["add", "-A", ...STAGED_PATHS]);
   if (!(await hasStagedChanges(runner))) return null;

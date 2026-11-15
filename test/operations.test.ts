@@ -234,6 +234,9 @@ test("Claude analyses and fixes in one session, reports in one organizer task, a
     assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): apply the fixes by Claude", "fix(deps): resolve npm audit vulnerabilities", "initial"]);
     assert.equal(remotes.show(owner, name, done.branch!, "src/fixed.js"), "// correctif\n");
     assert.throws(() => remotes.show(owner, name, done.branch!, "node_modules/installed.txt"), "node_modules is never committed");
+    for (const placeholder of [".npmrc", "yarn.lock"]) {
+      assert.throws(() => remotes.show(owner, name, done.branch!, placeholder), `the empty ${placeholder} of the Claude Code sandbox is never committed`);
+    }
     assert.equal(call.gitInCwd, false, "the clone holds no .git: the git repository of the operation is out of reach of Claude and of the npm commands");
     assert.ok(!fs.existsSync(path.join(call.home, "hook-ran.txt")), "a git hook written in the clone never runs");
     assert.throws(() => remotes.show(owner, name, done.branch!, ".git/hooks/pre-commit"), "a .git folder written in the clone is never committed");
