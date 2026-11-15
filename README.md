@@ -132,7 +132,7 @@ Elles se renseignent dans l'environnement du service, ou dans un fichier `.env` 
 | Variable | Rôle |
 |---|---|
 | `GITHUB_TOKEN` | **Obligatoire.** Token GitHub (voir ci-dessus). Sans lui, le serveur refuse de démarrer. |
-| `DATA_DIR` | **Obligatoire, sans défaut.** Répertoire des données : comptes, sessions, tokens, scripts de déploiement, et clones des opérations dans `<DATA_DIR>/clones`. Il est créé s'il n'existe pas ; hors de Windows, le serveur le réserve à son compte (droits `700`) à chaque démarrage, et ses fichiers sont écrits en `600`. MCP Gateway Manager le renseigne automatiquement pour chaque MCP qu'il lance. |
+| `DATA_DIR` | **Obligatoire, sans défaut.** Répertoire des données : comptes, sessions, tokens, scripts de déploiement, et clones des opérations dans `<DATA_DIR>/clones`. Il est créé s'il n'existe pas ; hors de Windows, le serveur le réserve à son compte (droits `700`) à chaque démarrage, et ses fichiers sont écrits en `600`. Requis par les modes `serve` et `user` ; le mode `mcp` ne stocke rien. |
 | `VAULT_KEY` | **Obligatoire.** 32 octets en base64 (`--generate-vault-key`), qui chiffrent en AES-256-GCM les clés privées des serveurs de déploiement et les tokens de l'organizer et de Claude. Sans elle, ou si elle ne déchiffre pas les clés et les tokens déjà enregistrés, le serveur refuse de démarrer. La perdre oblige à reconnecter chaque serveur et à ressaisir les deux tokens. |
 | `APP_PORT` | **Obligatoire.** Port d'écoute du serveur. |
 | `APP_URL` | **Obligatoire.** Adresse publique de l'interface, sans chemin : `https://…`, ou `http://localhost:<port>` sur la machine elle-même (voir [Exposition et authentification](#exposition-et-authentification)). |
