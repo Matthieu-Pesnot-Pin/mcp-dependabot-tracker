@@ -6,8 +6,10 @@ import { terminalQrCode } from "../src/cli/users.js";
 import { TEST_AUTH_SECRET, TEST_VAULT_KEY, TrackerServer, baseEnv, cookiesOf, freePort, makeTempDir, runUserCommand, signIn, totpCode, waitFor } from "./helpers.js";
 
 /**
- * Double authentification de bout en bout, sur un serveur propre à ce fichier :
- * activation par `user totp`, connexion en deux étapes par l'API de Better Auth.
+ * Double authentification de bout en bout, sur un serveur propre à ce fichier,
+ * lancé sans token GitHub : activation par `user totp`, connexion en deux
+ * étapes par l'API de Better Auth. Le serveur démarre et renvoie aux réglages
+ * pour le token GitHub.
  */
 
 let temp: { dir: string; cleanup: () => void };
@@ -22,7 +24,6 @@ before(async () => {
   serverEnv = {
     ...baseEnv(),
     DATA_DIR: path.join(temp.dir, "data"),
-    GITHUB_TOKEN: "t",
     APP_PORT: String(port),
     APP_URL: baseUrl,
     AUTH_SECRET: TEST_AUTH_SECRET,
@@ -35,6 +36,20 @@ before(async () => {
 after(async () => {
   await server?.stop();
   temp?.cleanup();
+});
+
+test("without a GitHub token, the server starts, says so, and refuses what needs GitHub until the token is set", async () => {
+  assert.match(server.stderr.join(""), /The GitHub token of the tracker is not set: enter it in the settings of the interface/);
+  const plain = { email: "plain@example.com", password: "a plain long password" };
+  assert.equal((await runUserCommand(serverEnv, ["add", plain.email], `${plain.password}\n`)).code, 0);
+  const cookie = await signIn(baseUrl, plain);
+  const get = (route: string) => fetch(`${baseUrl}/api/${route}`, { headers: { Cookie: cookie } });
+  assert.equal((await (await get("settings")).json()).github.tokenHint, null);
+  assert.equal((await get("repos")).status, 200, "the interface works without the token");
+  const sync = await fetch(`${baseUrl}/api/sync`, { method: "POST", headers: { Cookie: cookie, Origin: baseUrl } });
+  assert.equal(sync.status, 400);
+  assert.match((await sync.json()).error, /GitHub token of the tracker is not set: enter it in the settings \(Réglages › GitHub\)/);
+  assert.equal((await runUserCommand(serverEnv, ["remove", plain.email])).code, 0);
 });
 
 test("an account with two-factor authentication signs in with its password, then a TOTP code or a backup code", async () => {

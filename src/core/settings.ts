@@ -1,16 +1,17 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import { DEFAULT_SETTINGS, SettingsSchema, type SaveSettingsBody, type Settings, type SettingsView } from "../../shared/schemas/settings.schema.js";
+import { DEFAULT_SETTINGS, SettingsSchema, type GitHubTokenView, type SaveSettingsBody, type Settings, type SettingsView } from "../../shared/schemas/settings.schema.js";
 import { TrackerError } from "./errors.js";
+import type { TokenCheck } from "./github.js";
 import { organizerUrl, type OrganizerConnection, type OrganizerSpace } from "./organizer.js";
 import { decryptSecret, encryptSecret, isEncrypted } from "./vault.js";
 
 /**
- * Réglages des corrections par Claude, dans `<données>/settings.json`, lisible par
- * le seul compte du serveur : ils portent le token de l'organizer et celui de
- * Claude, chiffrés avec VAULT_KEY dans le fichier, que la GUI ne reçoit jamais
- * en entier.
+ * Réglages du tracker, dans `<données>/settings.json`, lisible par le seul
+ * compte du serveur : ils portent le token GitHub du tracker, le token de
+ * déploiement, le token de l'organizer et celui de Claude, chiffrés avec
+ * VAULT_KEY dans le fichier, que la GUI ne reçoit jamais en entier.
  */
 
 /** Durée de validité d'un token créé par `claude setup-token`. */
@@ -20,6 +21,8 @@ const CLAUDE_TOKEN_VALIDITY_MS = 365 * 24 * 3600_000;
 export interface SettingsChecks {
   organizer: (connection: OrganizerConnection) => Promise<OrganizerSpace>;
   claudeToken: (token: string) => Promise<void>;
+  /** Vérifie un token auprès de GitHub et relève son compte et son expiration. */
+  githubToken: (token: string) => Promise<TokenCheck>;
 }
 
 function settingsPath(dataDir: string): string {
@@ -44,7 +47,13 @@ function readSettingsFile(dataDir: string): Settings | null {
 /** Applique `fn` à chaque token des réglages, null laissé tel quel. */
 function mapTokens(settings: Settings, fn: (token: string) => string): Settings {
   const map = (token: string | null) => (token === null ? null : fn(token));
-  return { ...settings, organizer: { ...settings.organizer, token: map(settings.organizer.token) }, claude: { ...settings.claude, token: map(settings.claude.token) } };
+  return {
+    ...settings,
+    organizer: { ...settings.organizer, token: map(settings.organizer.token) },
+    claude: { ...settings.claude, token: map(settings.claude.token) },
+    github: { ...settings.github, token: map(settings.github.token) },
+    deploy: { ...settings.deploy, token: map(settings.deploy.token) },
+  };
 }
 
 /** Réglages, tokens déchiffrés avec `vaultKey` ; un token que la clé ne déchiffre pas lève une erreur. */
@@ -67,7 +76,7 @@ export function readSettings(dataDir: string, vaultKey: Buffer): Settings {
 export function encryptStoredTokens(dataDir: string, vaultKey: Buffer): boolean {
   const stored = readSettingsFile(dataDir);
   if (stored === null) return false;
-  const tokens = [stored.organizer.token, stored.claude.token].filter((token): token is string => token !== null);
+  const tokens = [stored.organizer.token, stored.claude.token, stored.github.token, stored.deploy.token].filter((token): token is string => token !== null);
   if (tokens.every(isEncrypted)) return false;
   writeSettingsFile(dataDir, mapTokens(stored, (token) => (isEncrypted(token) ? token : encryptSecret(token, vaultKey))));
   return true;
@@ -95,6 +104,41 @@ export function organizerConnection(settings: Settings): OrganizerConnection | n
   return url && token ? { url, token } : null;
 }
 
+/** Résultat de la reprise de GITHUB_TOKEN au démarrage. */
+export type EnvTokenAdoption = { status: "none" } | { status: "ignored" } | { status: "adopted"; warning: string | null };
+
+/**
+ * Reprend dans les réglages le GITHUB_TOKEN de l'environnement tant que les
+ * réglages n'ont pas de token du tracker : il y est vérifié auprès de GitHub
+ * (un refus est rendu en avertissement, le token est repris quand même) et
+ * chiffré. Avec un token déjà réglé, la variable est ignorée.
+ */
+export async function adoptEnvGitHubToken(dataDir: string, vaultKey: Buffer, envToken: string | undefined, checks: SettingsChecks): Promise<EnvTokenAdoption> {
+  const token = envToken?.trim();
+  if (!token) return { status: "none" };
+  const current = readSettings(dataDir, vaultKey);
+  if (current.github.token !== null) return { status: "ignored" };
+  let check: TokenCheck | null = null;
+  let warning: string | null = null;
+  try {
+    check = await checks.githubToken(token);
+  } catch (err: any) {
+    warning = err?.message ?? String(err);
+  }
+  writeSettings(dataDir, vaultKey, { ...current, github: { token, savedAt: new Date().toISOString(), login: check?.login ?? null, expiresAt: check?.expiresAt ?? null } });
+  return { status: "adopted", warning };
+}
+
+/** Token GitHub du tracker, null sans token enregistré. */
+export function githubToken(settings: Settings): string | null {
+  return settings.github.token;
+}
+
+/** Token GitHub transmis aux scripts de déploiement, null sans token enregistré. */
+export function deployToken(settings: Settings): string | null {
+  return settings.deploy.token;
+}
+
 /** Vrai quand l'organizer (connexion testée) et Claude sont configurés. */
 export function analysisReady(settings: Settings): boolean {
   return organizerConnection(settings) !== null && settings.organizer.space !== null && settings.claude.token !== null;
@@ -102,6 +146,16 @@ export function analysisReady(settings: Settings): boolean {
 
 function tokenHint(token: string | null): string | null {
   return token === null ? null : token.slice(-4);
+}
+
+function tokenView({ token, savedAt, login, expiresAt }: Settings["github"]): GitHubTokenView {
+  return { tokenHint: tokenHint(token), savedAt, login, expiresAt };
+}
+
+/** Token GitHub vérifié, avec son compte et son expiration, prêt à enregistrer. */
+async function checkedGitHubToken(token: string, checks: SettingsChecks): Promise<Settings["github"]> {
+  const { login, expiresAt } = await checks.githubToken(token);
+  return { token, savedAt: new Date().toISOString(), login, expiresAt };
 }
 
 export function settingsView(settings: Settings): SettingsView {
@@ -115,6 +169,8 @@ export function settingsView(settings: Settings): SettingsView {
     },
     analysis: settings.analysis,
     ready: analysisReady(settings),
+    github: tokenView(settings.github),
+    deploy: tokenView(settings.deploy),
   };
 }
 
@@ -127,7 +183,7 @@ async function checkedOrganizer(organizer: Settings["organizer"], checks: Settin
 
 /**
  * Enregistre les réglages de la GUI. Une connexion à l'organizer modifiée est
- * testée, un nouveau token Claude vérifié : un échec refuse tout
+ * testée, un nouveau token Claude ou GitHub vérifié : un échec refuse tout
  * l'enregistrement.
  */
 export async function saveSettings(dataDir: string, vaultKey: Buffer, body: SaveSettingsBody, checks: SettingsChecks): Promise<SettingsView> {
@@ -143,7 +199,16 @@ export async function saveSettings(dataDir: string, vaultKey: Buffer, body: Save
     claude = { token: body.claudeToken, savedAt: new Date().toISOString() };
   }
 
-  const next: Settings = { organizer, claude, analysis: body.analysis };
+  const github = body.githubToken === undefined ? current.github : await checkedGitHubToken(body.githubToken, checks);
+
+  let deploy = current.deploy;
+  if (body.deployToken === null) {
+    deploy = DEFAULT_SETTINGS.deploy;
+  } else if (body.deployToken !== undefined) {
+    deploy = await checkedGitHubToken(body.deployToken, checks);
+  }
+
+  const next: Settings = { organizer, claude, analysis: body.analysis, github, deploy };
   writeSettings(dataDir, vaultKey, next);
   return settingsView(next);
 }

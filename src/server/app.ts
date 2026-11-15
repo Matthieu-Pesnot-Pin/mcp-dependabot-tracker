@@ -77,7 +77,10 @@ import { APP_VERSION } from "../version.js";
 export interface ServerContext {
   store: Store;
   dataDir: string;
-  github: GitHubConfig;
+  /** Configuration GitHub, avec le token du tracker relu dans les réglages ; lève une erreur sans token. */
+  github: () => GitHubConfig;
+  /** Adresse web du serveur GitHub, connue même sans token. */
+  githubServerUrl: string;
   operations: OperationContext;
   auditAll: AuditAll;
   /** Serveurs de déploiement, scripts et déploiements des dépôts. */
@@ -237,7 +240,7 @@ export function createApp(ctx: ServerContext): Hono {
   );
 
   app.post("/api/agent/repos/:owner/:name/sync", (c) =>
-    respond(c, async () => repoView(store, await syncRepository(store, github, store.getRepo(repoId(c)).id)))
+    respond(c, async () => repoView(store, await syncRepository(store, github(), store.getRepo(repoId(c)).id)))
   );
 
   app.post("/api/agent/repos/:owner/:name/audits", (c) =>
@@ -266,18 +269,18 @@ export function createApp(ctx: ServerContext): Hono {
   });
 
   app.get("/api/config", (c) =>
-    respond(c, (): AppConfig => ({ version: APP_VERSION, dataDir, githubServerUrl: github.serverUrl }))
+    respond(c, (): AppConfig => ({ version: APP_VERSION, dataDir, githubServerUrl: ctx.githubServerUrl }))
   );
 
   app.get("/api/repos", (c) => respond(c, reposResponse));
 
   app.post("/api/repos", (c) =>
-    withBody(c, AddRepoBodySchema, async (body) => repoView(store, await addRepository(store, github, body.repository, body.categoryId)))
+    withBody(c, AddRepoBodySchema, async (body) => repoView(store, await addRepository(store, github(), body.repository, body.categoryId)))
   );
 
   app.post("/api/sync", (c) =>
     respond(c, async () => {
-      await syncAllRepositories(store, github);
+      await syncAllRepositories(store, github());
       return reposResponse();
     })
   );
@@ -290,7 +293,7 @@ export function createApp(ctx: ServerContext): Hono {
     }))
   );
 
-  app.get("/api/github/repos", (c) => respond(c, async (): Promise<AddableReposResponse> => ({ repositories: await listAddableRepositories(store, github) })));
+  app.get("/api/github/repos", (c) => respond(c, async (): Promise<AddableReposResponse> => ({ repositories: await listAddableRepositories(store, github()) })));
 
   app.get("/api/repos/:owner/:name", (c) => respond(c, () => repoView(store, store.getRepo(repoId(c)))));
 
@@ -306,7 +309,7 @@ export function createApp(ctx: ServerContext): Hono {
 
   app.put("/api/repos/:owner/:name/deprecated", (c) => respond(c, () => repoView(store, deprecateRepository(store, repoId(c)))));
 
-  app.delete("/api/repos/:owner/:name/deprecated", (c) => respond(c, async () => repoView(store, await restoreRepository(store, github, repoId(c)))));
+  app.delete("/api/repos/:owner/:name/deprecated", (c) => respond(c, async () => repoView(store, await restoreRepository(store, github(), repoId(c)))));
 
   app.put("/api/repos/:owner/:name/queued", (c) => respond(c, () => repoView(store, queueRepository(store, repoId(c)))));
 
@@ -328,11 +331,11 @@ export function createApp(ctx: ServerContext): Hono {
   );
 
   app.get("/api/repos/:owner/:name/branches", (c) =>
-    respond(c, async (): Promise<BranchesResponse> => ({ branches: await listRepoBranches(store, github, repoId(c)) }))
+    respond(c, async (): Promise<BranchesResponse> => ({ branches: await listRepoBranches(store, github(), repoId(c)) }))
   );
 
   app.put("/api/repos/:owner/:name/branch", (c) =>
-    withBody(c, SetBranchBodySchema, async (body) => repoView(store, await setBranch(store, github, repoId(c), body.branch)))
+    withBody(c, SetBranchBodySchema, async (body) => repoView(store, await setBranch(store, github(), repoId(c), body.branch)))
   );
 
   app.put("/api/repos/:owner/:name/category", (c) =>

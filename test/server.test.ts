@@ -117,6 +117,9 @@ test("the MCP mode lists its tools; the server serves the GUI page", async () =>
   assert.match(await page.text(), /<div id="root">/);
   const config = await call("GET", "config");
   assert.equal(config.json.githubServerUrl, remotes.serverUrl);
+  const settings = await call("GET", "settings");
+  assert.deepEqual([settings.json.github.tokenHint, settings.json.github.login], [github.token.slice(-4), "tracker-bot"], "GITHUB_TOKEN was taken over into the settings, checked against GitHub");
+  assert.match(server.stderr.join(""), /GITHUB_TOKEN is now the GitHub token of the tracker in the settings/);
   assert.equal((await call("GET", "nope")).status, 404);
   assert.match(server.stderr.join(""), new RegExp(`Dependabot Tracker \\S+ serves http://localhost:${port} `));
 });
@@ -505,9 +508,7 @@ test("the server creates DATA_DIR and its clones subfolder at launch and refuses
   const noDataDir = await runEntry(["serve"], { ...baseEnv(), GITHUB_TOKEN: "t" });
   assert.deepEqual([noDataDir.code, /DATA_DIR is not set/.test(noDataDir.stderr)], [1, true], noDataDir.stderr);
   const env = { ...baseEnv(), DATA_DIR: path.join(temp.dir, "data-2") };
-  const noToken = await runEntry(["serve"], env);
-  assert.deepEqual([noToken.code, /GITHUB_TOKEN is not set/.test(noToken.stderr)], [1, true], noToken.stderr);
-  const withToken = { ...env, GITHUB_TOKEN: "t" };
+  const withToken = env;
   const noPort = await runEntry(["serve"], withToken);
   assert.deepEqual([noPort.code, /APP_PORT is not set/.test(noPort.stderr)], [1, true], noPort.stderr);
   const noUrl = await runEntry(["serve"], { ...withToken, APP_PORT: "1" });
