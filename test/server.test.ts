@@ -69,8 +69,7 @@ before(async () => {
   baseUrl = `http://localhost:${port}`;
   serverEnv = {
     ...baseEnv(),
-    MCP_DATA_DIR: path.join(temp.dir, "data"),
-    CLONE_DIR: path.join(temp.dir, "clones", "nested"),
+    DATA_DIR: path.join(temp.dir, "data", "nested"),
     GITHUB_TOKEN: github.token,
     GITHUB_API_URL: github.url,
     GITHUB_SERVER_URL: remotes.serverUrl,
@@ -500,22 +499,22 @@ async function runEntry(args: string[], env: Record<string, string | undefined>)
   return { code, stderr };
 }
 
-test("the server creates CLONE_DIR at launch and refuses to start without its settings", async () => {
-  assert.ok(fs.statSync(path.join(temp.dir, "clones", "nested")).isDirectory());
+test("the server creates DATA_DIR and its clones subfolder at launch and refuses to start without its settings", async () => {
+  assert.ok(fs.statSync(path.join(temp.dir, "data", "nested", "clones")).isDirectory());
 
-  const env = { ...baseEnv(), MCP_DATA_DIR: path.join(temp.dir, "data-2") };
+  const noDataDir = await runEntry(["serve"], { ...baseEnv(), GITHUB_TOKEN: "t" });
+  assert.deepEqual([noDataDir.code, /DATA_DIR is not set/.test(noDataDir.stderr)], [1, true], noDataDir.stderr);
+  const env = { ...baseEnv(), DATA_DIR: path.join(temp.dir, "data-2") };
   const noToken = await runEntry(["serve"], env);
   assert.deepEqual([noToken.code, /GITHUB_TOKEN is not set/.test(noToken.stderr)], [1, true], noToken.stderr);
-  const noClones = await runEntry(["serve"], { ...env, GITHUB_TOKEN: "t" });
-  assert.deepEqual([noClones.code, /CLONE_DIR is not set/.test(noClones.stderr)], [1, true], noClones.stderr);
-  const clones = { ...env, GITHUB_TOKEN: "t", CLONE_DIR: path.join(temp.dir, "clones-2") };
-  const noPort = await runEntry(["serve"], clones);
+  const withToken = { ...env, GITHUB_TOKEN: "t" };
+  const noPort = await runEntry(["serve"], withToken);
   assert.deepEqual([noPort.code, /APP_PORT is not set/.test(noPort.stderr)], [1, true], noPort.stderr);
-  const noUrl = await runEntry(["serve"], { ...clones, APP_PORT: "1" });
+  const noUrl = await runEntry(["serve"], { ...withToken, APP_PORT: "1" });
   assert.deepEqual([noUrl.code, /APP_URL is not set/.test(noUrl.stderr)], [1, true], noUrl.stderr);
-  const noSecret = await runEntry(["serve"], { ...clones, APP_PORT: "1", APP_URL: "http://localhost:1" });
+  const noSecret = await runEntry(["serve"], { ...withToken, APP_PORT: "1", APP_URL: "http://localhost:1" });
   assert.deepEqual([noSecret.code, /AUTH_SECRET is not set/.test(noSecret.stderr)], [1, true], noSecret.stderr);
-  const exposed = { ...clones, APP_PORT: "1", APP_URL: "http://localhost:1", AUTH_SECRET: TEST_AUTH_SECRET };
+  const exposed = { ...withToken, APP_PORT: "1", APP_URL: "http://localhost:1", AUTH_SECRET: TEST_AUTH_SECRET };
   const noVault = await runEntry(["serve"], exposed);
   assert.deepEqual([noVault.code, /VAULT_KEY is not set/.test(noVault.stderr)], [1, true], noVault.stderr);
   const badVault = await runEntry(["serve"], { ...exposed, VAULT_KEY: "short" });

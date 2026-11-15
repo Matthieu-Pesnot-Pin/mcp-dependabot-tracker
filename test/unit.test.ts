@@ -18,7 +18,7 @@ import { authenticateAgent, createAgentToken, listAgentTokens, revokeAgentToken 
 import { crossSiteRejection, securityHeaders } from "../src/server/app.js";
 import { Hono } from "hono";
 import { readServerConfig } from "../src/core/server-config.js";
-import { resolveDataDir } from "../src/core/data-dir.js";
+import { resolveCloneDir, resolveDataDir } from "../src/core/data-dir.js";
 import { describeOperation } from "../src/tools/format.js";
 import { assertSandboxAvailable, bwrapArgs, projectDir } from "../src/core/npm-sandbox.js";
 import { npmArgs } from "../src/npm-tools.js";
@@ -167,13 +167,13 @@ test("the security headers send HSTS with an https address only", async () => {
 
 test("the data directory is created for the account of the server alone", { skip: process.platform === "win32" ? "Windows has no POSIX modes" : false }, () => {
   const temp = makeTempDir("data-dir-");
-  const previous = process.env.MCP_DATA_DIR;
+  const previous = process.env.DATA_DIR;
   try {
     const existing = path.join(temp.dir, "existing");
     fs.mkdirSync(existing, { mode: 0o755 });
     fs.chmodSync(existing, 0o755);
     for (const dir of [existing, path.join(temp.dir, "new", "nested")]) {
-      process.env.MCP_DATA_DIR = dir;
+      process.env.DATA_DIR = dir;
       assert.equal(resolveDataDir(), dir);
       assert.equal(fs.statSync(dir).mode & 0o777, 0o700, dir);
     }
@@ -181,8 +181,31 @@ test("the data directory is created for the account of the server alone", { skip
     store.createCategory("Web");
     assert.equal(fs.statSync(path.join(existing, "repos.json")).mode & 0o777, 0o600);
   } finally {
-    if (previous === undefined) delete process.env.MCP_DATA_DIR;
-    else process.env.MCP_DATA_DIR = previous;
+    if (previous === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = previous;
+    temp.cleanup();
+  }
+});
+
+test("resolveDataDir requires DATA_DIR, creates it, and resolveCloneDir creates its clones subfolder", () => {
+  const temp = makeTempDir("data-dir-");
+  const previous = process.env.DATA_DIR;
+  try {
+    for (const blank of [undefined, "", "   "]) {
+      if (blank === undefined) delete process.env.DATA_DIR;
+      else process.env.DATA_DIR = blank;
+      assert.throws(() => resolveDataDir(), /DATA_DIR is not set/);
+    }
+    const dir = path.join(temp.dir, "new", "nested");
+    process.env.DATA_DIR = `  ${dir}  `;
+    assert.equal(resolveDataDir(), dir);
+    assert.ok(fs.statSync(dir).isDirectory());
+    const clones = resolveCloneDir(dir);
+    assert.equal(clones, path.join(dir, "clones"));
+    assert.ok(fs.statSync(clones).isDirectory());
+  } finally {
+    if (previous === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = previous;
     temp.cleanup();
   }
 });

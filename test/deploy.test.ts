@@ -52,8 +52,7 @@ before(async () => {
   baseUrl = `http://localhost:${port}`;
   serverEnv = {
     ...baseEnv(),
-    MCP_DATA_DIR: dataDir,
-    CLONE_DIR: path.join(temp.dir, "clones"),
+    DATA_DIR: dataDir,
     GITHUB_TOKEN: github.token,
     GITHUB_API_URL: github.url,
     APP_PORT: String(port),
@@ -281,7 +280,7 @@ test("changing the host forgets the host key and the test; the server refuses to
   assert.equal((await call("POST", "repos/octo/app/deployments")).status, 409);
 
   const child = spawn(process.execPath, [SERVER_ENTRY, "serve"], {
-    env: { ...baseEnv(), MCP_DATA_DIR: dataDir, CLONE_DIR: path.join(temp.dir, "clones"), GITHUB_TOKEN: "t", APP_PORT: "1", APP_URL: "http://localhost:1", AUTH_SECRET: TEST_AUTH_SECRET, VAULT_KEY: Buffer.alloc(32, 9).toString("base64") },
+    env: { ...baseEnv(), DATA_DIR: dataDir, GITHUB_TOKEN: "t", APP_PORT: "1", APP_URL: "http://localhost:1", AUTH_SECRET: TEST_AUTH_SECRET, VAULT_KEY: Buffer.alloc(32, 9).toString("base64") },
   });
   let stderr = "";
   child.stderr.setEncoding("utf-8");

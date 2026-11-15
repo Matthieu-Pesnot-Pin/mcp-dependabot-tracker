@@ -63,7 +63,15 @@ export async function serve(): Promise<void> {
   const root = packageRoot();
   loadPackageEnv();
 
-  setupLogging({ processLabel: "mcp-dependabot-tracker", logDir: resolveLogDir() });
+  let dataDir: string;
+  try {
+    dataDir = resolveDataDir();
+  } catch (err: any) {
+    console.error(err.message);
+    process.exit(1);
+  }
+
+  setupLogging({ processLabel: "mcp-dependabot-tracker", logDir: resolveLogDir(dataDir) });
   const logger = createLogger("mcp-dependabot-tracker");
 
   process.on("uncaughtException", (err) => {
@@ -81,7 +89,7 @@ export async function serve(): Promise<void> {
   let vaultKey: Buffer;
   try {
     github = readGitHubConfig();
-    cloneDir = resolveCloneDir();
+    cloneDir = resolveCloneDir(dataDir);
     config = readServerConfig();
     vaultKey = parseVaultKey(process.env.VAULT_KEY);
   } catch (err: any) {
@@ -89,7 +97,6 @@ export async function serve(): Promise<void> {
     process.exit(1);
   }
 
-  const dataDir = resolveDataDir();
   let auth: Auth;
   try {
     auth = createAuth(dataDir, config);

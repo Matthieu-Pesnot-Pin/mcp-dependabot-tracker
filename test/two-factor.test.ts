@@ -21,8 +21,7 @@ before(async () => {
   baseUrl = `http://localhost:${port}`;
   serverEnv = {
     ...baseEnv(),
-    MCP_DATA_DIR: path.join(temp.dir, "data"),
-    CLONE_DIR: path.join(temp.dir, "clones"),
+    DATA_DIR: path.join(temp.dir, "data"),
     GITHUB_TOKEN: "t",
     APP_PORT: String(port),
     APP_URL: baseUrl,

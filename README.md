@@ -65,7 +65,7 @@ TRUSTED_PROXIES=127.0.0.1
 
 ### Comptes de l'interface
 
-Il n'y a pas d'inscription : les comptes se créent sur la machine du serveur, avec le même environnement que lui (`MCP_DATA_DIR`, `APP_URL`, `AUTH_SECRET`, ou le `.env` du package). Le mot de passe est demandé deux fois, sans être affiché ; il fait au moins 12 caractères.
+Il n'y a pas d'inscription : les comptes se créent sur la machine du serveur, avec le même environnement que lui (`DATA_DIR`, `APP_URL`, `AUTH_SECRET`, ou le `.env` du package). Le mot de passe est demandé deux fois, sans être affiché ; il fait au moins 12 caractères.
 
 ```bash
 mcp-dependabot-tracker user add admin@example.com --name="Admin"
@@ -132,7 +132,7 @@ Elles se renseignent dans l'environnement du service, ou dans un fichier `.env` 
 | Variable | Rôle |
 |---|---|
 | `GITHUB_TOKEN` | **Obligatoire.** Token GitHub (voir ci-dessus). Sans lui, le serveur refuse de démarrer. |
-| `CLONE_DIR` | **Obligatoire.** Dossier où chaque opération crée son clone ; il est créé s'il n'existe pas. Sans lui, le serveur refuse de démarrer. |
+| `DATA_DIR` | **Obligatoire, sans défaut.** Répertoire des données : comptes, sessions, tokens, scripts de déploiement, et clones des opérations dans `<DATA_DIR>/clones`. Il est créé s'il n'existe pas ; hors de Windows, le serveur le réserve à son compte (droits `700`) à chaque démarrage, et ses fichiers sont écrits en `600`. MCP Gateway Manager le renseigne automatiquement pour chaque MCP qu'il lance. |
 | `VAULT_KEY` | **Obligatoire.** 32 octets en base64 (`--generate-vault-key`), qui chiffrent en AES-256-GCM les clés privées des serveurs de déploiement et les tokens de l'organizer et de Claude. Sans elle, ou si elle ne déchiffre pas les clés et les tokens déjà enregistrés, le serveur refuse de démarrer. La perdre oblige à reconnecter chaque serveur et à ressaisir les deux tokens. |
 | `APP_PORT` | **Obligatoire.** Port d'écoute du serveur. |
 | `APP_URL` | **Obligatoire.** Adresse publique de l'interface, sans chemin : `https://…`, ou `http://localhost:<port>` sur la machine elle-même (voir [Exposition et authentification](#exposition-et-authentification)). |
@@ -141,8 +141,7 @@ Elles se renseignent dans l'environnement du service, ou dans un fichier `.env` 
 | `TRUSTED_PROXIES` | Adresses IP ou plages CIDR des reverse proxies, séparées par des virgules, dont l'en-tête `X-Forwarded-For` est cru. |
 | `GITHUB_API_URL` | API GitHub (défaut `https://api.github.com`), à changer pour GitHub Enterprise Server. |
 | `GITHUB_SERVER_URL` | Serveur git des clones (défaut `https://github.com`) : un dépôt se clone depuis `<serveur>/<propriétaire>/<nom>.git`. |
-| `MCP_DATA_DIR` | Répertoire des données (défaut `~/.mcp-dependabot-tracker`). Hors de Windows, le serveur le réserve à son compte (droits `700`) à chaque démarrage, et ses fichiers sont écrits en `600`. |
-| `MCP_LOG_DIR` | Répertoire des logs. Défaut : `<données>/logs`. |
+| `MCP_LOG_DIR` | Répertoire des logs. Défaut : `<DATA_DIR>/logs`. |
 
 Sans une variable obligatoire, ou avec une valeur invalide (`APP_URL` en http hors `localhost`, `AUTH_SECRET` trop court, `LISTEN_HOST` qui n'est pas une adresse IP), le serveur refuse de démarrer en nommant la variable.
 
@@ -189,7 +188,7 @@ Un dépôt déprécié est refusé par tous les outils, jusqu'à ce que l'utilis
 
 ## Une opération
 
-Chaque opération travaille dans un clone temporaire (`<CLONE_DIR>/mcp-dependabot-tracker-*/repo`, `git clone --depth 1` de la branche analysée), supprimé dès qu'elle se termine, réussie, échouée ou annulée.
+Chaque opération travaille dans un clone temporaire (`<DATA_DIR>/clones/mcp-dependabot-tracker-*/repo`, `git clone --depth 1` de la branche analysée), supprimé dès qu'elle se termine, réussie, échouée ou annulée.
 
 La **branche analysée** se choisit par dépôt dans la GUI ; c'est la branche par défaut tant qu'aucune autre n'est choisie. L'agent l'utilise aussi, sans pouvoir en changer. Les alertes Dependabot, elles, portent toujours sur la branche par défaut, la seule que GitHub analyse : sur une autre branche, c'est `npm audit` qui mesure les vulnérabilités.
 
