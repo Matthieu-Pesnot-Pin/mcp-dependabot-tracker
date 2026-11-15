@@ -27,7 +27,7 @@ import { encryptStoredTokens, readSettings, saveSettings, type SettingsChecks } 
 import type { Alert, Operation, Repo } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS } from "../shared/schemas/settings.schema.js";
 import { makeTempDir } from "./helpers.js";
-import { appendOutput, OUTPUT_LIMIT, remoteWrapper, TraceReader } from "../src/core/deployments.js";
+import { appendOutput, deployGitVariables, OUTPUT_LIMIT, remoteWrapper, TraceReader } from "../src/core/deployments.js";
 import { installCommand, keyLine, validateServerInput } from "../src/core/deploy-servers.js";
 import { decryptSecret, encryptSecret, generateVaultKey, parseVaultKey } from "../src/core/vault.js";
 
@@ -657,6 +657,10 @@ test("saveSettings tests a changed organizer connection, checks a new Claude tok
       checked.push(`claude ${token}`);
       if (token === "bad-token") throw new Error("The Claude token was refused: Invalid bearer token");
     },
+    deployToken: async (token) => {
+      checked.push(`deploy ${token}`);
+      if (token === "bad-deploy") throw new Error("GitHub rejected the deployment token (401: Bad credentials).");
+    },
   };
   const analysis = { maxTurns: 40, maxMinutes: 15 };
   const key = parseVaultKey(generateVaultKey());
@@ -693,6 +697,43 @@ test("saveSettings tests a changed organizer connection, checks a new Claude tok
     assert.equal(encryptStoredTokens(temp.dir, key), false, "the file is rewritten once");
     assert.ok(!fs.readFileSync(file, "utf-8").includes("org-legacy-5678"));
     assert.deepEqual([readSettings(temp.dir, key).organizer.token, readSettings(temp.dir, key).claude.token], ["org-legacy-5678", "sk-ant-oat01-abcd"]);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("saveSettings checks a new deployment token, keeps it encrypted, and removes it on null", async () => {
+  const temp = makeTempDir("tracker-deploy-token-");
+  const checked: string[] = [];
+  const checks: SettingsChecks = {
+    organizer: async () => {
+      throw new Error("no organizer here");
+    },
+    claudeToken: async () => {},
+    deployToken: async (token) => {
+      checked.push(token);
+      if (token === "bad-deploy") throw new Error("GitHub rejected the deployment token (401: Bad credentials).");
+    },
+  };
+  const analysis = { maxTurns: 40, maxMinutes: 15 };
+  const key = parseVaultKey(generateVaultKey());
+  try {
+    assert.deepEqual(readSettings(temp.dir, key).deploy, { token: null, savedAt: null }, "a settings file without the deployment token reads it as absent");
+    const saved = await saveSettings(temp.dir, key, { organizerUrl: "", deployToken: "github_pat_read_only_9876", analysis }, checks);
+    assert.deepEqual(checked, ["github_pat_read_only_9876"]);
+    assert.equal(saved.deploy.tokenHint, "9876");
+    assert.ok(saved.deploy.savedAt);
+    assert.ok(!JSON.stringify(saved).includes("github_pat"), "the GUI never receives the whole token");
+    assert.ok(!fs.readFileSync(path.join(temp.dir, "settings.json"), "utf-8").includes("github_pat"), "the token is encrypted in settings.json");
+    assert.equal(readSettings(temp.dir, key).deploy.token, "github_pat_read_only_9876");
+
+    await assert.rejects(saveSettings(temp.dir, key, { organizerUrl: "", deployToken: "bad-deploy", analysis }, checks), /deployment token/);
+    assert.equal(readSettings(temp.dir, key).deploy.token, "github_pat_read_only_9876", "a refused token saves nothing");
+    assert.equal((await saveSettings(temp.dir, key, { organizerUrl: "", analysis }, checks)).deploy.tokenHint, "9876", "an absent token keeps the saved one");
+
+    const removed = await saveSettings(temp.dir, key, { organizerUrl: "", deployToken: null, analysis }, checks);
+    assert.deepEqual(removed.deploy, { tokenHint: null, savedAt: null });
+    assert.equal(readSettings(temp.dir, key).deploy.token, null);
   } finally {
     temp.cleanup();
   }
@@ -898,6 +939,19 @@ test("the key line and the installation command target the dedicated file, and k
   assert.deepEqual(validateServerInput({ name: " web ", host: "10.0.0.1", port: 2222, username: "deploy" }), { name: "web", host: "10.0.0.1", port: 2222, username: "deploy" });
   assert.throws(() => validateServerInput({ name: "web", host: "10.0.0.1", port: 70000, username: "deploy" }), /port/);
   assert.throws(() => validateServerInput({ name: "web", host: "10.0.0.1", port: 22, username: "a b" }), /Utilisateur invalide/);
+});
+
+test("the deployment token becomes the git variables of the script, and nothing without token", () => {
+  assert.deepEqual(deployGitVariables("https://github.com", null), {});
+  const variables = deployGitVariables("https://github.com", "github_pat_x");
+  assert.deepEqual(variables, {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from("x-access-token:github_pat_x").toString("base64")}`,
+  });
+  const wrapper = remoteWrapper("git pull", variables);
+  assert.ok(wrapper.indexOf("export GIT_CONFIG_VALUE_0=") < wrapper.indexOf("set -x"), "the variables are exported before the trace starts, so the token never appears in it");
 });
 
 test("the trace reader follows the lines of the script only, and reads the process id first", () => {

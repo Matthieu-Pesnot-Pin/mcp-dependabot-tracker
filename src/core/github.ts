@@ -51,9 +51,15 @@ export function nextPageUrl(link: string | null): string | null {
   return null;
 }
 
-/** Client REST minimal de l'API GitHub, authentifié par le token de la configuration. */
+/**
+ * Client REST minimal de l'API GitHub, authentifié par le token de la
+ * configuration ; `tokenName` désigne ce token dans le message d'un refus.
+ */
 export class GitHubClient {
-  constructor(private readonly config: GitHubConfig) {}
+  constructor(
+    private readonly config: GitHubConfig,
+    private readonly tokenName = "GITHUB_TOKEN"
+  ) {}
 
   private async request(method: string, url: string, body?: unknown): Promise<{ json: any; link: string | null }> {
     let response: Response;
@@ -84,7 +90,7 @@ export class GitHubClient {
     }
     if (!response.ok) {
       const message = typeof json?.message === "string" ? json.message : `HTTP ${response.status}`;
-      if (response.status === 401) throw new TrackerError(`GitHub rejected GITHUB_TOKEN (401: ${message}).`);
+      if (response.status === 401) throw new TrackerError(`GitHub rejected ${this.tokenName} (401: ${message}).`);
       throw new GitHubApiError(response.status, `GitHub API ${method} ${url} failed (${response.status}): ${message}`);
     }
     return { json, link: response.headers.get("link") };

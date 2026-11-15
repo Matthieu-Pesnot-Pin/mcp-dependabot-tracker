@@ -152,6 +152,34 @@ test("a successful deployment runs the script with its variables, follows its li
   assert.equal((await call("GET", "repos/octo/app")).json.repo.deployPendingAt, null);
 });
 
+test("the deployment token authenticates git in the script; it is checked on save and leaves no trace without it", async () => {
+  const analysis = { maxTurns: 40, maxMinutes: 15 };
+  const refused = await call("PUT", "settings", { organizerUrl: "", deployToken: "not-a-github-token", analysis });
+  assert.equal(refused.status, 400);
+  assert.match(refused.json.error, /GitHub rejected the deployment token \(401/);
+
+  const saved = await call("PUT", "settings", { organizerUrl: "", deployToken: github.token, analysis });
+  assert.equal(saved.status, 200, saved.json.error);
+  assert.equal(saved.json.deploy.tokenHint, github.token.slice(-4));
+
+  const script = [
+    "echo \"count=$GIT_CONFIG_COUNT key=$GIT_CONFIG_KEY_0 prompt=$GIT_TERMINAL_PROMPT\"",
+    "echo \"$GIT_CONFIG_VALUE_0\" | sed 's/^AUTHORIZATION: basic //' | base64 -d; echo",
+    "unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0",
+    "echo \"after unset: ${GIT_CONFIG_COUNT:-none}\"",
+  ].join("\n");
+  await call("PUT", "repos/octo/app/deploy/script", { script });
+  const withToken = await deploy();
+  assert.equal(withToken.status, "done", withToken.error ?? withToken.output);
+  assert.equal(withToken.output, `count=1 key=http.https://github.com/.extraheader prompt=0\nx-access-token:${github.token}\nafter unset: none\n`);
+  assert.equal(withToken.script, script, "the deployment keeps the script, never the variables");
+
+  assert.equal((await call("PUT", "settings", { organizerUrl: "", deployToken: null, analysis })).json.deploy.tokenHint, null);
+  await call("PUT", "repos/octo/app/deploy/script", { script: 'echo "count=${GIT_CONFIG_COUNT:-none}"' });
+  const withoutToken = await deploy();
+  assert.equal(withoutToken.output, "count=none\n");
+});
+
 test("a failing script stops at its failing line, with its exit code", async () => {
   await call("PUT", "repos/octo/app/deploy/script", { script: "set -e\necho before\n(exit 3)\necho after\n" });
   const deployment = await deploy();
@@ -181,7 +209,7 @@ test("a running deployment can be interrupted, and only one runs at a time", asy
   const listed = await call("GET", "repos/octo/app/deploy");
   assert.deepEqual(
     listed.json.deployments.map((d: any) => d.status),
-    ["cancelled", "failed", "done"]
+    ["cancelled", "failed", "done", "done", "done"]
   );
   assert.equal(listed.json.deployments[0].output, undefined);
 });

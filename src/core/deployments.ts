@@ -81,6 +81,22 @@ export function remoteWrapper(script: string, variables: Record<string, string>)
   ].join("\n");
 }
 
+/**
+ * Variables qui authentifient `git` auprès du serveur GitHub `serverUrl` par un
+ * en-tête HTTP, avec le token de déploiement ; aucune sans token. `git` ne pose
+ * alors aucune question : un échec d'authentification est immédiat.
+ */
+export function deployGitVariables(serverUrl: string, token: string | null): Record<string, string> {
+  if (token === null) return {};
+  const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
+  return {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: `http.${serverUrl}/.extraheader`,
+    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
+  };
+}
+
 /** Lit la trace de bash ligne à ligne et rend la dernière ligne du script commencée. */
 export class TraceReader {
   private buffer = "";
@@ -219,7 +235,9 @@ interface RunningDeployment {
 /**
  * Déploiement des dépôts : chaque dépôt choisit un serveur et un script ; un
  * déploiement exécute ce script sur le serveur, par SSH, et en suit la ligne en
- * cours et la sortie. Un déploiement réussi retire la marque « à déployer ».
+ * cours et la sortie. Le script reçoit BRANCH, COMMIT et REPO, et, quand un
+ * token de déploiement est réglé, les variables qui authentifient `git` auprès
+ * de GitHub. Un déploiement réussi retire la marque « à déployer ».
  */
 export class Deployer {
   private readonly running = new Map<string, RunningDeployment>();
@@ -229,7 +247,9 @@ export class Deployer {
     readonly servers: DeployServerStore,
     readonly deployments: DeploymentStore,
     private readonly github: GitHubConfig,
-    private readonly logError: (message: string) => void
+    private readonly logError: (message: string) => void,
+    /** Token de déploiement, relu à chaque déploiement ; null sans token réglé. */
+    private readonly deployToken: () => string | null
   ) {}
 
   /** Serveur, script, déploiement en cours et derniers déploiements d'un dépôt. */
@@ -384,7 +404,8 @@ export class Deployer {
         let code: number | null = null;
         channel.on("exit", (exit: number | null) => (code = typeof exit === "number" ? exit : null));
         channel.on("close", () => resolve(code));
-        channel.end(remoteWrapper(initial.script, { BRANCH: initial.branch, COMMIT: initial.commit ?? "", REPO: initial.repoId }));
+        const variables = { BRANCH: initial.branch, COMMIT: initial.commit ?? "", REPO: initial.repoId, ...deployGitVariables(this.github.serverUrl, this.deployToken()) };
+        channel.end(remoteWrapper(initial.script, variables));
       });
       append(stdout.end());
       trace.push(`${stderr.end()}\n`);

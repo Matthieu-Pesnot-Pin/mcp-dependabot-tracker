@@ -10,6 +10,7 @@ import { AuditAll } from "../core/audit-all.js";
 import { createAuth, listUsers, migrateAuth, type Auth } from "../core/auth.js";
 import { checkClaudeToken, packagedClaudeCommand, type ClaudeRuntime } from "../core/claude.js";
 import { readGitHubConfig, type GitHubConfig } from "../core/config.js";
+import { GitHubClient } from "../core/github.js";
 import { resolveCloneDir, resolveDataDir } from "../core/data-dir.js";
 import { DeployServerStore } from "../core/deploy-servers.js";
 import { Deployer, DeploymentStore } from "../core/deployments.js";
@@ -18,7 +19,7 @@ import { runDefaultBranchAudit, type OperationContext } from "../core/operations
 import { OrganizerClient } from "../core/organizer.js";
 import { refreshReportTask } from "../core/repair.js";
 import { SYNC_INTERVAL_MS, staleRepos, syncRepository } from "../core/repos.js";
-import { encryptStoredTokens, readSettings, type SettingsChecks } from "../core/settings.js";
+import { deployToken, encryptStoredTokens, readSettings, type SettingsChecks } from "../core/settings.js";
 import { readServerConfig, type ServerConfig } from "../core/server-config.js";
 import { Store } from "../core/store.js";
 import { parseVaultKey } from "../core/vault.js";
@@ -115,11 +116,14 @@ export async function serve(): Promise<void> {
     logger.error(err.message);
     process.exit(1);
   }
-  const deployer = new Deployer(store, deployServers, new DeploymentStore(dataDir), github, (message) => logger.error(message));
+  const deployer = new Deployer(store, deployServers, new DeploymentStore(dataDir), github, (message) => logger.error(message), () => deployToken(readSettings(dataDir, vaultKey)));
   const claude: ClaudeRuntime = { command: packagedClaudeCommand(), home: path.join(dataDir, "claude") };
   const settingsChecks: SettingsChecks = {
     organizer: (connection) => new OrganizerClient(connection).space(),
     claudeToken: (token) => checkClaudeToken(claude, token),
+    deployToken: async (token) => {
+      await new GitHubClient({ ...github, token }, "the deployment token").getAuthenticatedUser();
+    },
   };
   const operations: OperationContext = {
     store,

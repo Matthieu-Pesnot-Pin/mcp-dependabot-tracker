@@ -7,10 +7,10 @@ import { organizerUrl, type OrganizerConnection, type OrganizerSpace } from "./o
 import { decryptSecret, encryptSecret, isEncrypted } from "./vault.js";
 
 /**
- * Réglages des corrections par Claude, dans `<données>/settings.json`, lisible par
- * le seul compte du serveur : ils portent le token de l'organizer et celui de
- * Claude, chiffrés avec VAULT_KEY dans le fichier, que la GUI ne reçoit jamais
- * en entier.
+ * Réglages des corrections par Claude et des déploiements, dans
+ * `<données>/settings.json`, lisible par le seul compte du serveur : ils portent
+ * le token de l'organizer, celui de Claude et le token de déploiement, chiffrés
+ * avec VAULT_KEY dans le fichier, que la GUI ne reçoit jamais en entier.
  */
 
 /** Durée de validité d'un token créé par `claude setup-token`. */
@@ -20,6 +20,8 @@ const CLAUDE_TOKEN_VALIDITY_MS = 365 * 24 * 3600_000;
 export interface SettingsChecks {
   organizer: (connection: OrganizerConnection) => Promise<OrganizerSpace>;
   claudeToken: (token: string) => Promise<void>;
+  /** Vérifie le token de déploiement auprès de GitHub. */
+  deployToken: (token: string) => Promise<void>;
 }
 
 function settingsPath(dataDir: string): string {
@@ -44,7 +46,12 @@ function readSettingsFile(dataDir: string): Settings | null {
 /** Applique `fn` à chaque token des réglages, null laissé tel quel. */
 function mapTokens(settings: Settings, fn: (token: string) => string): Settings {
   const map = (token: string | null) => (token === null ? null : fn(token));
-  return { ...settings, organizer: { ...settings.organizer, token: map(settings.organizer.token) }, claude: { ...settings.claude, token: map(settings.claude.token) } };
+  return {
+    ...settings,
+    organizer: { ...settings.organizer, token: map(settings.organizer.token) },
+    claude: { ...settings.claude, token: map(settings.claude.token) },
+    deploy: { ...settings.deploy, token: map(settings.deploy.token) },
+  };
 }
 
 /** Réglages, tokens déchiffrés avec `vaultKey` ; un token que la clé ne déchiffre pas lève une erreur. */
@@ -67,7 +74,7 @@ export function readSettings(dataDir: string, vaultKey: Buffer): Settings {
 export function encryptStoredTokens(dataDir: string, vaultKey: Buffer): boolean {
   const stored = readSettingsFile(dataDir);
   if (stored === null) return false;
-  const tokens = [stored.organizer.token, stored.claude.token].filter((token): token is string => token !== null);
+  const tokens = [stored.organizer.token, stored.claude.token, stored.deploy.token].filter((token): token is string => token !== null);
   if (tokens.every(isEncrypted)) return false;
   writeSettingsFile(dataDir, mapTokens(stored, (token) => (isEncrypted(token) ? token : encryptSecret(token, vaultKey))));
   return true;
@@ -95,6 +102,11 @@ export function organizerConnection(settings: Settings): OrganizerConnection | n
   return url && token ? { url, token } : null;
 }
 
+/** Token GitHub transmis aux scripts de déploiement, null sans token enregistré. */
+export function deployToken(settings: Settings): string | null {
+  return settings.deploy.token;
+}
+
 /** Vrai quand l'organizer (connexion testée) et Claude sont configurés. */
 export function analysisReady(settings: Settings): boolean {
   return organizerConnection(settings) !== null && settings.organizer.space !== null && settings.claude.token !== null;
@@ -115,6 +127,7 @@ export function settingsView(settings: Settings): SettingsView {
     },
     analysis: settings.analysis,
     ready: analysisReady(settings),
+    deploy: { tokenHint: tokenHint(settings.deploy.token), savedAt: settings.deploy.savedAt },
   };
 }
 
@@ -127,8 +140,8 @@ async function checkedOrganizer(organizer: Settings["organizer"], checks: Settin
 
 /**
  * Enregistre les réglages de la GUI. Une connexion à l'organizer modifiée est
- * testée, un nouveau token Claude vérifié : un échec refuse tout
- * l'enregistrement.
+ * testée, un nouveau token Claude ou de déploiement vérifié : un échec refuse
+ * tout l'enregistrement.
  */
 export async function saveSettings(dataDir: string, vaultKey: Buffer, body: SaveSettingsBody, checks: SettingsChecks): Promise<SettingsView> {
   const current = readSettings(dataDir, vaultKey);
@@ -143,7 +156,15 @@ export async function saveSettings(dataDir: string, vaultKey: Buffer, body: Save
     claude = { token: body.claudeToken, savedAt: new Date().toISOString() };
   }
 
-  const next: Settings = { organizer, claude, analysis: body.analysis };
+  let deploy = current.deploy;
+  if (body.deployToken === null) {
+    deploy = { token: null, savedAt: null };
+  } else if (body.deployToken !== undefined) {
+    await checks.deployToken(body.deployToken);
+    deploy = { token: body.deployToken, savedAt: new Date().toISOString() };
+  }
+
+  const next: Settings = { organizer, claude, analysis: body.analysis, deploy };
   writeSettings(dataDir, vaultKey, next);
   return settingsView(next);
 }
