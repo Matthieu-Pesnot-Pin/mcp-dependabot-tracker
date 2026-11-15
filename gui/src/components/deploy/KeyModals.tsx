@@ -81,7 +81,7 @@ function KeyModal({ title, busy, onClose, footer, children }: { title: string; b
 interface KeyModalProps {
   view: DeployServerView
   onClose: () => void
-  /** Clé changée ou effacée : la vue du déploiement se relit. */
+  /** Clé changée ou effacée : la liste des serveurs se relit. */
   onChanged: () => void
 }
 

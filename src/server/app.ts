@@ -386,13 +386,20 @@ export function createApp(ctx: ServerContext): Hono {
   app.post("/api/operations/:id/cancel", (c) => respond(c, (): OperationResponse => ({ operation: cancelOperation(operations, c.req.param("id")) })));
 
   app.get("/api/deploy-servers", (c) =>
-    respond(c, (): DeployServersResponse => ({ servers: deployer.servers.list().map((server) => deployer.servers.view(server)) }))
+    respond(c, (): DeployServersResponse => ({ servers: deployer.listServers() }))
   );
 
   app.post("/api/deploy-servers", (c) => withBody(c, DeployServerBodySchema, (body) => deployer.servers.view(deployer.servers.create(body))));
 
   app.put("/api/deploy-servers/:id", (c) =>
     withBody(c, DeployServerBodySchema, (body) => deployer.servers.view(deployer.servers.update(c.req.param("id"), body)))
+  );
+
+  app.delete("/api/deploy-servers/:id", (c) =>
+    respond(c, () => {
+      deployer.removeServer(c.req.param("id"));
+      return { deleted: true };
+    })
   );
 
   app.post("/api/deploy-servers/:id/test", (c) => respond(c, () => deployer.servers.test(c.req.param("id"))));

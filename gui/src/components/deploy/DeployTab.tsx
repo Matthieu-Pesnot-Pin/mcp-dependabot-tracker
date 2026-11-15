@@ -1,6 +1,7 @@
 import type { Deployment, DeploymentSummary, DeployServerView, RepoDeployResponse } from '@shared/schemas/deploy.schema'
 import type { Repo } from '@shared/schemas/model.schema'
 import { useEffect, useRef, useState } from 'react'
+import { useDismiss } from '../../hooks/useDismiss'
 import { usePolling } from '../../hooks/usePolling'
 import { showError } from '../../store/useNotice'
 import { api } from '../../utils/api'
@@ -8,9 +9,8 @@ import { clockTime, dayAndTime, relativeTime } from '../../utils/format'
 import { hrefs, navigate } from '../../utils/router'
 import { Icon, type IconName } from '../Icon'
 import { lineCount } from '../../utils/script'
-import { RevokeKeyModal, RotateKeyModal } from './KeyModals'
+import { ServerStatus } from './DeployServers'
 import { ScriptEditor, ScriptView, type LineMark } from './ScriptView'
-import { ServerWizard, type WizardStep } from './ServerWizard'
 
 const POLL_MS = 3000
 const RUNNING_POLL_MS = 1000
@@ -25,81 +25,62 @@ function shortCommit(commit: string | null): string {
   return commit ? commit.slice(0, 7) : '—'
 }
 
-/** Ferme un menu au clic en dehors et à Échap. */
-function useDismiss(open: boolean, close: () => void) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onPointerDown = (event: MouseEvent) => {
-      if (!ref.current?.contains(event.target as Node)) close()
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close()
-    }
-    document.addEventListener('mousedown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [open, close])
-  return ref
-}
-
-/** Liste des serveurs déjà connectés, pour en choisir un, et « Nouveau serveur ». */
-function ServerChoices({ currentId, onChoose, onNew }: { currentId: string | null; onChoose: (id: string) => void; onNew: () => void }) {
+/** Choix du serveur d'un dépôt : les serveurs des réglages, le détachement du dépôt et le lien vers leur gestion. */
+function ServerMenu({ currentId, onChoose, className }: { currentId: string | null; onChoose: (id: string | null) => void; className: string }) {
   const servers = usePolling('deploy-servers', api.listDeployServers, null)
+  const list = servers.data?.servers ?? []
   return (
-    <>
+    <div className={`picker-menu ${className}`}>
       {servers.error && <p className="picker-note error-text">{servers.error}</p>}
-      {servers.data && servers.data.servers.length > 0 && (
+      {servers.data && list.length === 0 && <p className="picker-note">Aucun serveur enregistré.</p>}
+      {list.length > 0 && (
         <ul className="picker-options" role="listbox" aria-label="Serveurs">
-          {servers.data.servers.map(({ server }) => (
-            <li
-              key={server.id}
-              role="option"
-              aria-selected={server.id === currentId}
-              className="picker-option server-option"
-              onMouseDown={(event) => {
-                event.preventDefault()
-                onChoose(server.id)
-              }}
-            >
-              <Icon name="server" size={14} />
-              <span className="picker-name">
-                {server.name}
-                <span className="server-option-detail">
-                  {server.username}@{server.host}:{server.port}
+          {list.map(({ server }) => {
+            const revoked = server.publicKey === null
+            return (
+              <li
+                key={server.id}
+                role="option"
+                aria-selected={server.id === currentId}
+                aria-disabled={revoked}
+                className={`picker-option server-option${server.id === currentId ? ' is-active' : ''}${revoked ? ' is-disabled' : ''}`}
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  if (!revoked && server.id !== currentId) onChoose(server.id)
+                }}
+              >
+                <Icon name="server" size={14} />
+                <span className="picker-name">
+                  {server.name}
+                  <span className="server-option-detail">
+                    {server.username}@{server.host}:{server.port}
+                  </span>
                 </span>
-              </span>
-              {server.id === currentId && <Icon name="check" size={14} className="picker-check" />}
-            </li>
-          ))}
+                {revoked ? <span className="server-option-reason">clé révoquée</span> : server.id === currentId && <Icon name="check" size={14} className="picker-check" />}
+              </li>
+            )
+          })}
         </ul>
       )}
-      <button
-        type="button"
-        className="menu-item"
-        onMouseDown={(event) => {
-          event.preventDefault()
-          onNew()
-        }}
-      >
-        <Icon name="plus" size={14} />
-        Nouveau serveur
-      </button>
-    </>
+      {currentId !== null && (
+        <button type="button" className="menu-item menu-item-danger" onClick={() => onChoose(null)}>
+          <Icon name="x" size={14} />
+          Ne plus déployer ce dépôt
+        </button>
+      )}
+      <a className="menu-item menu-item-link" href={hrefs.settings()}>
+        <Icon name="settings" size={14} />
+        Gérer les serveurs dans les Réglages
+      </a>
+    </div>
   )
 }
 
-/** Bouton « Connecter un serveur » : nouveau serveur, ou choix d'un serveur déjà connecté s'il en existe. */
-function ConnectButton({ repoId, onChanged, onNew }: { repoId: string; onChanged: () => void; onNew: () => void }) {
-  const servers = usePolling('deploy-servers', api.listDeployServers, null)
+function EmptyState({ repoId, onChanged }: { repoId: string; onChanged: () => void }) {
   const [open, setOpen] = useState(false)
   const ref = useDismiss(open, () => setOpen(false))
-  const known = servers.data?.servers.length ?? 0
 
-  async function choose(id: string) {
+  async function choose(id: string | null) {
     setOpen(false)
     try {
       await api.setRepoDeployServer(repoId, id)
@@ -110,46 +91,24 @@ function ConnectButton({ repoId, onChanged, onNew }: { repoId: string; onChanged
   }
 
   return (
-    <div className="picker" ref={ref}>
-      <button type="button" className="button button-primary" onClick={() => (known > 0 ? setOpen(!open) : onNew())}>
-        <Icon name="plug" />
-        Connecter un serveur
-        {known > 0 && <Icon name="chevron-down" size={14} />}
-      </button>
-      {open && (
-        <div className="picker-menu picker-menu-center">
-          <ServerChoices
-            currentId={null}
-            onChoose={(id) => void choose(id)}
-            onNew={() => {
-              setOpen(false)
-              onNew()
-            }}
-          />
-        </div>
-      )}
-    </div>
-  )
-}
-
-function EmptyState({ repoId, onChanged, onNew }: { repoId: string; onChanged: () => void; onNew: () => void }) {
-  return (
     <>
       <div className="panel empty deploy-empty">
         <span className="deploy-empty-icon">
           <Icon name="rocket" size={24} />
         </span>
         <div className="deploy-empty-text">
-          <p className="deploy-empty-title">Aucun serveur de déploiement</p>
-          <p>Connectez le serveur en SSH, puis écrivez le script shell qui installe ce dépôt.</p>
+          <p className="deploy-empty-title">Aucun serveur choisi</p>
+          <p>Choisissez le serveur sur lequel ce dépôt se déploie, puis écrivez son script.</p>
         </div>
-        <ConnectButton repoId={repoId} onChanged={onChanged} onNew={onNew} />
+        <div className="picker" ref={ref}>
+          <button type="button" className="button button-primary" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)}>
+            <Icon name="server" />
+            Choisir un serveur
+          </button>
+          {open && <ServerMenu currentId={null} onChoose={(id) => void choose(id)} className="picker-menu-center server-menu" />}
+        </div>
       </div>
-      <p className="hint">
-        Le serveur se connecte exactement comme dans SSH Gate : clé générée par le tracker, commande d'installation à coller, test.
-        <br />
-        Un serveur déjà connecté pour un autre dépôt se choisit dans le menu du bouton, sans refaire l'installation.
-      </p>
+      <p className="hint">Les serveurs se créent et se connectent en SSH dans les Réglages.</p>
     </>
   )
 }
@@ -161,42 +120,27 @@ interface ServerCardProps {
   starting: boolean
   onDeploy: () => void
   onCancel: (deployment: Deployment) => void
-  onWizard: (step: WizardStep, view?: DeployServerView) => void
-  onKey: (action: 'rotate' | 'revoke') => void
-  onNewServer: () => void
   onChanged: () => void
 }
 
-/** Serveur du dépôt : son état, « Déployer » (ou « Interrompre » pendant un déploiement) et son menu. */
-function ServerCard({ repo, view, deploy, starting, onDeploy, onCancel, onWizard, onKey, onNewServer, onChanged }: ServerCardProps) {
+/** Serveur du dépôt : son sélecteur, son état et « Déployer » (ou « Interrompre » pendant un déploiement). */
+function ServerCard({ repo, view, deploy, starting, onDeploy, onCancel, onChanged }: ServerCardProps) {
   const { server } = view
-  const [menu, setMenu] = useState<'closed' | 'actions' | 'servers'>('closed')
-  const ref = useDismiss(menu !== 'closed', () => setMenu('closed'))
+  const [open, setOpen] = useState(false)
+  const ref = useDismiss(open, () => setOpen(false))
   const active = deploy.activeDeployment
   const last = deploy.deployments.find((deployment) => deployment.status !== 'running') ?? null
   const hasKey = server.publicKey !== null
   const blocked = !hasKey
-    ? 'Clé révoquée : installez une nouvelle clé.'
+    ? 'Clé révoquée : installez une nouvelle clé dans les Réglages.'
     : server.testedAt === null
-      ? 'Testez la connexion avant de déployer.' : !deploy.script.trim() ? 'Écrivez le script avant de déployer.' : repo.deprecatedAt ? 'Dépôt déprécié.' : null
+      ? 'Testez la connexion dans les Réglages avant de déployer.' : !deploy.script.trim() ? 'Écrivez le script avant de déployer.' : repo.deprecatedAt ? 'Dépôt déprécié.' : null
 
   async function choose(id: string | null) {
-    setMenu('closed')
+    setOpen(false)
     try {
       await api.setRepoDeployServer(repo.id, id)
       onChanged()
-    } catch (err) {
-      showError(err)
-    }
-  }
-
-  /** Génère une nouvelle clé pour un serveur dont la clé a été révoquée, puis ouvre son installation. */
-  async function installKey() {
-    setMenu('closed')
-    try {
-      const fresh = await api.installDeployKey(server.id)
-      onChanged()
-      onWizard('key', fresh)
     } catch (err) {
       showError(err)
     }
@@ -208,7 +152,21 @@ function ServerCard({ repo, view, deploy, starting, onDeploy, onCancel, onWizard
     <div className="panel deploy-server">
       <Icon name="server" size={20} className="deploy-server-icon" />
       <div className="deploy-server-text">
-        <div className="deploy-server-name">{server.name}</div>
+        <div className="picker" ref={ref}>
+          <button
+            type="button"
+            className="server-chip"
+            aria-haspopup="listbox"
+            aria-expanded={open}
+            title={active ? 'Un déploiement est en cours' : 'Changer de serveur'}
+            disabled={active !== null}
+            onClick={() => setOpen(!open)}
+          >
+            <span className="deploy-server-name">{server.name}</span>
+            <Icon name="chevron-down" size={12} className="picker-chevron" />
+          </button>
+          {open && <ServerMenu currentId={server.id} onChoose={(id) => void choose(id)} className="server-menu" />}
+        </div>
         <div className="deploy-server-detail">
           {active ? `${server.username}@${server.host}:${server.port} · ${active.branch} · ${shortCommit(active.commit)}` : `${server.username}@${server.host}:${server.port} · ${detail}`}
         </div>
@@ -218,21 +176,12 @@ function ServerCard({ repo, view, deploy, starting, onDeploy, onCancel, onWizard
           <span className="status-dot" />
           En cours
         </span>
-      ) : !hasKey ? (
-        <button type="button" className="status-chip is-idle" onClick={() => void installKey()}>
-          <span className="status-dot" />
-          Sans clé
-        </button>
-      ) : server.testedAt ? (
-        <span className="status-chip is-ok">
-          <span className="status-dot" />
-          Connecté
-        </span>
+      ) : hasKey && server.testedAt ? (
+        <ServerStatus server={server} />
       ) : (
-        <button type="button" className="status-chip is-idle" onClick={() => onWizard('key')}>
-          <span className="status-dot" />
-          À tester
-        </button>
+        <a className="status-chip-link" href={hrefs.settings()} title="Ouvrir les serveurs dans les Réglages">
+          <ServerStatus server={server} />
+        </a>
       )}
       {active ? (
         <button type="button" className="button button-secondary button-stop" onClick={() => onCancel(active)} disabled={active.cancelRequested}>
@@ -245,69 +194,6 @@ function ServerCard({ repo, view, deploy, starting, onDeploy, onCancel, onWizard
           Déployer
         </button>
       )}
-      <div className="picker" ref={ref}>
-        <button type="button" className="icon-button deploy-server-more" aria-label="Menu du serveur" title="Menu du serveur" onClick={() => setMenu(menu === 'closed' ? 'actions' : 'closed')}>
-          <Icon name="ellipsis" size={20} />
-        </button>
-        {menu === 'actions' && (
-          <div className="picker-menu picker-menu-right">
-            {hasKey ? (
-              <button type="button" className="menu-item" onClick={() => (setMenu('closed'), onWizard('key'))}>
-                <Icon name="file-key" size={14} />
-                Commande d'installation et test
-              </button>
-            ) : (
-              <button type="button" className="menu-item" onClick={() => void installKey()}>
-                <Icon name="key-round" size={14} />
-                Installer une clé
-              </button>
-            )}
-            <button type="button" className="menu-item" onClick={() => (setMenu('closed'), onWizard('form'))}>
-              <Icon name="pencil" size={14} />
-              Modifier le serveur
-            </button>
-            {hasKey && (
-              <>
-                <button
-                  type="button"
-                  className="menu-item"
-                  onClick={() => (setMenu('closed'), onKey('rotate'))}
-                  disabled={active !== null || server.hostKeyFingerprint === null}
-                  title={server.hostKeyFingerprint === null ? 'Testez la connexion avant de renouveler la clé.' : undefined}
-                >
-                  <Icon name="refresh-cw" size={14} />
-                  Renouveler la clé
-                </button>
-                <button type="button" className="menu-item menu-item-danger" onClick={() => (setMenu('closed'), onKey('revoke'))} disabled={active !== null}>
-                  <Icon name="key-round" size={14} />
-                  Révoquer la clé
-                </button>
-              </>
-            )}
-            <span className="menu-divider" />
-            <button type="button" className="menu-item" onClick={() => setMenu('servers')} disabled={active !== null}>
-              <Icon name="server" size={14} />
-              Changer de serveur
-            </button>
-            <button type="button" className="menu-item menu-item-danger" onClick={() => void choose(null)} disabled={active !== null}>
-              <Icon name="x" size={14} />
-              Ne plus déployer ce dépôt
-            </button>
-          </div>
-        )}
-        {menu === 'servers' && (
-          <div className="picker-menu picker-menu-right">
-            <ServerChoices
-              currentId={server.id}
-              onChoose={(id) => void choose(id)}
-              onNew={() => {
-                setMenu('closed')
-                onNewServer()
-              }}
-            />
-          </div>
-        )}
-      </div>
     </div>
   )
 }
@@ -456,8 +342,6 @@ function OpenedDeployment({ repoId, deploymentId }: { repoId: string; deployment
  */
 export function DeployTab({ repo, deploymentId }: { repo: Repo; deploymentId: string | null }) {
   const polled = usePolling(`deploy:${repo.id}`, () => api.getRepoDeploy(repo.id), POLL_MS)
-  const [wizard, setWizard] = useState<{ server: DeployServerView | null; step: WizardStep } | null>(null)
-  const [keyAction, setKeyAction] = useState<'rotate' | 'revoke' | null>(null)
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
   const deploy = polled.data
@@ -500,23 +384,9 @@ export function DeployTab({ repo, deploymentId }: { repo: Repo; deploymentId: st
     }
   }
 
-  const wizardModal = wizard && (
-    <ServerWizard
-      repoId={repo.id}
-      server={wizard.server}
-      step={wizard.step}
-      onClose={() => setWizard(null)}
-      onChanged={polled.reload}
-      onWriteScript={() => {
-        setWizard(null)
-        setEditing(true)
-      }}
-    />
-  )
-
   const shown = deploymentId === null && active ? active : null
   const content = !deploy.server ? (
-    <EmptyState repoId={repo.id} onChanged={polled.reload} onNew={() => setWizard({ server: null, step: 'form' })} />
+    <EmptyState repoId={repo.id} onChanged={polled.reload} />
   ) : (
     <>
       <ServerCard
@@ -526,9 +396,6 @@ export function DeployTab({ repo, deploymentId }: { repo: Repo; deploymentId: st
         starting={busy}
         onDeploy={() => void start()}
         onCancel={(deployment) => void cancel(deployment)}
-        onWizard={(step, view) => setWizard({ server: view ?? deploy.server, step })}
-        onKey={setKeyAction}
-        onNewServer={() => setWizard({ server: null, step: 'form' })}
         onChanged={polled.reload}
       />
       <div className="deploy-body">
@@ -561,20 +428,5 @@ export function DeployTab({ repo, deploymentId }: { repo: Repo; deploymentId: st
     </>
   )
 
-  const keyModal =
-    keyAction && deploy.server ? (
-      keyAction === 'rotate' ? (
-        <RotateKeyModal view={deploy.server} onClose={() => setKeyAction(null)} onChanged={polled.reload} />
-      ) : (
-        <RevokeKeyModal view={deploy.server} onClose={() => setKeyAction(null)} onChanged={polled.reload} />
-      )
-    ) : null
-
-  return (
-    <>
-      {content}
-      {wizardModal}
-      {keyModal}
-    </>
-  )
+  return content
 }

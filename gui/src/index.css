@@ -3375,3 +3375,162 @@ code {
 .button-danger-solid:hover:not(:disabled) {
   background: #e5534a;
 }
+
+/* Serveurs de déploiement, dans les réglages */
+
+.settings-hint {
+  margin-bottom: 28px;
+}
+
+.panel.server-list {
+  overflow: visible;
+}
+
+.server-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  margin: 0 -20px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--divider);
+}
+
+.server-row:last-child {
+  border-bottom: none;
+}
+
+.server-row-icon {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.server-row-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.server-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.server-row-detail {
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.server-row-count {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.server-row-count.is-none {
+  color: var(--faint);
+}
+
+.server-row-more {
+  padding: 8px;
+  border-radius: 7px;
+}
+
+.server-row-more.is-open,
+.server-row-more:hover {
+  background: var(--divider);
+  color: var(--text-soft);
+}
+
+.picker-menu-right.server-row-menu {
+  width: 248px;
+}
+
+.menu-item-reason {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.status-chip.is-danger {
+  background: #2d1517;
+  color: #f0857d;
+}
+
+/* Choix du serveur d'un dépôt */
+
+.server-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  margin-left: -8px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.server-chip:hover:not(:disabled),
+.server-chip[aria-expanded='true'] {
+  background: var(--surface-raised);
+  border-color: var(--border-strong);
+}
+
+.server-chip[aria-expanded='true'] {
+  border-color: var(--accent-soft);
+}
+
+.server-chip:disabled {
+  cursor: default;
+}
+
+.server-menu.picker-menu {
+  width: 340px;
+}
+
+.picker-option.is-disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.server-option-reason {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #f0857d;
+}
+
+.menu-item-link {
+  margin-top: 4px;
+  border-top: 1px solid var(--divider);
+  border-radius: 0 0 6px 6px;
+  color: var(--accent-soft);
+}
+
+.menu-item-link svg {
+  color: var(--accent-soft);
+}
+
+.status-chip-link {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+@media (max-width: 720px) {
+  .server-row {
+    flex-wrap: wrap;
+  }
+
+  .server-row-text {
+    flex-basis: calc(100% - 36px);
+  }
+
+  .server-row-count {
+    margin-left: 32px;
+  }
+}

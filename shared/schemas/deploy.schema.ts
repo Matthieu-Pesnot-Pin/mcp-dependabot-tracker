@@ -108,9 +108,14 @@ export interface RotationResponse {
   error: string | null;
 }
 
+/** Serveur de la liste des réglages, avec le nombre de dépôts qui le choisissent. */
+export interface DeployServerListItem extends DeployServerView {
+  repoCount: number;
+}
+
 /** Serveurs enregistrés, du plus ancien au plus récent. */
 export interface DeployServersResponse {
-  servers: DeployServerView[];
+  servers: DeployServerListItem[];
 }
 
 /**

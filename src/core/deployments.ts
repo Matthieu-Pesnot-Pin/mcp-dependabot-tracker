@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { StringDecoder } from "string_decoder";
 import type { Client, ClientChannel } from "ssh2";
-import { DeploymentSchema, type Deployment, type DeploymentSummary, type RepoDeployResponse } from "../../shared/schemas/deploy.schema.js";
+import { DeploymentSchema, type Deployment, type DeploymentSummary, type DeployServerListItem, type RepoDeployResponse } from "../../shared/schemas/deploy.schema.js";
 import type { GitHubConfig } from "./config.js";
 import type { DeployServerStore } from "./deploy-servers.js";
 import { ConflictError, NotFoundError, TrackerError } from "./errors.js";
@@ -263,6 +263,24 @@ export class Deployer {
       activeDeployment: deployments.find((deployment) => deployment.status === "running") ?? null,
       deployments: deployments.map(deploymentSummary),
     };
+  }
+
+  /** Serveurs enregistrés, chacun avec le nombre de dépôts qui le choisissent. */
+  listServers(): DeployServerListItem[] {
+    const repos = this.store.listRepos();
+    return this.servers.list().map((server) => ({
+      ...this.servers.view(server),
+      repoCount: repos.filter((repo) => repo.deployServerId === server.id).length,
+    }));
+  }
+
+  /** Supprime un serveur qu'aucun dépôt ne choisit et sur lequel aucun déploiement ne tourne. */
+  removeServer(serverId: string): void {
+    const server = this.servers.get(serverId);
+    this.assertServerIdle(server.id);
+    const users = this.store.listRepos().filter((repo) => repo.deployServerId === server.id);
+    if (users.length > 0) throw new ConflictError(`${server.name} is the server of ${users.length} repositor${users.length > 1 ? "ies" : "y"}: choose another server for them before deleting it.`);
+    this.servers.remove(server.id);
   }
 
   setServer(repoId: string, serverId: string | null): RepoDeployResponse {

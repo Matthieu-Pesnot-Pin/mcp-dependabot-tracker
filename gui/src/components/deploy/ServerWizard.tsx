@@ -118,20 +118,16 @@ function CopyButton({ value, compact = false }: { value: string; compact?: boole
 }
 
 interface ServerWizardProps {
-  /** Dépôt auquel un nouveau serveur est attaché. */
-  repoId: string
   /** Serveur existant, ouvert à `step`, ou null pour en connecter un nouveau. */
   server: DeployServerView | null
   step: WizardStep
   onClose: () => void
-  /** Serveur enregistré ou testé : la vue du déploiement se relit. */
+  /** Serveur enregistré ou testé : la liste des serveurs se relit. */
   onChanged: () => void
-  /** « Écrire le script », à la fin d'un test réussi. */
-  onWriteScript: () => void
 }
 
 /** Connexion d'un serveur en trois étapes, comme dans SSH Gate : saisie, commande d'installation, test. */
-export function ServerWizard({ repoId, server: initial, step: initialStep, onClose, onChanged, onWriteScript }: ServerWizardProps) {
+export function ServerWizard({ server: initial, step: initialStep, onClose, onChanged }: ServerWizardProps) {
   const [view, setView] = useState<DeployServerView | null>(initial)
   const [step, setStep] = useState<WizardStep>(initial ? initialStep : 'form')
   const [fields, setFields] = useState<DeployServerBody>(
@@ -157,13 +153,7 @@ export function ServerWizard({ repoId, server: initial, step: initialStep, onClo
     setBusy(true)
     setError(null)
     try {
-      let saved: DeployServerView
-      if (view) {
-        saved = await api.updateDeployServer(view.server.id, fields)
-      } else {
-        saved = await api.createDeployServer(fields)
-        await api.setRepoDeployServer(repoId, saved.server.id)
-      }
+      const saved = view ? await api.updateDeployServer(view.server.id, fields) : await api.createDeployServer(fields)
       setView(saved)
       onChanged()
       setStep('key')
@@ -305,14 +295,9 @@ export function ServerWizard({ repoId, server: initial, step: initialStep, onClo
       </div>
     )
     footer = result ? (
-      <>
-        <button type="button" className="button button-secondary button-large" onClick={onClose}>
-          Terminer
-        </button>
-        <button type="button" className="button button-primary button-large" onClick={onWriteScript}>
-          Écrire le script
-        </button>
-      </>
+      <button type="button" className="button button-primary button-large" onClick={onClose}>
+        Terminer
+      </button>
     ) : (
       <>
         <button type="button" className="button button-secondary button-large" onClick={() => setStep('key')} disabled={busy}>
@@ -327,9 +312,9 @@ export function ServerWizard({ repoId, server: initial, step: initialStep, onClo
 
   return (
     <div className="veil" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
-      <div className="modal modal-wizard" role="dialog" aria-label={initial ? `Serveur ${initial.server.name}` : 'Connecter un serveur'}>
+      <div className="modal modal-wizard" role="dialog" aria-label={initial ? `Serveur ${initial.server.name}` : 'Ajouter un serveur'}>
         <div className="wizard-head">
-          <h2 className="wizard-title">{initial ? initial.server.name : 'Connecter un serveur'}</h2>
+          <h2 className="wizard-title">{initial ? initial.server.name : 'Ajouter un serveur'}</h2>
           <button type="button" className="icon-button" onClick={onClose} title="Fermer" aria-label="Fermer">
             <Icon name="x" size={20} />
           </button>

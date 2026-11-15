@@ -14,7 +14,7 @@ import {
   type StoredDeployServer,
   type TestDeployServerResponse,
 } from "../../shared/schemas/deploy.schema.js";
-import { NotFoundError, TrackerError } from "./errors.js";
+import { ConflictError, NotFoundError, TrackerError } from "./errors.js";
 import { AuthRefusedError, connectSsh, execScript, type SshTarget } from "./ssh.js";
 import { decryptSecret, encryptSecret } from "./vault.js";
 
@@ -482,6 +482,15 @@ export class DeployServerStore {
         return toPublic(server);
       })
     );
+  }
+
+  /** Supprime un serveur sans clé ; un serveur qui a encore une clé est refusé. */
+  remove(id: string): void {
+    this.mutate((servers) => {
+      const server = this.find(servers, id);
+      if (server.publicKey) throw new ConflictError(`${server.name} a encore une clé : révoquez-la avant de supprimer le serveur.`);
+      servers.splice(servers.indexOf(server), 1);
+    });
   }
 
   /** Génère une nouvelle paire pour un serveur dont la clé a été révoquée. */

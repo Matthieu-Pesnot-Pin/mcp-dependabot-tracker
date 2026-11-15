@@ -301,6 +301,29 @@ test("an unreachable server keeps its key until the user says the line is remove
   assert.equal(forgotten.json.server.publicKey, null);
 });
 
+test("the server list counts the repositories of each server; a server is deleted only once no repository chooses it and it has no key", async () => {
+  const counts = Object.fromEntries((await call("GET", "deploy-servers")).json.servers.map((s: any) => [s.server.id, s.repoCount]));
+  assert.equal(counts[serverId], 1);
+  assert.equal(counts.gone, 0);
+
+  const used = await call("DELETE", `deploy-servers/${serverId}`);
+  assert.equal(used.status, 409);
+  assert.match(used.json.error, /is the server of 1 repository/);
+
+  const spare = (await call("POST", "deploy-servers", { name: "Spare", host: "127.0.0.1", port: ssh.port, username: "deploy" })).json.server.id;
+  const keyed = await call("DELETE", `deploy-servers/${spare}`);
+  assert.equal(keyed.status, 409);
+  assert.match(keyed.json.error, /a encore une clé/);
+  assert.equal((await call("POST", `deploy-servers/${spare}/key/forget`)).status, 200);
+
+  for (const id of [spare, "gone"]) {
+    const deleted = await call("DELETE", `deploy-servers/${id}`);
+    assert.equal(deleted.status, 200, deleted.json.error);
+  }
+  assert.deepEqual((await call("GET", "deploy-servers")).json.servers.map((s: any) => s.server.id), [serverId]);
+  assert.equal((await call("DELETE", "deploy-servers/gone")).status, 404);
+});
+
 test("changing the host forgets the host key and the test; the server refuses to start with another VAULT_KEY", async () => {
   const moved = await call("PUT", `deploy-servers/${serverId}`, { name: "Préprod 2", host: "localhost", port: ssh.port, username: "deploy" });
   assert.equal(moved.status, 200, moved.json.error);

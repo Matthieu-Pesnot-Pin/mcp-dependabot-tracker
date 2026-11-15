@@ -1,6 +1,7 @@
 import { ANALYSIS_LIMITS, type GitHubTokenView, type SaveSettingsBody, type SettingsView } from '@shared/schemas/settings.schema'
 import { useEffect, useState } from 'react'
 import { AgentTokens } from '../components/AgentTokens'
+import { DeployServers } from '../components/deploy/DeployServers'
 import { Icon } from '../components/Icon'
 import { usePolling } from '../hooks/usePolling'
 import { showError, useNotice } from '../store/useNotice'
@@ -213,7 +214,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
         </a>
         <div className="page-head-text">
           <h1 className="page-title">Réglages</h1>
-          <p className="subtitle">Accès à GitHub, corrections par Claude et agents</p>
+          <p className="subtitle">Accès à GitHub, serveurs de déploiement, corrections par Claude et agents</p>
         </div>
         <div className="page-actions">
           <button type="button" className="button button-primary" disabled={busy} onClick={() => void save()}>
@@ -221,6 +222,8 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
           </button>
         </div>
       </div>
+
+      <DeployServers />
 
       <p className="section-label">GitHub — accès aux dépôts</p>
       <div className="panel settings-card">
@@ -378,7 +381,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
   )
 }
 
-/** Réglages : tokens GitHub, connexion à l'organizer, token d'abonnement Claude, limites d'une session de Claude, tokens d'accès des agents. */
+/** Réglages : serveurs de déploiement, tokens GitHub, connexion à l'organizer, token d'abonnement Claude, limites d'une session de Claude, tokens d'accès des agents. */
 export function SettingsScreen() {
   const polled = usePolling('settings', () => api.getSettings(), null, { remember: false })
   const [saved, setSaved] = useState<SettingsView | null>(null)

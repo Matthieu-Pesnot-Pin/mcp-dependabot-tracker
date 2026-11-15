@@ -94,6 +94,7 @@ export const api = {
   listDeployServers: () => request<DeployServersResponse>('deploy-servers'),
   createDeployServer: (body: DeployServerBody) => send<DeployServerView>('POST', 'deploy-servers', body),
   updateDeployServer: (id: string, body: DeployServerBody) => send<DeployServerView>('PUT', `deploy-servers/${encodeURIComponent(id)}`, body),
+  deleteDeployServer: (id: string) => send<{ deleted: boolean }>('DELETE', `deploy-servers/${encodeURIComponent(id)}`),
   testDeployServer: (id: string) => send<TestDeployServerResponse>('POST', `deploy-servers/${encodeURIComponent(id)}/test`),
   installDeployKey: (id: string) => send<DeployServerView>('POST', `deploy-servers/${encodeURIComponent(id)}/key`),
   rotateDeployKey: (id: string) => send<RotationResponse>('POST', `deploy-servers/${encodeURIComponent(id)}/key/rotate`),
