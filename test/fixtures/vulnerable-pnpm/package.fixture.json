@@ -1,0 +1,5 @@
+{
+  "name": "vulnerable-pnpm",
+  "private": true,
+  "packageManager": "pnpm@10.11.0"
+}

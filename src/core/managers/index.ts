@@ -1,10 +1,11 @@
 import path from "path";
 import type { Change, ManagerId, Project } from "../../../shared/schemas/model.schema.js";
 import { npm } from "./npm.js";
+import { pnpm } from "./pnpm.js";
 import type { Lockfile, PackageManager } from "./types.js";
 
 /** Gestionnaires de paquets pris en charge, dans l'ordre où leurs projets sont traités. */
-export const PACKAGE_MANAGERS: PackageManager[] = [npm];
+export const PACKAGE_MANAGERS: PackageManager[] = [npm, pnpm];
 
 /** Gestionnaire d'identifiant `id`. */
 export function managerOf(id: ManagerId): PackageManager {

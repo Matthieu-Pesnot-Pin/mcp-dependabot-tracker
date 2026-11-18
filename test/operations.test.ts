@@ -10,7 +10,7 @@ import type { GitHubConfig } from "../src/core/config.js";
 import { refreshReportTask } from "../src/core/repair.js";
 import type { Operation } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS, type Settings } from "../shared/schemas/settings.schema.js";
-import { FAKE_CLAUDE, FakeGitHub, FakeOrganizer, LocalRemotes, VULNERABLE_DEV_FIXTURE, VULNERABLE_FIXTURE, fakeContainers, makeTempDir, npmRegistryReachable, podmanCalls, waitFor } from "./helpers.js";
+import { FAKE_CLAUDE, FakeGitHub, FakeOrganizer, LocalRemotes, VULNERABLE_DEV_FIXTURE, VULNERABLE_FIXTURE, VULNERABLE_PNPM_FIXTURE, fakeContainers, makeTempDir, npmRegistryReachable, podmanCalls, waitFor } from "./helpers.js";
 import { NODE_IMAGE } from "../src/core/managers/npm.js";
 
 /**
@@ -366,6 +366,31 @@ test("a production fix leaves the devDependencies out, an audit of all dependenc
   const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
   assert.match(pull.body, /`npm audit fix --omit=dev --package-lock-only --ignore-scripts`/);
   assert.match(pull.body, /Scope: production dependencies only/);
+});
+
+test("a pnpm workspace is audited and fixed with pnpm 11, whatever its packageManager asks", { skip }, async () => {
+  const repoId = await newRepo({ ".": VULNERABLE_PNPM_FIXTURE });
+  const all = await settled(startAudit(ctx, repoId, "agent", "all"));
+  assert.equal(all.status, "done", all.error ?? "");
+  assert.deepEqual(all.projects, [{ path: "", manager: "pnpm" }], "the workspace is one project: its packages have no lockfile of their own");
+  assert.deepEqual(all.found.map((v) => `${v.manager}:${v.name}:${v.fix}`).sort(), ["pnpm:lodash:available", "pnpm:minimist:available", "pnpm:nth-check:major"]);
+
+  const fixed = await settled(startFix(ctx, repoId, "agent", NPM_ONLY));
+  assert.equal(fixed.status, "done", fixed.error ?? "");
+  assert.deepEqual(fixed.found.map((v) => v.name).sort(), ["lodash", "nth-check"], "a production audit leaves minimist, a devDependency, out");
+  assert.equal(fixed.counts.afterFix, 1);
+  const lodash = fixed.changes.find((change) => change.name === "lodash")!;
+  assert.equal(lodash.manager, "pnpm");
+  assert.equal(lodash.from, "4.17.20");
+  assert.notEqual(lodash.to, "4.17.20");
+  assert.ok(fixed.log.some((entry) => /^\$ npm exec --yes --package=pnpm@11 -- pnpm audit --fix=update --prod --lockfile-only --ignore-scripts/.test(entry.text)), "pnpm 11 runs, not the pnpm 10 of packageManager");
+
+  const [owner, name] = repoId.split("/");
+  assert.match(remotes.show(owner, name, fixed.branch!, "pnpm-lock.yaml"), new RegExp(`lodash@${lodash.to!.replace(/\./g, "\\.")}:`));
+  assert.doesNotMatch(remotes.show(owner, name, fixed.branch!, "packages/web/package.json"), /"\^4\.17\.20"/, "the range of lodash follows the fixed version");
+  const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
+  assert.match(pull.body, /`pnpm audit --fix=update --prod --lockfile-only --ignore-scripts`/);
+  assert.ok(!podmanCalls(podmanLog()).some((call) => call.subcommand === "run" && call.workdir === "/work/packages/web"), "the workspace packages are not audited one by one");
 });
 
 test("an operation clones the chosen branch and opens the pull request towards it", { skip }, async () => {

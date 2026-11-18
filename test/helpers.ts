@@ -21,6 +21,14 @@ export const VULNERABLE_FIXTURE = path.resolve(__dirname, "../../test/fixtures/v
 /** Même projet, nth-check en devDependency : un audit de production ne voit que lodash. */
 export const VULNERABLE_DEV_FIXTURE = path.resolve(__dirname, "../../test/fixtures/vulnerable-dev");
 
+/**
+ * Workspace pnpm vulnérable : `packages/web` dépend de lodash (corrigé par
+ * `pnpm audit --fix=update`) et de nth-check (correction majeure), et de
+ * minimist en devDependency ; son `packageManager` demande pnpm 10, qui ne sait
+ * plus auditer.
+ */
+export const VULNERABLE_PNPM_FIXTURE = path.resolve(__dirname, "../../test/fixtures/vulnerable-pnpm");
+
 /** Crée un répertoire temporaire et renvoie sa fonction de suppression. */
 export function makeTempDir(prefix: string): { dir: string; cleanup: () => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));

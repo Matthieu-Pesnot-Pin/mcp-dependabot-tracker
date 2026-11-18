@@ -1,0 +1,48 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .: {}
+
+  packages/web:
+    dependencies:
+      lodash:
+        specifier: ^4.17.20
+        version: 4.17.20
+      nth-check:
+        specifier: ^1.0.2
+        version: 1.0.2
+    devDependencies:
+      minimist:
+        specifier: 1.2.5
+        version: 1.2.5
+
+packages:
+
+  boolbase@1.0.0:
+    resolution: {integrity: sha512-JZOSA7Mo9sNGB8+UjSgzdLtokWAky1zbztM3WRLCbZ70/3cTANmQmOdR7y2g+J0e2WXywy1yS468tY+IruqEww==}
+
+  lodash@4.17.20:
+    resolution: {integrity: sha512-PlhdFcillOINfeV7Ni6oF1TAEayyZBoZ8bcshTHqOYJYlrqzRK5hagpagky5o4HfCzzd1TRkXPMFq6cKk9rGmA==}
+
+  minimist@1.2.5:
+    resolution: {integrity: sha512-FM9nNUYrRBAELZQT3xeZQ7fmMOBg6nWNmJKTcgsJeaLstP/UODVpGsr5OhXhhXg6f+qtJ8uiZ+PUxkDWcgIXLw==}
+
+  nth-check@1.0.2:
+    resolution: {integrity: sha512-WeBOdju8SnzPN5vTUJYxYUxLeXpCaVP5i5e0LF8fg7WORF2Wd7wFX/pk0tYZk7s8T+J7VLy0Da6J1+wCT0AtHg==}
+
+snapshots:
+
+  boolbase@1.0.0: {}
+
+  lodash@4.17.20: {}
+
+  minimist@1.2.5: {}
+
+  nth-check@1.0.2:
+    dependencies:
+      boolbase: 1.0.0

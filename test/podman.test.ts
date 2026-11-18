@@ -7,7 +7,8 @@ import test from "node:test";
 import { PODMAN, assertContainersAvailable, pullImage, runInContainer } from "../src/core/containers.js";
 import { NODE_IMAGE, npm } from "../src/core/managers/npm.js";
 import { runManager, type ManagerContext } from "../src/core/managers/types.js";
-import { VULNERABLE_FIXTURE, makeTempDir, npmRegistryReachable } from "./helpers.js";
+import { pnpm } from "../src/core/managers/pnpm.js";
+import { VULNERABLE_FIXTURE, VULNERABLE_PNPM_FIXTURE, makeTempDir, npmRegistryReachable } from "./helpers.js";
 
 /**
  * Conteneurs réels : vrai Podman rootless, vraie image de Node.js, vrai
@@ -71,6 +72,26 @@ test("a container sees neither the server's files nor its variables", { skip, ti
     assert.ok(!seen.env.includes("HTTP_PROXY_TEST_SECRET"));
   } finally {
     delete process.env.HTTP_PROXY_TEST_SECRET;
+    temp.cleanup();
+  }
+});
+
+test("pnpm 11 audits and fixes a workspace in a container", { skip, timeout: 600_000 }, async () => {
+  const temp = makeTempDir("podman-pnpm-");
+  try {
+    const root = path.join(temp.dir, "repo");
+    fs.cpSync(VULNERABLE_PNPM_FIXTURE, root, { recursive: true });
+    for (const entry of fs.readdirSync(root, { recursive: true, withFileTypes: true })) {
+      if (entry.isFile() && entry.name.includes(".fixture.")) fs.renameSync(path.join(entry.parentPath, entry.name), path.join(entry.parentPath, entry.name.replace(".fixture.", ".")));
+    }
+    const ctx: ManagerContext = { runtime: PODMAN, workspace: { root, cache: path.join(temp.dir, "cache") }, scope: "production", log: () => {} };
+    await pullImage(PODMAN, NODE_IMAGE, temp.dir);
+    const before = await pnpm.audit(ctx, "");
+    assert.deepEqual(before.vulnerabilities.map((v) => v.name), ["lodash", "nth-check"]);
+    await pnpm.fix(ctx, "", before.vulnerabilities);
+    assert.deepEqual((await pnpm.audit(ctx, "")).vulnerabilities.map((v) => v.name), ["nth-check"]);
+    assert.ok(!fs.existsSync(path.join(root, "node_modules")), "the automatic fixes install nothing");
+  } finally {
     temp.cleanup();
   }
 });

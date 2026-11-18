@@ -7,6 +7,7 @@ import { parseRepoRef } from "../src/core/repo-ref.js";
 import { nextPageUrl } from "../src/core/github.js";
 import { parseAuditReport, parseNpmJson, readPackageLock, npm } from "../src/core/managers/npm.js";
 import { detectProjects, diffLockfiles } from "../src/core/managers/index.js";
+import { parsePnpmAudit, pnpmFacts, pnpmVersion, readPnpmLock } from "../src/core/managers/pnpm.js";
 import { branchName, isTrackerBranch, mergeAuditScope } from "../src/core/operations.js";
 import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
@@ -147,7 +148,72 @@ test("the projects of a repository are the folders of the tracked lockfiles", ()
     { path: "", manager: "npm" },
     { path: "gui", manager: "npm" },
   ]);
+  assert.deepEqual(detectProjects(["web/pnpm-lock.yaml", "web/packages/a/package.json", "package-lock.json"]), [
+    { path: "", manager: "npm" },
+    { path: "web", manager: "pnpm" },
+  ]);
   assert.deepEqual(detectProjects(["README.md"]), []);
+});
+
+const PNPM_REPORT = {
+  advisories: {
+    "1": { id: 1, module_name: "lodash", severity: "moderate", title: "ReDoS", url: "https://a/1", vulnerable_versions: "<4.17.21", patched_versions: ">=4.17.21", findings: [{ version: "4.17.20", paths: ["packages__web>lodash"], dev: false }] },
+    "2": { id: 2, module_name: "lodash", severity: "high", title: "Injection", url: "https://a/2", vulnerable_versions: "<=4.17.23", patched_versions: ">=4.18.1", findings: [{ version: "4.17.20", paths: ["packages__web>lodash"], dev: false }] },
+    GHSA: { id: "GHSA-x", module_name: "nth-check", severity: "high", title: "ReDoS", url: "https://a/3", vulnerable_versions: "<2.0.1", patched_versions: ">=2.0.1", findings: [{ version: "1.0.2", paths: ["packages__web>css-select>nth-check"], dev: false }] },
+    "4": { id: 4, module_name: "request", severity: "critical", title: "SSRF", url: "https://a/4", vulnerable_versions: "*", patched_versions: null, findings: [{ version: "2.88.2", paths: ["request"], dev: true }] },
+  },
+  metadata: {},
+};
+
+test("a pnpm audit report gives one vulnerability per package, with its worst severity and hardest fix", () => {
+  assert.deepEqual(
+    parsePnpmAudit(PNPM_REPORT, "web").map((v) => [v.project, v.manager, v.name, v.severity, v.fix]),
+    [
+      ["web", "pnpm", "lodash", "high", "available"],
+      ["web", "pnpm", "nth-check", "high", "major"],
+      ["web", "pnpm", "request", "critical", "none"],
+    ]
+  );
+  const facts = pnpmFacts(PNPM_REPORT, "web") as any[];
+  assert.deepEqual(facts[0].advisories.map((advisory: any) => advisory.patched), [">=4.17.21", ">=4.18.1"]);
+  assert.deepEqual(facts[1].advisories[0].paths, ["packages__web>css-select>nth-check"]);
+  assert.throws(() => parsePnpmAudit({ actions: [] }, ""), /expected an "advisories" object \(pnpm 11 or later\)/);
+});
+
+test("a pnpm-lock.yaml gives the versions of its packages; the pnpm of a project is the one of packageManager when it can audit", () => {
+  const lock = [
+    "lockfileVersion: '9.0'",
+    "",
+    "importers:",
+    "",
+    "  .:",
+    "    dependencies:",
+    "      lodash:",
+    "        specifier: ^4.17.20",
+    "        version: 4.17.20",
+    "",
+    "packages:",
+    "",
+    "  '@babel/core@7.24.0':",
+    "    resolution: {integrity: sha512-x}",
+    "",
+    "  lodash@4.17.20:",
+    "    resolution: {integrity: sha512-y}",
+    "",
+    "  lodash@3.10.1:",
+    "    resolution: {integrity: sha512-z}",
+    "",
+    "snapshots:",
+    "",
+    "  lodash@4.17.20: {}",
+  ].join("\n");
+  assert.deepEqual(readPnpmLock(lock, ""), { "@babel/core": "7.24.0", lodash: "3.10.1, 4.17.20" });
+  assert.throws(() => readPnpmLock("lockfileVersion: '6.0'\n", "web"), /web\/pnpm-lock.yaml has lockfile version 6.0: version 9/);
+  assert.equal(pnpmVersion({ packageManager: "pnpm@12.1.0+sha512.abc" }), "12.1.0");
+  assert.equal(pnpmVersion({ packageManager: "pnpm@11" }), "11");
+  assert.equal(pnpmVersion({ packageManager: "pnpm@10.11.0" }), "11", "pnpm 10 cannot audit any more");
+  assert.equal(pnpmVersion({ packageManager: "yarn@4.0.0" }), "11");
+  assert.equal(pnpmVersion({}), "11");
 });
 
 test("commands run without the secrets of the server in their environment", async () => {
@@ -948,7 +1014,7 @@ test("operationSummary sums an operation up for the history of its repository", 
 
 /** Arguments du gestionnaire pour l'appel de l'outil `name` de Claude. */
 function toolArgs(name: string, args: Record<string, unknown>, scope: "production" | "all"): string[] {
-  const found = toolsOf(["npm"]).find(({ tool }) => tool.name === name);
+  const found = toolsOf(["npm", "pnpm"]).find(({ tool }) => tool.name === name);
   if (!found) throw new Error(`Unknown tool: ${name}`);
   return found.tool.args(args, scope);
 }
@@ -967,6 +1033,16 @@ test("the npm tools of Claude run fixed npm commands, with names only as argumen
     ["npm_install_lockfile", "npm_audit", "npm_ci", "npm_test", "npm_run", "npm_ls", "tsc"]
   );
   assert.deepEqual(npm.command({ runtime: { command: ["podman"] }, workspace: { root: process.cwd(), cache: "c" }, scope: "all", log: () => {} }, "", ["ci"]).command, ["npm", "ci"]);
+});
+
+test("the pnpm tools of Claude run fixed pnpm commands, and only the tools of the managers of the repository are served", () => {
+  assert.deepEqual(toolArgs("pnpm_install_lockfile", { project: "" }, "all"), ["install", "--lockfile-only", "--ignore-scripts"]);
+  assert.deepEqual(toolArgs("pnpm_audit", { project: "" }, "production"), ["audit", "--prod"]);
+  assert.deepEqual(toolArgs("pnpm_run", { project: "", script: "build", filter: "web" }, "all"), ["--filter", "web", "run", "build"]);
+  assert.deepEqual(toolArgs("pnpm_why", { project: "", package: "lodash" }, "all"), ["why", "-r", "lodash"]);
+  assert.throws(() => toolArgs("pnpm_run", { project: "", script: "build", filter: "--global" }, "all"), /package or script name/);
+  assert.ok(toolsOf(["pnpm"]).every(({ tool }) => tool.name.startsWith("pnpm_")));
+  assert.ok(!toolsOf(["npm"]).some(({ tool }) => tool.name.startsWith("pnpm_")));
 });
 
 test("the package manager commands only run in a project folder of the clone", () => {
