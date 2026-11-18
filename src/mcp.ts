@@ -16,7 +16,7 @@ Concepts:
 - A **deprecated repository** is one the user set aside in the GUI: list_repositories leaves it out, and every tool refuses it until the user restores it.
 - The **scope** of an audit or a fix is chosen at each launch: production (the default) runs npm audit and npm audit fix with --omit=dev, so the devDependencies are left out; all covers every dependency.
 - The **analysed branch** of a repository is chosen by the user in the GUI (the default branch unless changed). Dependabot alerts always describe the default branch; npm audit describes the analysed branch.
-- An **operation** is an audit or a fix, run by the server in a temporary clone of the analysed branch, deleted at the end. A fix runs npm audit fix with --package-lock-only and --ignore-scripts, then, when vulnerabilities remain, the fixes by Claude (unless you pass claude: false), then commits on a new branch fix/npm-audit-<date>-<time> and opens a pull request to the analysed branch.
+- An **operation** is an audit or a fix, run by the server in a temporary clone of the analysed branch, deleted at the end. A fix runs npm audit fix with --package-lock-only and --ignore-scripts, then, when vulnerabilities remain, the fixes by Claude (unless you pass claude: false), then commits on a new branch fix/deps-audit-<date>-<time> and opens a pull request to the analysed branch.
 
 Workflow:
 1. list_repositories to see the tracked repositories and their open alerts.

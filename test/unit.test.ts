@@ -5,7 +5,8 @@ import test from "node:test";
 
 import { parseRepoRef } from "../src/core/repo-ref.js";
 import { nextPageUrl } from "../src/core/github.js";
-import { diffLockfiles, parseAuditReport, parseLockfile, parseNpmJson } from "../src/core/npm-audit.js";
+import { parseAuditReport, parseNpmJson, readPackageLock, npm } from "../src/core/managers/npm.js";
+import { detectProjects, diffLockfiles } from "../src/core/managers/index.js";
 import { branchName, isTrackerBranch, mergeAuditScope } from "../src/core/operations.js";
 import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
@@ -22,7 +23,7 @@ import { resolveCloneDir, resolveDataDir } from "../src/core/data-dir.js";
 import { describeOperation } from "../src/tools/format.js";
 import { assertSandboxAvailable } from "../src/core/sandbox.js";
 import { assertContainersAvailable, projectDir, runArgs, runInContainer } from "../src/core/containers.js";
-import { npmArgs } from "../src/npm-tools.js";
+import { toolsOf } from "../src/package-tools.js";
 import { organizerUrl } from "../src/core/organizer.js";
 import { adoptEnvGitHubToken, encryptStoredTokens, readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
 import { tokenExpiration } from "../src/core/github.js";
@@ -130,15 +131,23 @@ test("parseNpmJson surfaces npm errors and non-JSON output", () => {
   assert.deepEqual(parseNpmJson('{"ok":1}', "", "npm"), { ok: 1 });
 });
 
-test("diffLockfiles lists changed, added and removed packages", () => {
-  const before = { packages: { "": { version: "1.0.0" }, "node_modules/a": { version: "1.0.0" }, "node_modules/b": { version: "2.0.0" }, "node_modules/c": { version: "1.0.0" } } };
-  const after = { packages: { "": { version: "1.0.0" }, "node_modules/a": { version: "1.1.0" }, "node_modules/b": { version: "2.0.0" }, "node_modules/x/node_modules/d": { version: "3.0.0" } } };
-  assert.deepEqual(diffLockfiles(before, after, ""), [
-    { project: "", name: "a", from: "1.0.0", to: "1.1.0" },
-    { project: "", name: "c", from: "1.0.0", to: null },
-    { project: "", name: "x/node_modules/d", from: null, to: "3.0.0" },
+test("diffLockfiles lists changed, added and removed packages of a package-lock.json", () => {
+  const before = readPackageLock(JSON.stringify({ packages: { "": { version: "1.0.0" }, "node_modules/a": { version: "1.0.0" }, "node_modules/b": { version: "2.0.0" }, "node_modules/c": { version: "1.0.0" } } }), "");
+  const after = readPackageLock(JSON.stringify({ packages: { "": { version: "1.0.0" }, "node_modules/a": { version: "1.1.0" }, "node_modules/b": { version: "2.0.0" }, "node_modules/x/node_modules/d": { version: "3.0.0" } } }), "");
+  assert.deepEqual(diffLockfiles(before, after, { path: "", manager: "npm" }), [
+    { project: "", manager: "npm", name: "a", from: "1.0.0", to: "1.1.0" },
+    { project: "", manager: "npm", name: "c", from: "1.0.0", to: null },
+    { project: "", manager: "npm", name: "x/node_modules/d", from: null, to: "3.0.0" },
   ]);
-  assert.throws(() => parseLockfile('{"lockfileVersion":1,"dependencies":{}}', "gui"), /gui\/package-lock.json has no "packages" section/);
+  assert.throws(() => readPackageLock('{"lockfileVersion":1,"dependencies":{}}', "gui"), /gui\/package-lock.json has no "packages" section/);
+});
+
+test("the projects of a repository are the folders of the tracked lockfiles", () => {
+  assert.deepEqual(detectProjects(["package-lock.json", "gui/package-lock.json", "gui/package.json", "README.md", "docs/package-lock.json.bak"]), [
+    { path: "", manager: "npm" },
+    { path: "gui", manager: "npm" },
+  ]);
+  assert.deepEqual(detectProjects(["README.md"]), []);
 });
 
 test("commands run without the secrets of the server in their environment", async () => {
@@ -214,7 +223,8 @@ test("resolveDataDir requires DATA_DIR, creates it, and resolveCloneDir creates 
 });
 
 test("branchName encodes the local date and time down to the second", () => {
-  assert.equal(branchName(new Date(2026, 9, 28, 14, 32, 5)), "fix/npm-audit-2026-10-28-143205");
+  assert.equal(branchName(new Date(2026, 9, 28, 14, 32, 5)), "fix/deps-audit-2026-10-28-143205");
+  assert.equal(isTrackerBranch("fix/deps-audit-2026-10-28-143205"), true);
 });
 
 test("trackerPullRequests keeps the open pull requests of the tracker's own branches", () => {
@@ -291,8 +301,8 @@ test("auditFindings reports what the latest audit of the default branch found wh
       steps: { clone: "done", audit: "done", fix: "skipped", repair: "skipped", push: "skipped" },
       counts: { initial: 2, afterFix: null, afterRepair: null },
       found: [
-        { project: "", name: "lodash", severity: "moderate", fix: "available" },
-        { project: "", name: "tar", severity: "high", fix: "none" },
+        { project: "", manager: "npm", name: "lodash", severity: "moderate", fix: "available" },
+        { project: "", manager: "npm", name: "tar", severity: "high", fix: "none" },
       ],
       ...overrides,
     });
@@ -318,8 +328,8 @@ test("lastAudit sums up the latest audit, whatever its branch", () => {
       createdAt: "2026-03-01T10:00:00.000Z",
       steps: { clone: "done", audit: "done", fix: "skipped", repair: "skipped", push: "skipped" },
       found: [
-        { project: "", name: "lodash", severity: "moderate", fix: "available" },
-        { project: "", name: "tar", severity: "high", fix: "none" },
+        { project: "", manager: "npm", name: "lodash", severity: "moderate", fix: "available" },
+        { project: "", manager: "npm", name: "tar", severity: "high", fix: "none" },
       ],
       ...overrides,
     });
@@ -333,7 +343,7 @@ test("lastAudit sums up the latest audit, whatever its branch", () => {
     id: "op-4",
     kind: "fix",
     updatedAt: "2026-03-01T10:20:00.000Z",
-    remaining: [{ project: "", name: "tar", severity: "low", fix: "none" }],
+    remaining: [{ project: "", manager: "npm", name: "tar", severity: "low", fix: "none" }],
     branch: "fix/npm-audit-2026-03-01-100000",
     pullRequest: { number: 12, url: "https://github.com/octo/demo/pull/12" },
   });
@@ -404,10 +414,10 @@ test("unfixablePackages lists the packages without a published fix from the late
     status: "done",
     steps: { clone: "done", audit: "done", fix: "done", repair: "skipped", push: "skipped" },
     remaining: [
-      { project: "", name: "xlsx", severity: "high", fix: "none" },
-      { project: "gui", name: "xlsx", severity: "high", fix: "none" },
-      { project: "", name: "nth-check", severity: "high", fix: "major" },
-      { project: "", name: "abc", severity: "low", fix: "none" },
+      { project: "", manager: "npm", name: "xlsx", severity: "high", fix: "none" },
+      { project: "gui", manager: "npm", name: "xlsx", severity: "high", fix: "none" },
+      { project: "", manager: "npm", name: "nth-check", severity: "high", fix: "major" },
+      { project: "", manager: "npm", name: "abc", severity: "low", fix: "none" },
     ],
   });
   const target = repo("octo/demo", [alert(1, "high", "xlsx")]);
@@ -565,11 +575,29 @@ test("changes coming from another site are refused", () => {
   assert.match(crossSiteRejection("DELETE", { origin: "https://evil.example" }, app)!, /Origin/);
 });
 
+test("Store reads an operation saved before the package managers: npm projects, vulnerabilities and changes", () => {
+  const temp = makeTempDir("tracker-managers-");
+  try {
+    const store = new Store(temp.dir);
+    const saved: any = operation({ id: "op-old" });
+    saved.projects = ["", "gui"];
+    saved.remaining = [{ project: "gui", name: "lodash", severity: "high", fix: "available" }];
+    saved.changes = [{ project: "", name: "lodash", from: "1.0.0", to: "1.0.1" }];
+    fs.writeFileSync(path.join(temp.dir, "operations", "op-old.json"), JSON.stringify(saved));
+    const read = store.getOperation("op-old");
+    assert.deepEqual(read.projects, [{ path: "", manager: "npm" }, { path: "gui", manager: "npm" }]);
+    assert.equal(read.remaining[0].manager, "npm");
+    assert.equal(read.changes[0].manager, "npm");
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("Store reads an operation saved without the vulnerabilities of its first audit", () => {
   const temp = makeTempDir("tracker-found-");
   try {
     const store = new Store(temp.dir);
-    const remaining = [{ project: "", name: "lodash", severity: "high" as const, fix: "available" as const }];
+    const remaining = [{ project: "", manager: "npm" as const, name: "lodash", severity: "high" as const, fix: "available" as const }];
     for (const [id, afterFix] of [["op-audit", null], ["op-fix", 1]] as const) {
       const saved = { ...operation({ id, remaining, counts: { initial: 1, afterFix, afterRepair: null } }) } as Partial<Operation>;
       delete saved.found;
@@ -836,17 +864,17 @@ test("describeOperation reports counts, changes and the pull request", () => {
   const text = describeOperation(
     operation({
       status: "done",
-      projects: ["", "gui"],
+      projects: [{ path: "", manager: "npm" }, { path: "gui", manager: "npm" }],
       steps: { clone: "done", audit: "done", fix: "done", repair: "skipped", push: "done" },
       counts: { initial: 4, afterFix: 2, afterRepair: null },
-      changes: [{ project: "gui", name: "lodash", from: "4.17.20", to: "4.18.1" }],
+      changes: [{ project: "gui", manager: "npm", name: "lodash", from: "4.17.20", to: "4.18.1" }],
       branch: "fix/npm-audit-2026-10-28-143205",
       pullRequest: { number: 7, url: "https://github.com/octo/demo/pull/7" },
     })
   );
   assert.match(text, /^Fix of octo\/demo \(branch main\), production dependencies \(operation op-1\): done\./);
-  assert.match(text, /npm projects: \.\/, gui\//);
-  assert.match(text, /Vulnerabilities: 4 found, 2 left after npm audit fix/);
+  assert.match(text, /Projects: \.\/ \(npm\), gui\/ \(npm\)/);
+  assert.match(text, /Vulnerabilities: 4 found, 2 left after the automatic fixes/);
   assert.match(text, /Updated packages \(1\): gui\/lodash 4\.17\.20 → 4\.18\.1/);
   assert.match(text, /Pull request #7: https:\/\/github.com\/octo\/demo\/pull\/7 \(branch fix\/npm-audit-2026-10-28-143205\)/);
 
@@ -918,15 +946,27 @@ test("operationSummary sums an operation up for the history of its repository", 
   assert.ok(!("log" in fix) && !("repair" in fix), "the history leaves the log and the session of Claude out");
 });
 
+/** Arguments du gestionnaire pour l'appel de l'outil `name` de Claude. */
+function toolArgs(name: string, args: Record<string, unknown>, scope: "production" | "all"): string[] {
+  const found = toolsOf(["npm"]).find(({ tool }) => tool.name === name);
+  if (!found) throw new Error(`Unknown tool: ${name}`);
+  return found.tool.args(args, scope);
+}
+
 test("the npm tools of Claude run fixed npm commands, with names only as arguments", () => {
-  assert.deepEqual(npmArgs("npm_install_lockfile", { project: "", packages: ["mermaid@12.0.1"] }, "production"), ["install", "--package-lock-only", "--ignore-scripts", "mermaid@12.0.1"]);
-  assert.deepEqual(npmArgs("npm_audit", { project: "web" }, "production"), ["audit", "--omit=dev"]);
-  assert.deepEqual(npmArgs("npm_audit", { project: "web" }, "all"), ["audit"]);
-  assert.deepEqual(npmArgs("npm_run", { project: "", script: "test:unit" }, "all"), ["run", "test:unit"]);
-  assert.deepEqual(npmArgs("tsc", { project: "" }, "all"), ["exec", "--no", "--", "tsc", "--noEmit"]);
-  assert.throws(() => npmArgs("npm_install_lockfile", { project: "", packages: ["--global"] }, "all"), /package or script name/);
-  assert.throws(() => npmArgs("npm_run", { project: "", script: "test; rm -rf /" }, "all"), /package or script name/);
-  assert.throws(() => npmArgs("npm_ci", { project: "", force: true }, "all"), /force/);
+  assert.deepEqual(toolArgs("npm_install_lockfile", { project: "", packages: ["mermaid@12.0.1"] }, "production"), ["install", "--package-lock-only", "--ignore-scripts", "mermaid@12.0.1"]);
+  assert.deepEqual(toolArgs("npm_audit", { project: "web" }, "production"), ["audit", "--omit=dev"]);
+  assert.deepEqual(toolArgs("npm_audit", { project: "web" }, "all"), ["audit"]);
+  assert.deepEqual(toolArgs("npm_run", { project: "", script: "test:unit" }, "all"), ["run", "test:unit"]);
+  assert.deepEqual(toolArgs("tsc", { project: "" }, "all"), ["exec", "--no", "--", "tsc", "--noEmit"]);
+  assert.throws(() => toolArgs("npm_install_lockfile", { project: "", packages: ["--global"] }, "all"), /package or script name/);
+  assert.throws(() => toolArgs("npm_run", { project: "", script: "test; rm -rf /" }, "all"), /package or script name/);
+  assert.throws(() => toolArgs("npm_ci", { project: "", force: true }, "all"), /force/);
+  assert.deepEqual(
+    toolsOf(["npm"]).map(({ tool }) => tool.name),
+    ["npm_install_lockfile", "npm_audit", "npm_ci", "npm_test", "npm_run", "npm_ls", "tsc"]
+  );
+  assert.deepEqual(npm.command({ runtime: { command: ["podman"] }, workspace: { root: process.cwd(), cache: "c" }, scope: "all", log: () => {} }, "", ["ci"]).command, ["npm", "ci"]);
 });
 
 test("the package manager commands only run in a project folder of the clone", () => {

@@ -1,7 +1,7 @@
 import { ALERT_SEVERITIES, STEP_NAMES, type AuditScope, type Operation, type Repo } from "../../shared/schemas/model.schema.js";
 import type { RepoView } from "../../shared/schemas/api.schema.js";
 import { pendingAlerts } from "../../shared/alerts.js";
-import { projectLabel } from "../core/npm-audit.js";
+import { projectLabel } from "../core/managers/types.js";
 import { countBySeverity } from "../core/repos.js";
 
 /** Paquets cités en clair dans un résultat ; au-delà, le reste est compté. */
@@ -80,15 +80,15 @@ function list<T>(items: T[], render: (item: T) => string): string {
 /** Libellé d'une étape, pour l'étape en cours. */
 const STEP_LABELS: Record<(typeof STEP_NAMES)[number], string> = {
   clone: "cloning the repository",
-  audit: "npm audit",
-  fix: "npm audit fix",
+  audit: "audit",
+  fix: "automatic fixes",
   repair: "fixes by Claude",
   push: "commit, push and pull request",
 };
 
 /** Compte rendu d'une opération pour l'agent : avancement, vulnérabilités, paquets modifiés, corrections par Claude, PR, erreur. */
 export function describeOperation(operation: Operation): string {
-  const title = operation.kind === "audit" ? "npm audit" : "Fix";
+  const title = operation.kind === "audit" ? "Audit" : "Fix";
   const lines = [`${title} of ${operation.repoId} (branch ${operation.baseBranch}), ${scopeLabel(operation.scope)} (operation ${operation.id}): ${operation.status}.`];
   if (operation.status === "running") {
     const step = STEP_NAMES.find((name) => operation.steps[name] === "running");
@@ -96,12 +96,12 @@ export function describeOperation(operation: Operation): string {
     if (step === "repair" && operation.repair) lines.push(`- Claude: ${operation.repair.turns} turn(s); last actions: ${operation.repair.activity.join(" · ") || "none yet"}`);
   }
   if (operation.projects.length > 0) {
-    lines.push(`- npm projects: ${operation.projects.map((project) => projectLabel(project) || "./").join(", ")}`);
+    lines.push(`- Projects: ${operation.projects.map((project) => `${projectLabel(project.path) || "./"} (${project.manager})`).join(", ")}`);
   }
   const { initial, afterFix, afterRepair } = operation.counts;
   if (initial !== null) {
     const parts = [`${initial} found`];
-    if (afterFix !== null) parts.push(`${afterFix} left after npm audit fix`);
+    if (afterFix !== null) parts.push(`${afterFix} left after the automatic fixes`);
     if (afterRepair !== null) parts.push(`${afterRepair} left after the fixes by Claude`);
     lines.push(`- Vulnerabilities: ${parts.join(", ")}`);
   }

@@ -40,7 +40,7 @@ export const TOOLS = [
   {
     name: "fix_vulnerabilities",
     description:
-      "Start the fix of the npm vulnerabilities of a tracked repository, the same as the user's Fix button: in a temporary clone of the analysed branch, npm audit, then npm audit fix --package-lock-only --ignore-scripts, then, when vulnerabilities remain, the fixes by Claude (Claude Code analyses and fixes them in the code, runs the tests and reports in an organizer task), then a commit on a new branch fix/npm-audit-<date>-<time>, its push and a pull request to the analysed branch. " +
+      "Start the fix of the npm vulnerabilities of a tracked repository, the same as the user's Fix button: in a temporary clone of the analysed branch, npm audit, then npm audit fix --package-lock-only --ignore-scripts, then, when vulnerabilities remain, the fixes by Claude (Claude Code analyses and fixes them in the code, runs the tests and reports in an organizer task), then a commit on a new branch fix/deps-audit-<date>-<time>, its push and a pull request to the analysed branch. " +
       "Returns at once with the id of the operation: follow it with get_operation. A fix with Claude can take several minutes.",
     inputSchema: {
       type: "object" as const,

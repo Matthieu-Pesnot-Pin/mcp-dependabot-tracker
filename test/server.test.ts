@@ -413,7 +413,7 @@ test("the GUI audits every repository; the agent sees what Dependabot misses", {
 test("the agent starts an audit and follows it to the end", { skip }, async () => {
   const started = await client.callTool("run_audit", { repository: "octo/demo" });
   assert.equal(started.isError, false, started.text);
-  assert.match(started.text, /^npm audit of octo\/demo \(branch main\), production dependencies \(operation op-[a-z0-9-]+\): running\./);
+  assert.match(started.text, /^Audit of octo\/demo \(branch main\), production dependencies \(operation op-[a-z0-9-]+\): running\./);
   const id = operationId(started.text);
   assert.match((await client.callTool("run_audit", { repository: "octo/demo" })).text, /already in progress on octo\/demo/);
 
@@ -432,9 +432,9 @@ test("the agent fixes without Claude, to the pull request; the result links to t
   const fixed = await settledOperation(id);
   assert.equal(fixed.isError, false, fixed.text);
   assert.match(fixed.text, /^Fix of octo\/demo \(branch main\), production dependencies \(operation op-[a-z0-9-]+\): done\./);
-  assert.match(fixed.text, /Vulnerabilities: 2 found, 1 left after npm audit fix/);
+  assert.match(fixed.text, /Vulnerabilities: 2 found, 1 left after the automatic fixes/);
   assert.match(fixed.text, /nth-check \(\w+, fix needs a major upgrade\)/);
-  assert.match(fixed.text, /Pull request #\d+: https:\/\/github\.com\/octo\/demo\/pull\/\d+ \(branch fix\/npm-audit-/);
+  assert.match(fixed.text, /Pull request #\d+: https:\/\/github\.com\/octo\/demo\/pull\/\d+ \(branch fix\/deps-audit-/);
   assert.doesNotMatch(fixed.text, /Fixes by Claude/);
 
   const operation = (await call("GET", `operations/${id}`)).json.operation;

@@ -8,6 +8,7 @@ import {
   type Operation,
   type OperationKind,
   type Origin,
+  type Project,
   type PullRequest,
   type Repair,
   type Repo,
@@ -21,17 +22,10 @@ import { CommandAbortedError, runCommand, tail, type CommandResult } from "./com
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, TrackerError } from "./errors.js";
 import { GitHubClient } from "./github.js";
-import {
-  diffLockfiles,
-  parseAuditReport,
-  parseLockfile,
-  parseNpmJson,
-  projectLabel,
-  type Lockfile,
-} from "./npm-audit.js";
-import { CACHE_DIR, assertContainersAvailable, pullImage, type ContainerRuntime, type Workspace } from "./containers.js";
-import { NODE_IMAGE, runNpm } from "./npm.js";
-import { auditFacts, repairVulnerabilities } from "./repair.js";
+import { CACHE_DIR, assertContainersAvailable, buildImage, pullImage, type ContainerRuntime, type Workspace } from "./containers.js";
+import { PACKAGE_MANAGERS, detectProjects, diffLockfiles, lockfilePath, managerOf } from "./managers/index.js";
+import { projectLabel, type Lockfile, type ManagerContext } from "./managers/types.js";
+import { repairVulnerabilities } from "./repair.js";
 import { assertNotDeprecated, isActive, type Store } from "./store.js";
 
 /** Accès aux données et à GitHub pour exécuter les opérations. */
@@ -53,7 +47,7 @@ export interface OperationContext {
 
 /**
  * Choix d'une correction : le périmètre, et les corrections par Claude quand
- * `npm audit fix` laisse des vulnérabilités.
+ * les corrections automatiques laissent des vulnérabilités.
  */
 export interface FixPlan {
   scope: AuditScope;
@@ -98,16 +92,16 @@ function now(): string {
   return new Date().toISOString();
 }
 
-/** `fix/npm-audit-2026-10-28-143205`, à l'heure locale du serveur. */
+/** `fix/deps-audit-2026-10-28-143205`, à l'heure locale du serveur. */
 export function branchName(date: Date): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  return `fix/npm-audit-${day}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+  return `fix/deps-audit-${day}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
-/** Vrai pour une branche nommée par `branchName`. */
+/** Vrai pour une branche du tracker : `fix/deps-audit-…`, nommée par `branchName`, ou `fix/npm-audit-…`. */
 export function isTrackerBranch(branch: string): boolean {
-  return /^fix\/npm-audit-\d{4}-\d{2}-\d{2}-\d{6}$/.test(branch);
+  return /^fix\/(deps|npm)-audit-\d{4}-\d{2}-\d{2}-\d{6}$/.test(branch);
 }
 
 /** Réglage git passé à une commande par son environnement : clé et valeur. */
@@ -133,18 +127,6 @@ function gitEnv(settings: GitSetting[]): Record<string, string> {
     env[`GIT_CONFIG_VALUE_${index}`] = value;
   });
   return env;
-}
-
-/**
- * Environnement des commandes npm. `allow_remote` autorise le téléchargement des
- * archives de paquets à `bundleDependencies` (ex. `@tailwindcss/oxide-wasm32-wasi`),
- * que npm 12 classe en dépendances distantes avec `--package-lock-only`.
- */
-const NPM_ENV = { npm_config_fund: "false", npm_config_allow_remote: "all" };
-
-/** Options npm qui limitent l'audit et ses corrections au périmètre `scope`. */
-function scopeArgs(scope: AuditScope): string[] {
-  return scope === "production" ? ["--omit=dev"] : [];
 }
 
 /** Sous-commande git d'une liste d'arguments, après les options `-c clé=valeur`. */
@@ -193,6 +175,9 @@ class Runner {
     readonly cloneDir: string,
     readonly containers: ContainerRuntime
   ) {}
+
+  /** Vulnérabilités du dernier audit, réduites à ce qui sert les corrections par Claude. */
+  facts: unknown[] = [];
 
   get operation(): Operation {
     return this.ctx.store.getOperation(this.id);
@@ -258,26 +243,20 @@ class Runner {
     return { root: this.repoDir, cache: path.join(this.operation.workDir!, CACHE_DIR) };
   }
 
-  /**
-   * npm dans le dossier d'un projet du clone, dans un conteneur jetable, avec
-   * le cache de l'opération ; sa sortie JSON est lue même avec un code de
-   * sortie non nul.
-   */
-  async npm(project: string, args: string[]): Promise<any> {
-    this.log(`$ npm ${args.join(" ")}`);
-    const result = await runNpm(this.containers, this.workspace, project, args, { env: NPM_ENV, signal: this.signal });
-    return parseNpmJson(result.stdout, result.stderr, `npm ${args.slice(0, args.indexOf("--json")).join(" ")} in ${projectLabel(project) || "./"}`);
+  /** Contexte des commandes des gestionnaires de paquets de l'opération. */
+  get managers(): ManagerContext {
+    return { runtime: this.containers, workspace: this.workspace, scope: this.operation.scope, signal: this.signal, log: (text) => this.log(text) };
   }
 
-  readLock(project: string): Lockfile {
-    const file = path.join(this.repoDir, project, "package-lock.json");
-    return parseLockfile(fs.readFileSync(file, "utf-8"), project);
+  readLock(project: Project): Lockfile {
+    const file = path.join(this.repoDir, lockfilePath(project));
+    return managerOf(project.manager).readLock(fs.readFileSync(file, "utf-8"), project.path);
   }
 
   /**
    * Commit cloné : HEAD tant que le tracker n'a rien commité ; après le commit
-   * de `npm audit fix`, son parent, et sans ce commit, la base des corrections
-   * par Claude.
+   * des corrections automatiques, son parent, et sans ce commit, la base des
+   * corrections par Claude.
    */
   get clonedCommit(): string {
     const repair = this.operation.repair;
@@ -286,9 +265,8 @@ class Runner {
   }
 
   /** Lockfile du projet tel qu'il est dans le commit cloné. */
-  async originalLock(project: string): Promise<Lockfile> {
-    const file = project === "" ? "package-lock.json" : `${project}/package-lock.json`;
-    return parseLockfile(await this.git(["show", `${this.clonedCommit}:${file}`]), project);
+  async originalLock(project: Project): Promise<Lockfile> {
+    return managerOf(project.manager).readLock(await this.git(["show", `${this.clonedCommit}:${lockfilePath(project)}`]), project.path);
   }
 }
 
@@ -309,28 +287,44 @@ async function cloneStep(runner: Runner): Promise<void> {
   fs.rmSync(path.join(workDir, CLONE_DIR, ".git"));
 
   const files = (await runner.git(["ls-files", "-z"])).split("\0");
-  const projects = files
-    .filter((file) => file === "package-lock.json" || file.endsWith("/package-lock.json"))
-    .map((file) => path.posix.dirname(file))
-    .map((dir) => (dir === "." ? "" : dir))
-    .sort();
+  const projects = detectProjects(files);
   if (projects.length === 0) {
-    throw new TrackerError(`No package-lock.json is tracked in ${operation.repoId}: npm audit needs a lockfile.`);
+    const lockfiles = PACKAGE_MANAGERS.map((manager) => manager.lockfile).join(", ");
+    throw new TrackerError(`No lockfile is tracked in ${operation.repoId}: the audit needs one of ${lockfiles}.`);
   }
   runner.update((current) => ({ ...current, projects }));
-  runner.log(`npm projects: ${projects.map((project) => projectLabel(project) || "./").join(", ")}`);
-  runner.log(`$ podman pull ${NODE_IMAGE}`);
-  await pullImage(runner.containers, NODE_IMAGE, runner.cloneDir, runner.signal);
+  runner.log(`Projects: ${projects.map((project) => `${projectLabel(project.path) || "./"} (${project.manager})`).join(", ")}`);
+  await prepareImages(runner, projects);
   runner.setStep("clone", "done");
 }
 
-/** `npm audit` dans chaque projet ; enregistre le total sous `count` et les vulnérabilités restantes. */
+/** Met à jour, ou construit, une fois chacune, les images des conteneurs des projets. */
+async function prepareImages(runner: Runner, projects: Project[]): Promise<void> {
+  const ready = new Set<string>();
+  for (const project of projects) {
+    const image = managerOf(project.manager).image(runner.managers, project.path);
+    if (ready.has(image.name)) continue;
+    ready.add(image.name);
+    if (image.containerfile === undefined) {
+      runner.log(`$ podman pull ${image.name}`);
+      await pullImage(runner.containers, image.name, runner.cloneDir, runner.signal);
+    } else {
+      runner.log(`$ podman build --tag ${image.name}`);
+      await buildImage(runner.containers, image.name, image.containerfile, runner.cloneDir, runner.signal);
+    }
+  }
+}
+
+/** Audit de chaque projet ; enregistre le total sous `count` et les vulnérabilités restantes. */
 async function auditAll(runner: Runner, count: keyof Operation["counts"]): Promise<Vulnerability[]> {
   const vulnerabilities: Vulnerability[] = [];
+  const facts: unknown[] = [];
   for (const project of runner.operation.projects) {
-    const report = await runner.npm(project, ["audit", ...scopeArgs(runner.operation.scope), "--json"]);
-    vulnerabilities.push(...parseAuditReport(report, project));
+    const result = await managerOf(project.manager).audit(runner.managers, project.path);
+    vulnerabilities.push(...result.vulnerabilities);
+    facts.push(...result.facts);
   }
+  runner.facts = facts;
   runner.log(`${vulnerabilities.length} vulnerabilit${vulnerabilities.length === 1 ? "y" : "ies"}`);
   runner.update((operation) => ({
     ...operation,
@@ -338,15 +332,6 @@ async function auditAll(runner: Runner, count: keyof Operation["counts"]): Promi
     remaining: vulnerabilities,
   }));
   return vulnerabilities;
-}
-
-/** Vulnérabilités restantes de chaque projet, d'après un nouvel `npm audit`, sans toucher aux comptes de l'opération. */
-async function currentAuditFacts(runner: Runner): Promise<unknown[]> {
-  const facts: unknown[] = [];
-  for (const project of runner.operation.projects) {
-    facts.push(...auditFacts(await runner.npm(project, ["audit", ...scopeArgs(runner.operation.scope), "--json"]), project));
-  }
-  return facts;
 }
 
 /** Paquets modifiés depuis le commit cloné, dans tous les projets. */
@@ -366,12 +351,12 @@ async function auditStep(runner: Runner): Promise<Vulnerability[]> {
   return vulnerabilities;
 }
 
-/** `npm audit fix` dans les projets vulnérables, sans installer node_modules ni lancer de scripts. */
+/** Corrections automatiques des projets vulnérables, sans installation ni script de paquet. */
 async function fixStep(runner: Runner, vulnerabilities: Vulnerability[]): Promise<Vulnerability[]> {
   runner.setStep("fix", "running");
-  const projects = new Set(vulnerabilities.map((vulnerability) => vulnerability.project));
-  for (const project of runner.operation.projects.filter((candidate) => projects.has(candidate))) {
-    await runner.npm(project, ["audit", "fix", ...scopeArgs(runner.operation.scope), "--package-lock-only", "--ignore-scripts", "--json"]);
+  for (const project of runner.operation.projects) {
+    const found = vulnerabilities.filter((vulnerability) => vulnerability.project === project.path && vulnerability.manager === project.manager);
+    if (found.length > 0) await managerOf(project.manager).fix(runner.managers, project.path, found);
   }
   const remaining = await auditAll(runner, "afterFix");
   await refreshChanges(runner);
@@ -391,9 +376,10 @@ async function hasStagedChanges(runner: Runner): Promise<boolean> {
 }
 
 /**
- * Crée la branche de la correction et y commite les lockfiles modifiés par
- * `npm audit fix`, s'ils ont changé ; rend le commit sur lequel reposeront les
- * corrections par Claude, et celui de `npm audit fix`, null sans changement.
+ * Crée la branche de la correction et y commite les fichiers modifiés par les
+ * corrections automatiques, s'ils ont changé ; rend le commit sur lequel
+ * reposeront les corrections par Claude, et celui des corrections
+ * automatiques, null sans changement.
  */
 async function commitAuditFixes(runner: Runner): Promise<{ base: string; auditCommit: string | null }> {
   const branch = runner.operation.branch ?? branchName(new Date());
@@ -431,10 +417,11 @@ async function commitRepair(runner: Runner, base: string, message: string): Prom
 
 /**
  * Corrections par Claude des vulnérabilités restantes : la branche est créée et
- * `npm audit fix` y est commité, puis Claude analyse et corrige en une session,
- * dont les changements font un seul commit. Un échec, configuration manquante
- * comprise, remet le clone dans l'état du commit de `npm audit fix` et laisse
- * l'opération se poursuivre ; seule une annulation l'interrompt.
+ * les corrections automatiques y sont commitées, puis Claude analyse et corrige
+ * en une session, dont les changements font un seul commit. Un échec,
+ * configuration manquante comprise, remet le clone dans l'état du commit des
+ * corrections automatiques et laisse l'opération se poursuivre ; seule une
+ * annulation l'interrompt.
  */
 async function repairStep(runner: Runner, ctx: OperationContext): Promise<void> {
   runner.setStep("repair", "running");
@@ -452,7 +439,8 @@ async function repairStep(runner: Runner, ctx: OperationContext): Promise<void> 
       cwd: runner.repoDir,
       workDir: operation.workDir!,
       containers: ctx.containers,
-      facts: await currentAuditFacts(runner),
+      managers: [...new Set(operation.projects.map((project) => project.manager))],
+      facts: runner.facts,
       settings: ctx.settings(),
       claude: ctx.claude,
       signal: runner.signal,
@@ -488,7 +476,7 @@ async function repairStep(runner: Runner, ctx: OperationContext): Promise<void> 
 function pullRequestWarnings(operation: Operation): string[] {
   const repair = operation.repair;
   if (repair?.error) {
-    return [`> [!WARNING]`, `> Claude Code could not fix the remaining vulnerabilities: ${repair.error}`, `> This pull request only holds the fixes of \`npm audit fix\`.`, ""];
+    return [`> [!WARNING]`, `> Claude Code could not fix the remaining vulnerabilities: ${repair.error}`, `> This pull request only holds the automatic fixes of the package managers.`, ""];
   }
   if (repair?.report?.tests.outcome === "failed") {
     return [`> [!WARNING]`, `> The tests failed after the fixes by Claude Code: ${repair.report.tests.detail}`, ""];
@@ -499,10 +487,11 @@ function pullRequestWarnings(operation: Operation): string[] {
 function pullRequestBody(operation: Operation): string {
   const after = operation.counts.afterRepair ?? operation.counts.afterFix;
   const repair = operation.repair?.report ? operation.repair : null;
-  const command = ["npm audit fix", ...scopeArgs(operation.scope), "--package-lock-only --ignore-scripts"].join(" ");
+  const managers = PACKAGE_MANAGERS.filter((manager) => operation.projects.some((project) => project.manager === manager.id));
+  const commands = managers.map((manager) => `\`${manager.fixCommand(operation.scope)}\``).join(", ");
   const lines = [
     ...pullRequestWarnings(operation),
-    `Automated \`npm audit\` fixes, made by mcp-dependabot-tracker in a temporary clone (\`${command}\`).`,
+    `Automated dependency audit fixes, made by mcp-dependabot-tracker in a temporary clone (${commands}).`,
     "",
     operation.scope === "production"
       ? "- Scope: production dependencies only; the vulnerabilities of the devDependencies were neither audited nor fixed."
@@ -624,7 +613,7 @@ function inBackground(ctx: OperationContext, id: string, run: Promise<Operation>
 
 /**
  * Lance une correction de la branche analysée, lancée par `origin`, menée en
- * arrière-plan jusqu'au bout sans intervention : clone, audit, `npm audit fix`,
+ * arrière-plan jusqu'au bout sans intervention : clone, audit, corrections automatiques,
  * corrections par Claude s'il reste des vulnérabilités et que `plan` les
  * demande, puis commit, push et pull request s'il y a quelque chose à pousser.
  * Refusé si une opération est en cours sur le dépôt, ou s'il est déprécié.
@@ -656,7 +645,7 @@ export function startFix(ctx: OperationContext, repoId: string, origin: Origin, 
 
 /**
  * Lance un audit de la branche analysée sur le périmètre `scope`, lancé par
- * `origin` et mené en arrière-plan : clone et `npm audit`, sans rien modifier.
+ * `origin` et mené en arrière-plan : clone et audit, sans rien modifier.
  * Refusé si une opération est en cours sur le dépôt, ou s'il est déprécié.
  */
 export function startAudit(ctx: OperationContext, repoId: string, origin: Origin, scope: AuditScope): Operation {

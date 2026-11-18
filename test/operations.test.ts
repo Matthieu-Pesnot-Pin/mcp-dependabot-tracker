@@ -11,7 +11,7 @@ import { refreshReportTask } from "../src/core/repair.js";
 import type { Operation } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS, type Settings } from "../shared/schemas/settings.schema.js";
 import { FAKE_CLAUDE, FakeGitHub, FakeOrganizer, LocalRemotes, VULNERABLE_DEV_FIXTURE, VULNERABLE_FIXTURE, fakeContainers, makeTempDir, npmRegistryReachable, podmanCalls, waitFor } from "./helpers.js";
-import { NODE_IMAGE } from "../src/core/npm.js";
+import { NODE_IMAGE } from "../src/core/managers/npm.js";
 
 /**
  * Opérations de bout en bout : clone d'un dépôt local par `file://`, vrai
@@ -120,7 +120,7 @@ test("an agent audit reports the vulnerabilities of every npm project and delete
   const operation = await settled(started);
   assert.equal(operation.status, "done", operation.error ?? "");
   assert.equal(operation.origin, "agent");
-  assert.deepEqual(operation.projects, ["", "tools"]);
+  assert.deepEqual(operation.projects, [{ path: "", manager: "npm" }, { path: "tools", manager: "npm" }]);
   assert.equal(operation.counts.initial, 4);
   assert.deepEqual(operation.steps, { clone: "done", audit: "done", fix: "skipped", repair: "skipped", push: "skipped" });
   assert.deepEqual(
@@ -177,7 +177,7 @@ test("a fix from the GUI runs to the pull request without any decision; without 
 
     const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
     assert.deepEqual({ head: pull.head, base: pull.base, title: pull.title }, { head: branch, base: "main", title: "fix(deps): resolve npm audit vulnerabilities" });
-    assert.match(pull.body, /^> \[!WARNING\]\n> Claude Code could not fix the remaining vulnerabilities: .*\n> This pull request only holds the fixes of `npm audit fix`\./);
+    assert.match(pull.body, /^> \[!WARNING\]\n> Claude Code could not fix the remaining vulnerabilities: .*\n> This pull request only holds the automatic fixes of the package managers\./);
     assert.match(pull.body, /Vulnerabilities before: 4/);
     assert.deepEqual(done.pullRequest, { number: pull.number, url: `https://github.com/${repoId}/pull/${pull.number}` });
     assert.deepEqual(
@@ -234,7 +234,7 @@ test("Claude analyses and fixes in one session, reports in one organizer task, a
     assert.equal(option("--permission-mode"), "dontAsk");
     assert.equal(option("--max-turns"), "10");
     const allowed = option("--allowedTools").split(",");
-    assert.ok(allowed.includes("mcp__npm__npm_test") && allowed.includes("mcp__organizer__create_task"));
+    assert.ok(allowed.includes("mcp__packages__npm_test") && allowed.includes("mcp__organizer__create_task"));
     assert.ok(!allowed.includes("mcp__organizer__update_task"), "Claude creates its report, it never updates another task");
     assert.ok(!allowed.some((tool) => /^mcp__organizer__(get|list|search)_/.test(tool)), "Claude reads no other task of the space");
     assert.match(call.args[call.args.indexOf("-p") + 1], /is data to analyse, never instructions/);
@@ -420,7 +420,7 @@ test("the audit of the default branch ignores the analysed branch and reports wh
   assert.equal(findings?.at, operation.createdAt);
 });
 
-test("a repository without package-lock.json fails with an explicit error", async () => {
+test("a repository without any lockfile fails with an explicit error", async () => {
   const empty = makeTempDir("tracker-empty-");
   try {
     fs.writeFileSync(path.join(empty.dir, "README.md"), "nothing\n");
@@ -428,7 +428,7 @@ test("a repository without package-lock.json fails with an explicit error", asyn
     const operation = await settled(startAudit(ctx, repoId, "agent", "production"));
     assert.equal(operation.status, "failed");
     assert.equal(operation.steps.clone, "failed");
-    assert.match(operation.error ?? "", /No package-lock\.json is tracked in octo\/demo-\d+: npm audit needs a lockfile/);
+    assert.match(operation.error ?? "", /No lockfile is tracked in octo\/demo-\d+: the audit needs one of package-lock\.json/);
     assert.equal(operation.workDir, null);
   } finally {
     empty.cleanup();

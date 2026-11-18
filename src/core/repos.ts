@@ -141,7 +141,7 @@ export function pruneHandledAlerts(handled: HandledAlert[], alerts: Alert[]): Ha
 
 /**
  * Pull requests ouvertes par le tracker parmi celles ouvertes sur le dépôt :
- * leur branche suit le nommage `fix/npm-audit-…` et appartient au dépôt
+ * leur branche suit le nommage du tracker (`isTrackerBranch`) et appartient au dépôt
  * lui-même, pas à une fourche. Par numéro croissant.
  */
 export function trackerPullRequests(repoId: string, pulls: OpenPullRequest[]): PullRequest[] {

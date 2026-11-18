@@ -5,7 +5,8 @@ import path from "node:path";
 import test from "node:test";
 
 import { PODMAN, assertContainersAvailable, pullImage, runInContainer } from "../src/core/containers.js";
-import { NODE_IMAGE, runNpm } from "../src/core/npm.js";
+import { NODE_IMAGE, npm } from "../src/core/managers/npm.js";
+import { runManager, type ManagerContext } from "../src/core/managers/types.js";
 import { VULNERABLE_FIXTURE, makeTempDir, npmRegistryReachable } from "./helpers.js";
 
 /**
@@ -33,11 +34,12 @@ test("npm runs in a rootless container that writes the clone under the account o
     await assertContainersAvailable(PODMAN, temp.dir);
     await pullImage(PODMAN, NODE_IMAGE, temp.dir);
 
-    const audit = await runNpm(PODMAN, workspace, "", ["audit", "--json"]);
+    const ctx: ManagerContext = { runtime: PODMAN, workspace, scope: "all", log: () => {} };
+    const audit = await runManager(npm, ctx, "", ["audit", "--json"]);
     assert.equal(JSON.parse(audit.stdout).auditReportVersion, 2, audit.stderr);
 
     const before = fs.readFileSync(path.join(workspace.root, "package-lock.json"), "utf-8");
-    const fix = await runNpm(PODMAN, workspace, "", ["audit", "fix", "--package-lock-only", "--ignore-scripts"]);
+    const fix = await runManager(npm, ctx, "", ["audit", "fix", "--package-lock-only", "--ignore-scripts"]);
     assert.equal(fix.code, 0, fix.stderr);
     const lockfile = path.join(workspace.root, "package-lock.json");
     assert.notEqual(fs.readFileSync(lockfile, "utf-8"), before, "npm audit fix updated the lockfile of the clone");

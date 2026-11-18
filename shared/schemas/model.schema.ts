@@ -5,10 +5,23 @@ export const ALERT_SEVERITIES = ["critical", "high", "medium", "low"] as const;
 
 export type AlertSeverity = (typeof ALERT_SEVERITIES)[number];
 
-/** Gravités d'une vulnérabilité rapportée par `npm audit`, de la plus grave à la moins grave. */
+/** Gravités d'une vulnérabilité rapportée par un audit, de la plus grave à la moins grave (échelle de `npm audit`). */
 export const NPM_SEVERITIES = ["critical", "high", "moderate", "low", "info"] as const;
 
 export type NpmSeverity = (typeof NPM_SEVERITIES)[number];
+
+/** Gestionnaires de paquets des projets d'un dépôt. */
+export const MANAGERS = ["npm", "pnpm", "composer"] as const;
+
+export type ManagerId = (typeof MANAGERS)[number];
+
+/** Projet d'un dépôt : dossier de son lockfile (`""` pour la racine) et gestionnaire de paquets. */
+export const ProjectSchema = z.object({
+  path: z.string(),
+  manager: z.enum(MANAGERS),
+});
+
+export type Project = z.infer<typeof ProjectSchema>;
 
 /**
  * Périmètre d'un audit et de ses corrections : `production` laisse de côté les
@@ -57,7 +70,7 @@ export const HandledAlertSchema = z.object({
 
 export type HandledAlert = z.infer<typeof HandledAlertSchema>;
 
-/** Pull request ouverte par le tracker, ni mergée ni fermée ; `branch` est sa branche `fix/npm-audit-…`. */
+/** Pull request ouverte par le tracker, ni mergée ni fermée ; `branch` est sa branche `fix/deps-audit-…`. */
 export const PullRequestSchema = z.object({
   number: z.number().int(),
   url: z.string(),
@@ -144,9 +157,10 @@ export const FIX_KINDS = ["none", "available", "major"] as const;
 
 export type FixKind = (typeof FIX_KINDS)[number];
 
-/** Vulnérabilité d'un projet npm du dépôt ; `project` est le dossier du lockfile, `""` pour la racine. */
+/** Vulnérabilité d'un projet du dépôt ; `project` est le dossier du lockfile, `""` pour la racine. */
 export const VulnerabilitySchema = z.object({
   project: z.string(),
+  manager: z.enum(MANAGERS).default("npm"),
   name: z.string(),
   severity: z.enum(NPM_SEVERITIES),
   fix: z.enum(FIX_KINDS),
@@ -157,6 +171,7 @@ export type Vulnerability = z.infer<typeof VulnerabilitySchema>;
 /** Paquet du lockfile dont la version a changé ; `from` null pour un ajout, `to` null pour un retrait. */
 export const ChangeSchema = z.object({
   project: z.string(),
+  manager: z.enum(MANAGERS).default("npm"),
   name: z.string(),
   from: z.string().nullable(),
   to: z.string().nullable(),
@@ -254,7 +269,7 @@ export const OperationSchema = z.object({
     repair: z.enum(STEP_STATES),
     push: z.enum(STEP_STATES),
   }),
-  projects: z.array(z.string()),
+  projects: z.array(ProjectSchema),
   counts: z.object({
     initial: z.number().int().nullable(),
     afterFix: z.number().int().nullable(),

@@ -17,7 +17,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
  * Avec `--mcp-config`, il écrit `src/fixed.js`, un fichier dans
  * `node_modules`, les fichiers vides `.npmrc` et `yarn.lock` que crée le bac à
  * sable de Claude Code, et un hook `.git/hooks/pre-commit` qui crée
- * `<CLAUDE_CONFIG_DIR>/hook-ran.txt`, appelle l'outil `npm_ls` du serveur `npm` de la
+ * `<CLAUDE_CONFIG_DIR>/hook-ran.txt`, appelle l'outil `npm_ls` du serveur `packages` de la
  * configuration et note sa réponse dans `<CLAUDE_CONFIG_DIR>/npm-tools.txt`,
  * puis crée la tâche du rapport sur le faux organizer, avec l'adresse et le
  * token de la configuration ; sans, il répond simplement.
@@ -69,7 +69,7 @@ async function main() {
   const prompt = option("-p") ?? "";
   const ownerId = /member id ([^)\s]+)\)/.exec(prompt)?.[1] ?? "";
   const tag = /set its tags to exactly \["([^"]+)"\]/.exec(prompt)?.[1] ?? "";
-  await repair(url, organizerToken, ownerId, tag, servers.npm);
+  await repair(url, organizerToken, ownerId, tag, servers.packages);
 }
 
 /** Appelle un outil d'un serveur MCP stdio de la configuration et rend le texte de sa réponse. */
