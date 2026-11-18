@@ -306,7 +306,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
           ) : (
             <>
               <Icon name="circle-alert" className="text-warning" />
-              <span>Non connecté — sans Claude, une correction pousse les seules corrections de npm audit fix</span>
+              <span>Non connecté — sans Claude, une correction pousse les seules corrections automatiques</span>
             </>
           )}
         </div>
@@ -349,7 +349,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
         <div className="right">
           <div>
             <div className="right-label">Limites d'une session</div>
-            <div className="right-description">Claude est lancé dès que npm audit fix laisse des vulnérabilités</div>
+            <div className="right-description">Claude est lancé dès que les corrections automatiques laissent des vulnérabilités</div>
           </div>
           <div className="limits">
             <input

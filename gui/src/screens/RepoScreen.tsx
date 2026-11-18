@@ -94,7 +94,7 @@ function PendingAlerts({ view, onChanged }: { view: RepoView; onChanged: () => v
               <span className="alert-package mono">{alert.package}</span>
               <span className="alert-summary">{alert.summary}</span>
               {unfixable.includes(alert.package) && (
-                <span className="unfixable-note" title="Le dernier audit n'a trouvé aucune version corrigée publiée sur le registre npm.">
+                <span className="unfixable-note" title="Le dernier audit n'a trouvé aucune version corrigée publiée.">
                   <Icon name="triangle-alert" />
                   sans correctif
                 </span>

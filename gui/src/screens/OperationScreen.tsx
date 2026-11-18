@@ -21,8 +21,8 @@ type OperationTab = 'steps' | 'claude' | 'log'
 
 const STEP_LABELS: Record<StepName, { text: string; mono: boolean }> = {
   clone: { text: 'Cloner le dépôt', mono: false },
-  audit: { text: 'npm audit', mono: true },
-  fix: { text: 'npm audit fix', mono: true },
+  audit: { text: 'Audit des dépendances', mono: false },
+  fix: { text: 'Corrections automatiques', mono: false },
   repair: { text: 'Corrections par Claude', mono: false },
   push: { text: 'Commit et push', mono: false },
 }
@@ -52,7 +52,7 @@ function fixedText(before: number | null, after: number | null): string | null {
   return fixed > 0 ? plural(fixed, 'corrigée') : 'aucune corrigée'
 }
 
-/** Vulnérabilités restantes pour lesquelles npm ne propose aucune version corrigée. */
+/** Vulnérabilités restantes pour lesquelles aucune version corrigée n'est publiée. */
 function unfixable(operation: Operation): Vulnerability[] {
   return operation.remaining.filter((vulnerability) => vulnerability.fix === 'none')
 }
@@ -89,7 +89,7 @@ function stepResult(operation: Operation, step: StepName): ReactNode {
   const state = operation.steps[step]
   if (step === 'repair' && state === 'running' && operation.repair) return sessionProgress(operation.repair)
   if (state === 'skipped') return skippedReason(operation, step)
-  if (step === 'repair' && state === 'failed') return 'échouées · corrections de npm audit fix seules'
+  if (step === 'repair' && state === 'failed') return 'échouées · corrections automatiques seules'
   if (state !== 'done') return null
   const { initial, afterFix } = operation.counts
   switch (step) {
@@ -127,7 +127,7 @@ function ChangesList({ operation }: { operation: Operation }) {
   return (
     <ul className="changes mono">
       {operation.changes.map((change) => (
-        <li key={`${change.project}/${change.name}`}>
+        <li key={`${change.manager}:${change.project}/${change.name}`}>
           {projectPrefix(change.project)}
           {change.name} <span className="muted">{change.from ?? 'ajouté'} → {change.to ?? 'retiré'}</span>
         </li>
@@ -187,7 +187,7 @@ function RepairSummary({ operation, repair }: { operation: Operation; repair: Re
         </p>
         <p className="repair-line">
           <Icon name={remaining === 0 ? 'circle-check' : 'circle-alert'} size={12} className={remaining === 0 ? 'text-ok' : 'text-warning'} />
-          npm audit après corrections : {remaining === null ? 'non relancé' : remaining === 0 ? 'aucune vulnérabilité' : plural(remaining, 'vulnérabilité')}
+          Audit après corrections : {remaining === null ? 'non relancé' : remaining === 0 ? 'aucune vulnérabilité' : plural(remaining, 'vulnérabilité')}
           {repair.task && (
             <>
               {' · '}
@@ -209,13 +209,13 @@ function UnfixableList({ vulnerabilities }: { vulnerabilities: Vulnerability[] }
     <div className="step-body">
       <ul className="changes mono">
         {vulnerabilities.map((vulnerability) => (
-          <li key={`${vulnerability.project}/${vulnerability.name}`}>
+          <li key={`${vulnerability.manager}:${vulnerability.project}/${vulnerability.name}`}>
             {projectPrefix(vulnerability.project)}
             {vulnerability.name} <span className="muted">{SEVERITY_LABELS[fromNpmSeverity(vulnerability.severity)].toLowerCase()}</span>
           </li>
         ))}
       </ul>
-      <p className="hint">Aucune version corrigée n'est publiée sur le registre npm : la mise à jour est à faire à la main.</p>
+      <p className="hint">Aucune version corrigée n'est publiée : la mise à jour est à faire à la main.</p>
     </div>
   )
 }
