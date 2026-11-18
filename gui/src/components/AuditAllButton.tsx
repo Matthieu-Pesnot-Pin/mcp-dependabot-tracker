@@ -20,7 +20,7 @@ const TARGET_LABELS: Record<AuditTarget['kind'], string> = {
 }
 
 /**
- * Audite la branche par défaut des dépôts suivis de `target` (tous, une
+ * Audite la branche analysée des dépôts suivis de `target` (tous, une
  * catégorie ou la file d'attente), sur le périmètre choisi au lancement, avec
  * la progression sur le bouton ; à la fin d'une série suivie ici, un message
  * dit combien de dépôts ont été audités, laissés de côté ou en échec.

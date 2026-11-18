@@ -666,20 +666,38 @@ export function startAudit(ctx: OperationContext, repoId: string, origin: Origin
 }
 
 /**
- * Audit de la branche par défaut, celle que Dependabot analyse, sur le
+ * Audit de la branche que `branch` choisit parmi celles du dépôt, sur le
  * périmètre `scope`, lancé par l'utilisateur et attendu jusqu'à sa fin. Refusé
  * si une opération est en cours sur le dépôt, ou s'il est déprécié.
  */
-export async function runDefaultBranchAudit(ctx: OperationContext, repoId: string, scope: AuditScope): Promise<Operation> {
+async function runUserAudit(ctx: OperationContext, repoId: string, scope: AuditScope, branch: (repo: Repo) => string): Promise<Operation> {
   ctx.githubConfig();
   const repo = ctx.store.getRepo(repoId);
   assertNotDeprecated(repo);
-  const operation = ctx.store.createOperation({ ...newOperation(repo, "audit", "user", scope), baseBranch: repo.defaultBranch });
+  const operation = ctx.store.createOperation({ ...newOperation(repo, "audit", "user", scope), baseBranch: branch(repo) });
   return execute(ctx, operation.id, async (runner) => {
     await cloneStep(runner);
     await auditStep(runner);
     finish(runner);
   });
+}
+
+/**
+ * Audit de la branche analysée, sur le périmètre `scope`, lancé par
+ * l'utilisateur et attendu jusqu'à sa fin. Refusé si une opération est en
+ * cours sur le dépôt, ou s'il est déprécié.
+ */
+export function runAudit(ctx: OperationContext, repoId: string, scope: AuditScope): Promise<Operation> {
+  return runUserAudit(ctx, repoId, scope, (repo) => repo.branch);
+}
+
+/**
+ * Audit de la branche par défaut, celle que Dependabot analyse, sur le
+ * périmètre `scope`, lancé par l'utilisateur et attendu jusqu'à sa fin. Refusé
+ * si une opération est en cours sur le dépôt, ou s'il est déprécié.
+ */
+export function runDefaultBranchAudit(ctx: OperationContext, repoId: string, scope: AuditScope): Promise<Operation> {
+  return runUserAudit(ctx, repoId, scope, (repo) => repo.defaultBranch);
 }
 
 /**

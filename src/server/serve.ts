@@ -15,7 +15,7 @@ import { resolveCloneDir, resolveDataDir } from "../core/data-dir.js";
 import { DeployServerStore } from "../core/deploy-servers.js";
 import { Deployer, DeploymentStore } from "../core/deployments.js";
 import { resolveLogDir } from "../core/log-dir.js";
-import { runDefaultBranchAudit, type OperationContext } from "../core/operations.js";
+import { runAudit, type OperationContext } from "../core/operations.js";
 import { OrganizerClient } from "../core/organizer.js";
 import { refreshReportTask } from "../core/repair.js";
 import { SYNC_INTERVAL_MS, staleRepos, syncRepository } from "../core/repos.js";
@@ -138,7 +138,7 @@ export async function serve(): Promise<void> {
     settings: () => readSettings(dataDir, vaultKey),
     claude,
   };
-  const auditAll = new AuditAll((repoId, scope) => runDefaultBranchAudit(operations, repoId, scope), (message) => logger.error(message));
+  const auditAll = new AuditAll((repoId, scope) => runAudit(operations, repoId, scope), (message) => logger.error(message));
 
   const app = createApp({
     store,

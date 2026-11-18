@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test, { after, before } from "node:test";
 
-import { cancelOperation, runDefaultBranchAudit, startAudit, startFix, type FixPlan, type OperationContext } from "../src/core/operations.js";
+import { cancelOperation, runAudit, runDefaultBranchAudit, startAudit, startFix, type FixPlan, type OperationContext } from "../src/core/operations.js";
 import { addRepository, listRepoBranches, repoView, setBranch } from "../src/core/repos.js";
 import { Store } from "../src/core/store.js";
 import type { GitHubConfig } from "../src/core/config.js";
@@ -365,6 +365,20 @@ test("an operation clones the chosen branch and opens the pull request towards i
   const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
   assert.equal(pull.base, "develop");
   assert.ok(remotes.branches("octo", name).includes(operation.branch!));
+});
+
+test("the audit run for every repository clones the analysed branch", { skip }, async () => {
+  counter += 1;
+  const name = `demo-${counter}`;
+  remotes.create("octo", name, "main", { ".": VULNERABLE_FIXTURE });
+  remotes.addBranch("octo", name, "main", "develop");
+  github.addRepo("octo", name, "main", [], ["main", "develop"]);
+  const repoId = (await addRepository(ctx.store, ctx.githubConfig(), `octo/${name}`, null)).id;
+  await setBranch(ctx.store, ctx.githubConfig(), repoId, "develop");
+
+  const operation = await runAudit(ctx, repoId, "production");
+  assert.equal(operation.status, "done", operation.error ?? "");
+  assert.deepEqual([operation.kind, operation.origin, operation.scope, operation.baseBranch], ["audit", "user", "production", "develop"]);
 });
 
 test("the audit of the default branch ignores the analysed branch and reports what Dependabot misses", { skip }, async () => {
