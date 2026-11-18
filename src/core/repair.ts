@@ -6,7 +6,8 @@ import { RepairReportSchema, TEST_OUTCOMES, type AuditScope, type Operation, typ
 import type { Settings } from "../../shared/schemas/settings.schema.js";
 import { runClaudeSession, type ClaudeRuntime } from "./claude.js";
 import { TrackerError } from "./errors.js";
-import { NPM_CACHE_DIR, assertSandboxAvailable } from "./npm-sandbox.js";
+import { CACHE_DIR, type ContainerRuntime } from "./containers.js";
+import { assertSandboxAvailable } from "./sandbox.js";
 import { OrganizerClient, type OrganizerConnection } from "./organizer.js";
 import { organizerConnection } from "./settings.js";
 import type { Store } from "./store.js";
@@ -17,7 +18,7 @@ import type { Store } from "./store.js";
  * code, la corrige quand il le peut en modifiant le clone (Read, Grep, Glob,
  * Edit, Write), sans git ni écriture hors du clone, et lance les commandes npm
  * (lockfile, audit, installation, tests) par les outils du serveur `npm-tools`,
- * que le tracker exécute dans son propre bac à sable, sans aucun token. Il rend
+ * que le tracker exécute dans des conteneurs jetables, sans aucun token. Il rend
  * compte de son travail dans une seule tâche de l'organizer, assignée au
  * propriétaire de l'espace et taguée du nom du dépôt, puis rend un rapport
  * structuré. Le tracker relit la tâche sur l'organizer : absente, mal assignée
@@ -83,10 +84,10 @@ export function organizerServer(connection: OrganizerConnection) {
   return { ...launch, env: { ORGANIZER_URL: connection.url, ORGANIZER_TOKEN: connection.token } };
 }
 
-/** Lancement du serveur `npm-tools` du tracker sur le clone et le cache npm de l'opération. */
+/** Lancement du serveur `npm-tools` du tracker sur le clone et le cache de l'opération. */
 function npmServer(input: RepairInput, cache: string) {
   const entry = fileURLToPath(new URL("../npm-tools.js", import.meta.url));
-  return { command: process.execPath, args: [entry, "--root", input.cwd, "--cache", cache, "--scope", input.scope] };
+  return { command: process.execPath, args: [entry, "--root", input.cwd, "--cache", cache, "--scope", input.scope, "--runtime", JSON.stringify(input.containers.command)] };
 }
 
 /** Résultat demandé à Claude : le rapport et la clé de la tâche. */
@@ -127,6 +128,8 @@ export interface RepairInput {
   cwd: string;
   /** Dossier de l'opération, hors du clone : configuration MCP de la session. */
   workDir: string;
+  /** Podman, qui exécute les commandes npm de Claude. */
+  containers: ContainerRuntime;
   /** Vulnérabilités restantes, d'après `npm audit --json`. */
   facts: unknown[];
   settings: Settings;
@@ -177,7 +180,7 @@ export async function repairVulnerabilities(input: RepairInput): Promise<{ repor
   const tag = input.repoId.split("/")[1];
 
   const configFile = path.join(input.workDir, "repair-mcp.json");
-  const servers = { [ORGANIZER_SERVER]: organizerServer(connection), [NPM_SERVER]: npmServer(input, path.join(input.workDir, NPM_CACHE_DIR)) };
+  const servers = { [ORGANIZER_SERVER]: organizerServer(connection), [NPM_SERVER]: npmServer(input, path.join(input.workDir, CACHE_DIR)) };
   fs.writeFileSync(configFile, JSON.stringify({ mcpServers: servers }), { encoding: "utf-8", mode: 0o600 });
   let structured: unknown;
   try {

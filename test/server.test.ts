@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test, { after, before } from "node:test";
 
-import { FakeGitHub, LocalRemotes, McpClient, SERVER_ENTRY, TEST_AUTH_SECRET, TEST_USER, TEST_VAULT_KEY, TrackerServer, VULNERABLE_FIXTURE, baseEnv, runUserCommand, signIn, freePort, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
+import { FakeGitHub, fakePodmanBin, LocalRemotes, McpClient, SERVER_ENTRY, TEST_AUTH_SECRET, TEST_USER, TEST_VAULT_KEY, TrackerServer, VULNERABLE_FIXTURE, baseEnv, runUserCommand, signIn, freePort, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
 
 /**
  * Serveur réel lancé par `serve` sur un port libre, la fausse API GitHub et des
@@ -14,7 +14,11 @@ import { FakeGitHub, LocalRemotes, McpClient, SERVER_ENTRY, TEST_AUTH_SECRET, TE
  */
 
 const online = await npmRegistryReachable();
-const skip = online ? false : "the npm registry is unreachable: npm audit needs it";
+const skip = !online
+  ? "the npm registry is unreachable: npm audit needs it"
+  : process.platform === "win32"
+    ? "the server launches the fake Podman through a POSIX script"
+    : false;
 
 let server: TrackerServer;
 let client: McpClient;
@@ -78,6 +82,8 @@ before(async () => {
     APP_URL: `http://localhost:${port}`,
     AUTH_SECRET: TEST_AUTH_SECRET,
   };
+  const podmanBin = fakePodmanBin(path.join(temp.dir, "bin"), path.join(temp.dir, "podman.jsonl"));
+  if (podmanBin) serverEnv.PATH = `${podmanBin}${path.delimiter}${process.env.PATH}`;
   const account = await runUserCommand(serverEnv, ["add", TEST_USER.email], `${TEST_USER.password}\n`);
   assert.equal(account.code, 0, account.stderr);
   server = new TrackerServer(serverEnv);

@@ -20,7 +20,8 @@ import { Hono } from "hono";
 import { readServerConfig } from "../src/core/server-config.js";
 import { resolveCloneDir, resolveDataDir } from "../src/core/data-dir.js";
 import { describeOperation } from "../src/tools/format.js";
-import { assertSandboxAvailable, bwrapArgs, projectDir } from "../src/core/npm-sandbox.js";
+import { assertSandboxAvailable } from "../src/core/sandbox.js";
+import { assertContainersAvailable, projectDir, runArgs, runInContainer } from "../src/core/containers.js";
 import { npmArgs } from "../src/npm-tools.js";
 import { organizerUrl } from "../src/core/organizer.js";
 import { adoptEnvGitHubToken, encryptStoredTokens, readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
@@ -897,9 +898,9 @@ test("setup-mcp declares the MCP mode with the server address and an agent token
   }
 });
 
-test("the npm commands check that bubblewrap can build a sandbox on Linux, and only there", async () => {
+test("the fixes by Claude check that bubblewrap can build a sandbox on Linux, and only there", async () => {
   await assertSandboxAvailable("win32", "no-such-bwrap");
-  await assert.rejects(assertSandboxAvailable("linux", "no-such-bwrap"), /need bubblewrap \(bwrap\).*not in the PATH of the server\. Install it on the server: sudo apt-get install -y bubblewrap socat/);
+  await assert.rejects(assertSandboxAvailable("linux", "no-such-bwrap"), /The fixes by Claude need bubblewrap \(bwrap\).*not in the PATH of the server\. Install it on the server: sudo apt-get install -y bubblewrap socat/);
   await assert.rejects(assertSandboxAvailable("linux", process.execPath), /bubblewrap \(bwrap\) is installed but cannot create a sandbox for the account of the server: .*--ro-bind[\s\S]*apparmor_restrict_unprivileged_userns/);
 });
 
@@ -928,32 +929,72 @@ test("the npm tools of Claude run fixed npm commands, with names only as argumen
   assert.throws(() => npmArgs("npm_ci", { project: "", force: true }, "all"), /force/);
 });
 
-test("the npm tools of Claude only run in a project folder of the clone", () => {
-  const temp = makeTempDir("npm-tools-");
+test("the package manager commands only run in a project folder of the clone", () => {
+  const temp = makeTempDir("containers-");
   try {
     const root = path.join(temp.dir, "repo");
     fs.mkdirSync(path.join(root, "web", "node_modules", "x"), { recursive: true });
+    fs.mkdirSync(path.join(root, "vendor", "y"), { recursive: true });
     fs.writeFileSync(path.join(root, "package.json"), "{}");
     fs.writeFileSync(path.join(root, "web", "package.json"), "{}");
     fs.writeFileSync(path.join(root, "web", "node_modules", "x", "package.json"), "{}");
-    const sandbox = { root, cache: path.join(temp.dir, "npm-cache") };
-    assert.equal(projectDir(sandbox, ""), root);
-    assert.equal(projectDir(sandbox, "web"), path.join(root, "web"));
-    assert.throws(() => projectDir(sandbox, ".."), /not a project folder/);
-    assert.throws(() => projectDir(sandbox, "web/node_modules/x"), /not a project folder/);
-    assert.throws(() => projectDir(sandbox, "src"), /has no package.json/);
+    fs.writeFileSync(path.join(root, "vendor", "y", "composer.json"), "{}");
+    const workspace = { root, cache: path.join(temp.dir, "cache") };
+    assert.equal(projectDir(workspace, "", "package.json"), root);
+    assert.equal(projectDir(workspace, "web", "package.json"), path.join(root, "web"));
+    assert.throws(() => projectDir(workspace, "..", "package.json"), /not a project folder/);
+    assert.throws(() => projectDir(workspace, "web/node_modules/x", "package.json"), /not a project folder/);
+    assert.throws(() => projectDir(workspace, "vendor/y", "composer.json"), /not a project folder/);
+    assert.throws(() => projectDir(workspace, "src", "package.json"), /has no package.json/);
+  } finally {
+    temp.cleanup();
+  }
+});
 
-    const args = bwrapArgs(sandbox, path.join(root, "web"), ["ci"]);
-    const pairs = (flag: string) => args.flatMap((arg, index) => (arg === flag ? [[args[index + 1], args[index + 2]]] : []));
-    assert.deepEqual(pairs("--bind"), [[root, root], [sandbox.cache, sandbox.cache]], "only the clone and the npm cache are writable");
-    assert.ok(!pairs("--ro-bind").some(([source]) => source === "/" || source === temp.dir), "the rest of the server stays hidden");
-    assert.ok(!pairs("--ro-bind").some(([, target]) => target === "/etc" || target === "/opt" || target === "/home"), "/etc is mounted file by file, /opt and /home not at all");
-    assert.ok(pairs("--ro-bind").every(([, target]) => !target.startsWith("/etc/") || /^\/etc\/(resolv\.conf|hosts|host\.conf|gai\.conf|nsswitch\.conf|passwd|group|ssl|ca-certificates(\.conf)?|pki|crypto-policies|ld\.so\.(cache|conf|conf\.d)|alternatives|localtime|os-release)$/.test(target)));
-    assert.ok(args.includes("--clearenv"));
-    assert.deepEqual(args.slice(args.indexOf("--chdir"), args.indexOf("--chdir") + 2), ["--chdir", path.join(root, "web")]);
-    assert.deepEqual(args.slice(-2), ["npm", "ci"]);
-    const extra = bwrapArgs(sandbox, root, ["audit"], { npm_config_fund: "false" });
-    assert.ok(extra.join(" ").includes("--setenv npm_config_fund false"), "the variables of the command are set inside the sandbox");
+test("a container mounts the clone and the cache only, without capabilities, privileges or secrets", () => {
+  const workspace = { root: "/srv/op/repo", cache: "/srv/op/cache" };
+  const args = runArgs(workspace, "c-1", { image: "docker.io/library/node:26-slim", cwd: "web", command: ["npm", "ci"], env: { npm_config_cache: "/cache/npm" } });
+  const values = (flag: string) => args.flatMap((arg, index) => (arg === flag ? [args[index + 1]] : []));
+  assert.equal(args[0], "run");
+  assert.deepEqual(values("--volume"), ["/srv/op/repo:/work", "/srv/op/cache:/cache"], "only the clone and the cache of the operation are mounted");
+  for (const flag of ["--rm", "--init", "--pull=never", "--userns=keep-id", "--cap-drop=all", "--security-opt=no-new-privileges", "--read-only"]) assert.ok(args.includes(flag), flag);
+  assert.deepEqual(values("--workdir"), ["/work/web"]);
+  assert.deepEqual(values("--name"), ["c-1"]);
+  assert.ok(values("--env").includes("npm_config_cache=/cache/npm"));
+  assert.ok(values("--env").includes("HOME=/tmp"));
+  assert.ok(!values("--env").some((entry) => /^(GITHUB_TOKEN|VAULT_KEY|AUTH_SECRET|PATH)=/.test(entry)), "no variable of the server reaches the container");
+  assert.deepEqual(args.slice(-3), ["docker.io/library/node:26-slim", "npm", "ci"]);
+});
+
+test("Podman must be installed and rootless", async () => {
+  const temp = makeTempDir("podman-check-");
+  try {
+    await assert.rejects(assertContainersAvailable({ command: ["no-such-podman"] }, temp.dir), /Podman cannot be started.*sudo apt-get install -y podman uidmap passt/s);
+    const rootful = path.join(temp.dir, "rootful.js");
+    fs.writeFileSync(rootful, "process.stdout.write('false\\n');");
+    await assert.rejects(assertContainersAvailable({ command: [process.execPath, rootful] }, temp.dir), /Podman runs rootful/);
+    const rootless = path.join(temp.dir, "rootless.js");
+    fs.writeFileSync(rootless, "process.stdout.write('true\\n');");
+    await assertContainersAvailable({ command: [process.execPath, rootless] }, temp.dir);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("a cancelled container command removes its container", async () => {
+  const temp = makeTempDir("podman-cancel-");
+  try {
+    const script = path.join(temp.dir, "podman.js");
+    const log = path.join(temp.dir, "calls.txt");
+    fs.writeFileSync(script, `require("fs").appendFileSync(${JSON.stringify(log)}, process.argv.slice(2).slice(0, 2).join(" ") + "\\n"); if (process.argv[2] === "run") setInterval(() => {}, 1000);`);
+    const controller = new AbortController();
+    const running = runInContainer({ command: [process.execPath, script] }, { root: temp.dir, cache: path.join(temp.dir, "cache") }, { image: "img", cwd: "", command: ["sleep"] }, { signal: controller.signal });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    controller.abort();
+    await assert.rejects(running, /Cancelled/);
+    const calls = fs.readFileSync(log, "utf-8").split("\n").filter(Boolean);
+    assert.equal(calls[0], "run --rm");
+    assert.equal(calls[1], "rm --force", "the container is removed, it would outlive the podman client");
   } finally {
     temp.cleanup();
   }

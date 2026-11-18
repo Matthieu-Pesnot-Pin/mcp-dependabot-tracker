@@ -29,7 +29,8 @@ import {
   projectLabel,
   type Lockfile,
 } from "./npm-audit.js";
-import { NPM_CACHE_DIR, assertSandboxAvailable, runSandboxedNpm } from "./npm-sandbox.js";
+import { CACHE_DIR, assertContainersAvailable, pullImage, type ContainerRuntime, type Workspace } from "./containers.js";
+import { NODE_IMAGE, runNpm } from "./npm.js";
 import { auditFacts, repairVulnerabilities } from "./repair.js";
 import { assertNotDeprecated, isActive, type Store } from "./store.js";
 
@@ -46,6 +47,8 @@ export interface OperationContext {
   settings: () => Settings;
   /** Commande et dossier de configuration de Claude Code. */
   claude: ClaudeRuntime;
+  /** Podman, qui exécute les commandes des gestionnaires de paquets. */
+  containers: ContainerRuntime;
 }
 
 /**
@@ -187,7 +190,8 @@ class Runner {
     readonly id: string,
     readonly signal: AbortSignal,
     readonly config: GitHubConfig,
-    readonly cloneDir: string
+    readonly cloneDir: string,
+    readonly containers: ContainerRuntime
   ) {}
 
   get operation(): Operation {
@@ -249,15 +253,19 @@ class Runner {
     return result.stdout;
   }
 
+  /** Clone et cache de l'opération, montés dans les conteneurs. */
+  get workspace(): Workspace {
+    return { root: this.repoDir, cache: path.join(this.operation.workDir!, CACHE_DIR) };
+  }
+
   /**
-   * npm dans le dossier d'un projet du clone, dans le bac à sable des commandes
-   * npm, avec le cache de l'opération ; sa sortie JSON est lue même avec un code
-   * de sortie non nul.
+   * npm dans le dossier d'un projet du clone, dans un conteneur jetable, avec
+   * le cache de l'opération ; sa sortie JSON est lue même avec un code de
+   * sortie non nul.
    */
   async npm(project: string, args: string[]): Promise<any> {
     this.log(`$ npm ${args.join(" ")}`);
-    const sandbox = { root: this.repoDir, cache: path.join(this.operation.workDir!, NPM_CACHE_DIR) };
-    const result = await runSandboxedNpm(sandbox, project, args, { env: NPM_ENV, signal: this.signal });
+    const result = await runNpm(this.containers, this.workspace, project, args, { env: NPM_ENV, signal: this.signal });
     return parseNpmJson(result.stdout, result.stderr, `npm ${args.slice(0, args.indexOf("--json")).join(" ")} in ${projectLabel(project) || "./"}`);
   }
 
@@ -288,7 +296,7 @@ class Runner {
 
 async function cloneStep(runner: Runner): Promise<void> {
   runner.setStep("clone", "running");
-  await assertSandboxAvailable();
+  await assertContainersAvailable(runner.containers, runner.cloneDir);
   const operation = runner.operation;
   const [owner, name] = operation.repoId.split("/");
   const workDir = fs.mkdtempSync(path.join(runner.cloneDir, "mcp-dependabot-tracker-"));
@@ -311,6 +319,8 @@ async function cloneStep(runner: Runner): Promise<void> {
   }
   runner.update((current) => ({ ...current, projects }));
   runner.log(`npm projects: ${projects.map((project) => projectLabel(project) || "./").join(", ")}`);
+  runner.log(`$ podman pull ${NODE_IMAGE}`);
+  await pullImage(runner.containers, NODE_IMAGE, runner.cloneDir, runner.signal);
   runner.setStep("clone", "done");
 }
 
@@ -441,6 +451,7 @@ async function repairStep(runner: Runner, ctx: OperationContext): Promise<void> 
       scope: operation.scope,
       cwd: runner.repoDir,
       workDir: operation.workDir!,
+      containers: ctx.containers,
       facts: await currentAuditFacts(runner),
       settings: ctx.settings(),
       claude: ctx.claude,
@@ -575,7 +586,7 @@ async function execute(ctx: OperationContext, id: string, body: (runner: Runner)
   const controller = new AbortController();
   runningOperations.set(id, controller);
   try {
-    const runner = new Runner(ctx, id, controller.signal, ctx.githubConfig(), ctx.cloneDir());
+    const runner = new Runner(ctx, id, controller.signal, ctx.githubConfig(), ctx.cloneDir(), ctx.containers);
     await body(runner);
   } catch (err: any) {
     const cancelled = err instanceof CommandAbortedError || controller.signal.aborted;

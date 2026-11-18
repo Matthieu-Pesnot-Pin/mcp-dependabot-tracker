@@ -9,6 +9,7 @@ import type { Hono } from "hono";
 import { AuditAll } from "../core/audit-all.js";
 import { createAuth, listUsers, migrateAuth, type Auth } from "../core/auth.js";
 import { checkClaudeToken, packagedClaudeCommand, type ClaudeRuntime } from "../core/claude.js";
+import { PODMAN } from "../core/containers.js";
 import { gitHubConfig, readGitHubServers, type GitHubConfig } from "../core/config.js";
 import { GitHubClient } from "../core/github.js";
 import { resolveCloneDir, resolveDataDir } from "../core/data-dir.js";
@@ -137,6 +138,7 @@ export async function serve(): Promise<void> {
     logError: (message) => logger.error(message),
     settings: () => readSettings(dataDir, vaultKey),
     claude,
+    containers: PODMAN,
   };
   const auditAll = new AuditAll((repoId, scope) => runAudit(operations, repoId, scope), (message) => logger.error(message));
 

@@ -309,6 +309,34 @@ export class FakeGitHub {
   }
 }
 
+/** Faux Podman des tests (voir fake-podman.ts), qui note ses appels dans `logFile`. */
+export function fakeContainers(logFile: string): { command: string[] } {
+  return { command: [process.execPath, path.resolve(__dirname, "fake-podman.js"), logFile] };
+}
+
+/** Appels reçus par le faux Podman, dans l'ordre. */
+export function podmanCalls(logFile: string): { subcommand: string; args: string[]; image?: string; workdir?: string; env?: Record<string, string>; command?: string[]; containerfile?: string }[] {
+  if (!fs.existsSync(logFile)) return [];
+  return fs
+    .readFileSync(logFile, "utf-8")
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line));
+}
+
+/**
+ * Dossier qui contient un exécutable `podman` qui lance le faux Podman, à
+ * placer en tête du PATH d'un serveur lancé par les tests ; null sous Windows,
+ * où Node ne lance un script sans extension `.exe` qu'à travers un shell.
+ */
+export function fakePodmanBin(dir: string, logFile: string): string | null {
+  if (process.platform === "win32") return null;
+  fs.mkdirSync(dir, { recursive: true });
+  const [node, script] = fakeContainers(logFile).command;
+  fs.writeFileSync(path.join(dir, "podman"), `#!/bin/sh\nexec "${node}" "${script}" "${logFile}" "$@"\n`, { mode: 0o755 });
+  return dir;
+}
+
 /** Faux Claude Code des tests : son comportement dépend du token reçu (voir fake-claude.ts). */
 export const FAKE_CLAUDE = [process.execPath, path.resolve(__dirname, "fake-claude.js")];
 

@@ -4,16 +4,18 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { AUDIT_SCOPES, type AuditScope } from "../shared/schemas/model.schema.js";
-import { runSandboxedNpm, type NpmSandbox } from "./core/npm-sandbox.js";
+import type { ContainerRuntime, Workspace } from "./core/containers.js";
+import { runNpm } from "./core/npm.js";
 import { tail } from "./core/commands.js";
 import { APP_VERSION } from "./version.js";
 import { errorResult, requireString, rejectUnknownFields, type Args } from "./tools/types.js";
 
 /**
  * Serveur MCP des commandes npm des corrections par Claude, lancé par Claude
- * Code avec `node npm-tools.js --root <clone> --cache <cache> --scope <périmètre>` :
- * chaque outil lance une commande npm fixe dans un projet du clone, à travers
- * `runSandboxedNpm`, et rend son code de sortie et la fin de ses sorties.
+ * Code avec `node npm-tools.js --root <clone> --cache <cache> --scope <périmètre>
+ * --runtime <commande Podman en JSON>` : chaque outil lance une commande npm
+ * fixe dans un projet du clone, dans un conteneur jetable, et rend son code de
+ * sortie et la fin de ses sorties.
  */
 
 /** Lignes de sortie rendues à Claude. */
@@ -106,16 +108,16 @@ export function npmArgs(tool: string, args: Args, scope: AuditScope): string[] {
 }
 
 /** Lance l'outil et décrit le résultat : commande, code de sortie, fin des sorties. */
-export async function callNpmTool(sandbox: NpmSandbox, scope: AuditScope, tool: string, args: Args): Promise<CallToolResult> {
+export async function callNpmTool(runtime: ContainerRuntime, workspace: Workspace, scope: AuditScope, tool: string, args: Args): Promise<CallToolResult> {
   const npm = npmArgs(tool, args, scope);
   const folder = project(args);
-  const result = await runSandboxedNpm(sandbox, folder, npm);
+  const result = await runNpm(runtime, workspace, folder, npm);
   const output = tail(`${result.stdout}\n${result.stderr}`, OUTPUT_LINES);
   const text = [`$ npm ${npm.join(" ")}  (in ${folder || "."}, exit code ${result.code})`, output.length > OUTPUT_CHARS ? `…${output.slice(-OUTPUT_CHARS)}` : output].join("\n");
   return { content: [{ type: "text", text }], isError: result.code !== 0 };
 }
 
-/** Lit `--root`, `--cache` et `--scope`, puis sert les outils sur stdio. */
+/** Lit `--root`, `--cache`, `--scope` et `--runtime`, puis sert les outils sur stdio. */
 export async function serveNpmTools(argv: string[]): Promise<void> {
   const option = (flag: string) => {
     const index = argv.indexOf(flag);
@@ -123,7 +125,10 @@ export async function serveNpmTools(argv: string[]): Promise<void> {
     if (!value) throw new Error(`${flag} is required.`);
     return value;
   };
-  const sandbox: NpmSandbox = { root: option("--root"), cache: option("--cache") };
+  const workspace: Workspace = { root: option("--root"), cache: option("--cache") };
+  const command = JSON.parse(option("--runtime"));
+  if (!Array.isArray(command) || command.length === 0 || command.some((part) => typeof part !== "string")) throw new Error("--runtime must be a JSON array of strings.");
+  const runtime: ContainerRuntime = { command };
   const scope = option("--scope") as AuditScope;
   if (!AUDIT_SCOPES.includes(scope)) throw new Error(`--scope must be one of ${AUDIT_SCOPES.join(", ")}.`);
 
@@ -131,7 +136,7 @@ export async function serveNpmTools(argv: string[]): Promise<void> {
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
   server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
     try {
-      return await callNpmTool(sandbox, scope, request.params.name, request.params.arguments);
+      return await callNpmTool(runtime, workspace, scope, request.params.name, request.params.arguments);
     } catch (err: any) {
       return errorResult(err?.message ?? String(err));
     }

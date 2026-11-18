@@ -34,7 +34,7 @@ jobs:
           node-version: '24'
           package-manager-cache: false
 
-      - name: Install bubblewrap for the sandbox of the npm commands
+      - name: Install bubblewrap for the sandbox of Claude Code
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap

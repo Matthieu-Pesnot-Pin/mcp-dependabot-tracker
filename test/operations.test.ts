@@ -10,12 +10,13 @@ import type { GitHubConfig } from "../src/core/config.js";
 import { refreshReportTask } from "../src/core/repair.js";
 import type { Operation } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS, type Settings } from "../shared/schemas/settings.schema.js";
-import { FAKE_CLAUDE, FakeGitHub, FakeOrganizer, LocalRemotes, VULNERABLE_DEV_FIXTURE, VULNERABLE_FIXTURE, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
+import { FAKE_CLAUDE, FakeGitHub, FakeOrganizer, LocalRemotes, VULNERABLE_DEV_FIXTURE, VULNERABLE_FIXTURE, fakeContainers, makeTempDir, npmRegistryReachable, podmanCalls, waitFor } from "./helpers.js";
+import { NODE_IMAGE } from "../src/core/npm.js";
 
 /**
  * Opérations de bout en bout : clone d'un dépôt local par `file://`, vrai
- * `npm audit` (registre npm requis), branche poussée dans le dépôt nu et pull
- * request enregistrée par la fausse API GitHub.
+ * `npm audit` (registre npm requis) lancé par le faux Podman, branche poussée
+ * dans le dépôt nu et pull request enregistrée par la fausse API GitHub.
  */
 
 const online = await npmRegistryReachable();
@@ -50,6 +51,11 @@ function claudeCalls(): { args: string[]; cwd: string; env: string[]; home: stri
     .split("\n")
     .filter((line) => line !== "")
     .map((line) => JSON.parse(line));
+}
+
+/** Journal du faux Podman. */
+function podmanLog(): string {
+  return path.join(temp.dir, "podman.jsonl");
 }
 
 /** Chaque test a son propre dépôt, pour qu'aucune opération n'en bloque une autre. */
@@ -96,6 +102,7 @@ before(async () => {
     logError: (message) => errors.push(message),
     settings: () => settings,
     claude: { command: FAKE_CLAUDE, home: path.join(temp.dir, "claude") },
+    containers: fakeContainers(podmanLog()),
   };
 });
 
@@ -121,6 +128,16 @@ test("an agent audit reports the vulnerabilities of every npm project and delete
     [":lodash:available", ":nth-check:major", "tools:lodash:available", "tools:nth-check:major"]
   );
   assert.equal(operation.workDir, null);
+
+  const calls = podmanCalls(podmanLog());
+  assert.ok(calls.some((call) => call.subcommand === "info"), "the operation checks Podman first");
+  assert.ok(calls.some((call) => call.subcommand === "pull" && call.args.includes(NODE_IMAGE)), "the image of npm is updated once per operation");
+  const audit = calls.find((call) => call.subcommand === "run" && call.command?.join(" ") === "npm audit --omit=dev --json" && call.workdir === "/work/tools")!;
+  assert.ok(audit, "npm audit runs in a container, in the folder of the project");
+  assert.equal(audit.image, NODE_IMAGE);
+  assert.equal(audit.env?.npm_config_cache, "/cache/npm");
+  for (const flag of ["--rm", "--pull=never", "--userns=keep-id", "--cap-drop=all", "--security-opt=no-new-privileges", "--read-only"]) assert.ok(audit.args.includes(flag), flag);
+  assert.ok(!Object.keys(audit.env ?? {}).some((key) => /TOKEN|SECRET|VAULT/.test(key)), "the container receives no secret");
 });
 
 /** Sujets des commits de la branche poussée, du plus récent au plus ancien. */
@@ -226,6 +243,10 @@ test("Claude analyses and fixes in one session, reports in one organizer task, a
     assert.match(call.args[call.args.indexOf("-p") + 1], /titled in French "Rapport de correction — "/);
     const npmTools = fs.readFileSync(path.join(call.home, "npm-tools.txt"), "utf-8");
     assert.match(npmTools, /^\$ npm ls lodash --all  \(in \., exit code \d+\)/, "the npm commands of Claude run through the npm tools of the tracker");
+    assert.ok(
+      podmanCalls(podmanLog()).some((entry) => entry.subcommand === "run" && entry.command?.join(" ") === "npm ls lodash --all" && entry.image === NODE_IMAGE),
+      "the npm tools of Claude run their commands in a container"
+    );
     assert.ok(call.env.includes("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"), "the commands of Claude do not receive its token");
     assert.ok(!call.env.includes("GITHUB_TOKEN"), "Claude Code never receives the GitHub token");
     assert.ok(!fs.existsSync(option("--mcp-config")), "the MCP configuration, which holds the organizer token, is deleted after the session");
