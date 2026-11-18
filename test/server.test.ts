@@ -468,7 +468,7 @@ test("the GUI runs a fix to the pull request without any decision, and the PR ta
   assert.equal(done.steps.repair, "failed", "Claude is not configured on this server");
   assert.match(done.repair.error, /need the organizer connection and the Claude token/);
   const pull = github.pulls.at(-1)!;
-  assert.equal(pull.title, "fix(deps): resolve npm audit vulnerabilities");
+  assert.equal(pull.title, "fix(deps): resolve vulnerable dependencies");
   assert.match(pull.body, /^> \[!WARNING\]\n> Claude Code could not fix the remaining vulnerabilities/);
   assert.equal(done.pullRequest.number, pull.number);
   assert.equal((await call("POST", `operations/${id}/cancel`)).status, 409);

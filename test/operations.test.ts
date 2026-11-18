@@ -10,7 +10,7 @@ import type { GitHubConfig } from "../src/core/config.js";
 import { refreshReportTask } from "../src/core/repair.js";
 import type { Operation } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS, type Settings } from "../shared/schemas/settings.schema.js";
-import { FAKE_CLAUDE, FakeGitHub, FakeOrganizer, LocalRemotes, VULNERABLE_DEV_FIXTURE, VULNERABLE_FIXTURE, VULNERABLE_PNPM_FIXTURE, fakeContainers, makeTempDir, npmRegistryReachable, podmanCalls, waitFor } from "./helpers.js";
+import { FAKE_CLAUDE, FakeGitHub, FakeOrganizer, LocalRemotes, VULNERABLE_COMPOSER_FIXTURE, VULNERABLE_DEV_FIXTURE, VULNERABLE_FIXTURE, VULNERABLE_PNPM_FIXTURE, fakeContainers, makeTempDir, npmRegistryReachable, podmanCalls, waitFor } from "./helpers.js";
 import { NODE_IMAGE } from "../src/core/managers/npm.js";
 
 /**
@@ -169,14 +169,14 @@ test("a fix from the GUI runs to the pull request without any decision; without 
     assert.equal(done.workDir, null);
 
     const branch = done.branch!;
-    assert.deepEqual(pushedSubjects(repoId, branch), ["fix(deps): resolve npm audit vulnerabilities", "initial"]);
+    assert.deepEqual(pushedSubjects(repoId, branch), ["fix(deps): resolve vulnerable dependencies", "initial"]);
     const [owner, name] = repoId.split("/");
     assert.match(remotes.log(owner, name, branch).split("\n")[0], /^Tracker Bot <4242\+tracker-bot@users\.noreply\.github\.com>\|/);
     const toolsLock = JSON.parse(remotes.show(owner, name, branch, "tools/package-lock.json"));
     assert.notEqual(toolsLock.packages["node_modules/lodash"].version, "4.17.20");
 
     const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
-    assert.deepEqual({ head: pull.head, base: pull.base, title: pull.title }, { head: branch, base: "main", title: "fix(deps): resolve npm audit vulnerabilities" });
+    assert.deepEqual({ head: pull.head, base: pull.base, title: pull.title }, { head: branch, base: "main", title: "fix(deps): resolve vulnerable dependencies" });
     assert.match(pull.body, /^> \[!WARNING\]\n> Claude Code could not fix the remaining vulnerabilities: .*\n> This pull request only holds the automatic fixes of the package managers\./);
     assert.match(pull.body, /Vulnerabilities before: 4/);
     assert.deepEqual(done.pullRequest, { number: pull.number, url: `https://github.com/${repoId}/pull/${pull.number}` });
@@ -252,7 +252,7 @@ test("Claude analyses and fixes in one session, reports in one organizer task, a
     assert.ok(!fs.existsSync(option("--mcp-config")), "the MCP configuration, which holds the organizer token, is deleted after the session");
 
     const [owner, name] = repoId.split("/");
-    assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): apply the fixes by Claude", "fix(deps): resolve npm audit vulnerabilities", "initial"]);
+    assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): apply the fixes by Claude", "fix(deps): resolve vulnerable dependencies", "initial"]);
     assert.equal(remotes.show(owner, name, done.branch!, "src/fixed.js"), "// correctif\n");
     assert.throws(() => remotes.show(owner, name, done.branch!, "node_modules/installed.txt"), "node_modules is never committed");
     for (const placeholder of [".npmrc", "yarn.lock"]) {
@@ -293,7 +293,7 @@ test("fixes by Claude that change nothing push the commit of npm audit fix alone
     assert.equal(done.status, "done", done.error ?? "");
     assert.deepEqual([done.repair?.commit, done.repair?.report?.changes], [null, []]);
     assert.deepEqual(done.changes.map((change) => change.name), ["lodash"], "the changes still compare with the cloned commit");
-    assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): resolve npm audit vulnerabilities", "initial"]);
+    assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): resolve vulnerable dependencies", "initial"]);
   } finally {
     settings = DEFAULT_SETTINGS;
   }
@@ -307,7 +307,7 @@ test("fixes by Claude that fail are dropped, and the fixes of npm audit fix are 
       assert.deepEqual([done.steps.repair, done.steps.push], ["failed", "done"]);
       assert.match(done.repair?.error ?? "", token === "broken" ? /The tests could not start/ : /^Task MNT-\d+ was created without the tag "demo-\d+"\.$/);
       const [owner, name] = repoId.split("/");
-      assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): resolve npm audit vulnerabilities", "initial"]);
+      assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): resolve vulnerable dependencies", "initial"]);
       assert.throws(() => remotes.show(owner, name, done.branch!, "src/fixed.js"), "the changes of the failed session are dropped");
     }
   } finally {
@@ -343,7 +343,7 @@ test("an agent fix without Claude pushes the fixes of npm audit fix and opens th
     assert.equal(operation.repair, null, "Claude is configured, but the agent did not ask for it");
     assert.deepEqual(operation.changes.map((c) => c.name), ["lodash"]);
     assert.ok(operation.pullRequest);
-    assert.deepEqual(pushedSubjects(repoId, operation.branch!), ["fix(deps): resolve npm audit vulnerabilities", "initial"]);
+    assert.deepEqual(pushedSubjects(repoId, operation.branch!), ["fix(deps): resolve vulnerable dependencies", "initial"]);
     assert.doesNotMatch(github.pulls.find((candidate) => candidate.repo === repoId)!.body, /\[!WARNING\]/);
   } finally {
     settings = DEFAULT_SETTINGS;
@@ -391,6 +391,37 @@ test("a pnpm workspace is audited and fixed with pnpm 11, whatever its packageMa
   const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
   assert.match(pull.body, /`pnpm audit --fix=update --prod --lockfile-only --ignore-scripts`/);
   assert.ok(!podmanCalls(podmanLog()).some((call) => call.subcommand === "run" && call.workdir === "/work/packages/web"), "the workspace packages are not audited one by one");
+});
+
+test("a Composer project is audited and fixed in an image built for its PHP version, next to an npm project", { skip }, async () => {
+  const repoId = await newRepo({ api: VULNERABLE_COMPOSER_FIXTURE, web: VULNERABLE_FIXTURE });
+  const fixed = await settled(startFix(ctx, repoId, "agent", NPM_ONLY));
+  assert.equal(fixed.status, "done", fixed.error ?? "");
+  assert.deepEqual(fixed.projects, [{ path: "api", manager: "composer" }, { path: "web", manager: "npm" }]);
+  assert.deepEqual(
+    fixed.found.filter((v) => v.manager === "composer").map((v) => `${v.project}:${v.name}:${v.severity}:${v.fix}`),
+    ["api:guzzlehttp/psr7:moderate:unknown", "api:phpmailer/phpmailer:high:unknown"]
+  );
+  assert.deepEqual(fixed.remaining.filter((v) => v.manager === "composer").map((v) => v.name), ["phpmailer/phpmailer"], "the pinned phpmailer stays vulnerable");
+  const psr7 = fixed.changes.find((change) => change.name === "guzzlehttp/psr7")!;
+  assert.deepEqual([psr7.project, psr7.manager, psr7.from], ["api", "composer", "2.4.0"]);
+  assert.notEqual(psr7.to, "2.4.0");
+  assert.ok(fixed.changes.some((change) => change.manager === "npm" && change.name === "lodash"), "the npm project is fixed in the same operation");
+
+  const builds = podmanCalls(podmanLog()).filter((call) => call.subcommand === "build");
+  const build = builds.at(-1)!;
+  assert.ok(build.args.includes("localhost/mcp-dependabot-tracker/composer:php8.2"), "the image follows require.php: ^8.2");
+  assert.match(build.containerfile ?? "", /^FROM docker\.io\/library\/php:8\.2-cli\nCOPY --from=docker\.io\/composer\/composer:2-bin \/composer \/usr\/bin\/composer\n/);
+  const update = podmanCalls(podmanLog()).find((call) => call.subcommand === "run" && call.command?.[0] === "composer" && call.command[1] === "update" && call.workdir === "/work/api")!;
+  assert.deepEqual(update.command?.slice(2, 4), ["guzzlehttp/psr7", "phpmailer/phpmailer"]);
+  assert.ok(update.command?.includes("--no-install") && update.command.includes("--no-plugins") && update.command.includes("--no-scripts"));
+  assert.equal(update.image, "localhost/mcp-dependabot-tracker/composer:php8.2");
+
+  const [owner, name] = repoId.split("/");
+  assert.equal(JSON.parse(remotes.show(owner, name, fixed.branch!, "api/composer.lock")).packages.find((entry: any) => entry.name === "guzzlehttp/psr7").version, psr7.to);
+  const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
+  assert.match(pull.body, /`composer update <vulnerable packages> --with-all-dependencies --no-install --no-scripts --no-plugins --no-audit --ignore-platform-req=ext-\*`/);
+  assert.match(pull.body, /`npm audit fix --omit=dev --package-lock-only --ignore-scripts`/);
 });
 
 test("an operation clones the chosen branch and opens the pull request towards it", { skip }, async () => {

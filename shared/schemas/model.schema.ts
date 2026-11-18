@@ -152,8 +152,12 @@ export const STEP_STATES = ["pending", "running", "done", "skipped", "failed"] a
 
 export type StepState = (typeof STEP_STATES)[number];
 
-/** Correction proposée par `npm audit` : aucune, dans les plages déclarées, ou par une version majeure. */
-export const FIX_KINDS = ["none", "available", "major"] as const;
+/**
+ * Correction d'une vulnérabilité d'après l'audit : aucune version corrigée,
+ * correction dans la même version majeure, par une version majeure, ou
+ * inconnue quand l'audit ne donne pas de version corrigée (Composer).
+ */
+export const FIX_KINDS = ["none", "available", "major", "unknown"] as const;
 
 export type FixKind = (typeof FIX_KINDS)[number];
 
@@ -288,4 +292,4 @@ export const OperationSchema = z.object({
 
 export type Operation = z.infer<typeof OperationSchema>;
 
-export const DEFAULT_COMMIT_MESSAGE = "fix(deps): resolve npm audit vulnerabilities";
+export const DEFAULT_COMMIT_MESSAGE = "fix(deps): resolve vulnerable dependencies";

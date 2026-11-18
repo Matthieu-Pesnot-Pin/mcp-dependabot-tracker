@@ -23,7 +23,7 @@ import type { GitHubConfig } from "./config.js";
 import { ConflictError, TrackerError } from "./errors.js";
 import { GitHubClient } from "./github.js";
 import { CACHE_DIR, assertContainersAvailable, buildImage, pullImage, type ContainerRuntime, type Workspace } from "./containers.js";
-import { PACKAGE_MANAGERS, detectProjects, diffLockfiles, lockfilePath, managerOf } from "./managers/index.js";
+import { PACKAGE_MANAGERS, detectProjects, diffLockfiles, installedDirs, lockfilePath, managerOf } from "./managers/index.js";
 import { projectLabel, type Lockfile, type ManagerContext } from "./managers/types.js";
 import { repairVulnerabilities } from "./repair.js";
 import { assertNotDeprecated, isActive, type Store } from "./store.js";
@@ -75,8 +75,14 @@ const CLAUDE_ACTIVITY = 3;
 /** Éléments du déroulé de la session de Claude gardés, les plus récents. */
 const SESSION_EVENTS = 500;
 
-/** Fichiers suivis par les commits du tracker : tout le clone, sauf les node_modules qu'installe Claude. */
-const STAGED_PATHS = ["--", ".", ":(exclude,glob)**/node_modules/**"];
+/**
+ * Fichiers suivis par les commits du tracker : tout le clone, sauf les
+ * dépendances qu'installe Claude, `node_modules` et le `vendor` des projets
+ * Composer.
+ */
+function stagedPaths(projects: Project[]): string[] {
+  return ["--", ".", ":(exclude,glob)**/node_modules/**", ...projects.flatMap(installedDirs).map((dir) => `:(exclude,glob)${dir}/**`)];
+}
 
 /**
  * Fichiers que le bac à sable de Claude Code garde en lecture seule. Absents
@@ -385,7 +391,7 @@ async function commitAuditFixes(runner: Runner): Promise<{ base: string; auditCo
   const branch = runner.operation.branch ?? branchName(new Date());
   runner.update((operation) => ({ ...operation, branch }));
   await runner.git(["checkout", "-b", branch]);
-  await runner.git(["add", "-A", ...STAGED_PATHS]);
+  await runner.git(["add", "-A", ...stagedPaths(runner.operation.projects)]);
   const committed = await hasStagedChanges(runner);
   if (committed) await runner.git([...(await commitIdentity(runner)), "commit", "-m", runner.operation.commitMessage]);
   const base = (await runner.git(["rev-parse", "HEAD"])).trim();
@@ -409,7 +415,7 @@ async function removeSandboxPlaceholders(runner: Runner): Promise<void> {
 async function commitRepair(runner: Runner, base: string, message: string): Promise<string | null> {
   await removeSandboxPlaceholders(runner);
   await runner.git(["reset", "--soft", base]);
-  await runner.git(["add", "-A", ...STAGED_PATHS]);
+  await runner.git(["add", "-A", ...stagedPaths(runner.operation.projects)]);
   if (!(await hasStagedChanges(runner))) return null;
   await runner.git([...(await commitIdentity(runner)), "commit", "-m", message, "-m", CLAUDE_TRAILER]);
   return (await runner.git(["rev-parse", "HEAD"])).trim();
@@ -530,7 +536,7 @@ async function pushStep(runner: Runner): Promise<void> {
 
   if (!operation.repair) {
     await runner.git(["checkout", "-b", branch]);
-    await runner.git(["add", "-A", ...STAGED_PATHS]);
+    await runner.git(["add", "-A", ...stagedPaths(runner.operation.projects)]);
     if (!(await hasStagedChanges(runner))) throw new TrackerError("Nothing to commit: the fixes left the files unchanged.");
     await runner.git([...(await commitIdentity(runner)), "commit", "-m", operation.commitMessage]);
   }

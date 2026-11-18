@@ -9,19 +9,20 @@ import { errorResult } from "./tools/types.js";
 import { APP_VERSION } from "./version.js";
 
 /** Présentation transmise au client MCP : concepts, déroulé et règles. */
-const INSTRUCTIONS = `mcp-dependabot-tracker follows the Dependabot alerts of GitHub repositories and fixes their npm vulnerabilities. These tools drive a Dependabot Tracker server, the same one the user drives from its web GUI: you start audits and fixes as the user would, and the server runs them. You never run git or npm yourself.
+const INSTRUCTIONS = `mcp-dependabot-tracker follows the Dependabot alerts of GitHub repositories and fixes their vulnerable dependencies (npm, pnpm and Composer projects). These tools drive a Dependabot Tracker server, the same one the user drives from its web GUI: you start audits and fixes as the user would, and the server runs them. You never run git or a package manager yourself.
 
 Concepts:
 - A **tracked repository** is a GitHub repository the user added in the GUI. Its open Dependabot alerts, and the pull requests the tracker opened that are not merged or closed yet, are read from GitHub and refreshed every 10 minutes.
 - A **deprecated repository** is one the user set aside in the GUI: list_repositories leaves it out, and every tool refuses it until the user restores it.
-- The **scope** of an audit or a fix is chosen at each launch: production (the default) runs npm audit and npm audit fix with --omit=dev, so the devDependencies are left out; all covers every dependency.
-- The **analysed branch** of a repository is chosen by the user in the GUI (the default branch unless changed). Dependabot alerts always describe the default branch; npm audit describes the analysed branch.
-- An **operation** is an audit or a fix, run by the server in a temporary clone of the analysed branch, deleted at the end. A fix runs npm audit fix with --package-lock-only and --ignore-scripts, then, when vulnerabilities remain, the fixes by Claude (unless you pass claude: false), then commits on a new branch fix/deps-audit-<date>-<time> and opens a pull request to the analysed branch.
+- A **project** is a folder of the repository that tracks a lockfile: package-lock.json (npm), pnpm-lock.yaml (pnpm, a whole workspace) or composer.lock (Composer). An operation audits and fixes every project of the repository.
+- The **scope** of an audit or a fix is chosen at each launch: production (the default) leaves the development dependencies out (npm --omit=dev, pnpm --prod, composer --no-dev); all covers every dependency.
+- The **analysed branch** of a repository is chosen by the user in the GUI (the default branch unless changed). Dependabot alerts always describe the default branch; the audit of the tracker describes the analysed branch.
+- An **operation** is an audit or a fix, run by the server in a temporary clone of the analysed branch, deleted at the end. A fix runs the automatic fixes of each package manager on the lockfiles only, without installing anything nor running scripts (npm audit fix, pnpm audit --fix=update, composer update of the vulnerable packages), then, when vulnerabilities remain, the fixes by Claude (unless you pass claude: false), then commits on a new branch fix/deps-audit-<date>-<time> and opens a pull request to the analysed branch.
 
 Workflow:
 1. list_repositories to see the tracked repositories and their open alerts.
 2. get_alerts for the detail of the alerts of one repository.
-3. run_audit to see what npm audit reports, or fix_vulnerabilities to fix, on the production dependencies unless the user asks for all of them. Both return at once with the id of the operation.
+3. run_audit to see what the audit reports, or fix_vulnerabilities to fix, on the production dependencies unless the user asks for all of them. Both return at once with the id of the operation.
 4. get_operation to follow the operation until it is done, failed or cancelled; cancel_operation to stop it.
 
 Rules:

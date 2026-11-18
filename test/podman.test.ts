@@ -8,7 +8,9 @@ import { PODMAN, assertContainersAvailable, pullImage, runInContainer } from "..
 import { NODE_IMAGE, npm } from "../src/core/managers/npm.js";
 import { runManager, type ManagerContext } from "../src/core/managers/types.js";
 import { pnpm } from "../src/core/managers/pnpm.js";
-import { VULNERABLE_FIXTURE, VULNERABLE_PNPM_FIXTURE, makeTempDir, npmRegistryReachable } from "./helpers.js";
+import { composer } from "../src/core/managers/composer.js";
+import { buildImage } from "../src/core/containers.js";
+import { VULNERABLE_COMPOSER_FIXTURE, VULNERABLE_FIXTURE, VULNERABLE_PNPM_FIXTURE, makeTempDir, npmRegistryReachable } from "./helpers.js";
 
 /**
  * Conteneurs réels : vrai Podman rootless, vraie image de Node.js, vrai
@@ -91,6 +93,27 @@ test("pnpm 11 audits and fixes a workspace in a container", { skip, timeout: 600
     await pnpm.fix(ctx, "", before.vulnerabilities);
     assert.deepEqual((await pnpm.audit(ctx, "")).vulnerabilities.map((v) => v.name), ["nth-check"]);
     assert.ok(!fs.existsSync(path.join(root, "node_modules")), "the automatic fixes install nothing");
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("Composer audits and fixes a project in the image built for its PHP version", { skip, timeout: 900_000 }, async () => {
+  const temp = makeTempDir("podman-composer-");
+  try {
+    const root = path.join(temp.dir, "repo");
+    fs.mkdirSync(root, { recursive: true });
+    fs.copyFileSync(path.join(VULNERABLE_COMPOSER_FIXTURE, "composer.fixture.json"), path.join(root, "composer.json"));
+    fs.copyFileSync(path.join(VULNERABLE_COMPOSER_FIXTURE, "composer.fixture.lock"), path.join(root, "composer.lock"));
+    const ctx: ManagerContext = { runtime: PODMAN, workspace: { root, cache: path.join(temp.dir, "cache") }, scope: "production", log: () => {} };
+    const image = composer.image(ctx, "");
+    await buildImage(PODMAN, image.name, image.containerfile!, temp.dir);
+    const before = await composer.audit(ctx, "");
+    assert.deepEqual(before.vulnerabilities.map((v) => v.name), ["guzzlehttp/psr7", "phpmailer/phpmailer"]);
+    await composer.fix(ctx, "", before.vulnerabilities);
+    assert.deepEqual((await composer.audit(ctx, "")).vulnerabilities.map((v) => v.name), ["phpmailer/phpmailer"]);
+    assert.ok(!fs.existsSync(path.join(root, "vendor")), "the automatic fixes install nothing");
+    assert.equal(fs.statSync(path.join(root, "composer.lock")).uid, process.getuid!());
   } finally {
     temp.cleanup();
   }

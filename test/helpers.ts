@@ -29,6 +29,13 @@ export const VULNERABLE_DEV_FIXTURE = path.resolve(__dirname, "../../test/fixtur
  */
 export const VULNERABLE_PNPM_FIXTURE = path.resolve(__dirname, "../../test/fixtures/vulnerable-pnpm");
 
+/**
+ * Projet Composer vulnérable (PHP ^8.2) : guzzlehttp/psr7 2.4.0, corrigé dans
+ * sa contrainte `^2.4`, et phpmailer/phpmailer épinglé en 5.2.27, qu'aucune
+ * mise à jour ne corrige sans changer composer.json.
+ */
+export const VULNERABLE_COMPOSER_FIXTURE = path.resolve(__dirname, "../../test/fixtures/vulnerable-composer");
+
 /** Crée un répertoire temporaire et renvoie sa fonction de suppression. */
 export function makeTempDir(prefix: string): { dir: string; cleanup: () => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));

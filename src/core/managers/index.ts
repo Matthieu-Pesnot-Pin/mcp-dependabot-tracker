@@ -1,11 +1,12 @@
 import path from "path";
 import type { Change, ManagerId, Project } from "../../../shared/schemas/model.schema.js";
+import { composer } from "./composer.js";
 import { npm } from "./npm.js";
 import { pnpm } from "./pnpm.js";
 import type { Lockfile, PackageManager } from "./types.js";
 
 /** Gestionnaires de paquets pris en charge, dans l'ordre où leurs projets sont traités. */
-export const PACKAGE_MANAGERS: PackageManager[] = [npm, pnpm];
+export const PACKAGE_MANAGERS: PackageManager[] = [npm, pnpm, composer];
 
 /** Gestionnaire d'identifiant `id`. */
 export function managerOf(id: ManagerId): PackageManager {
@@ -25,6 +26,11 @@ export function detectProjects(files: string[]): Project[] {
     }
   }
   return projects.sort((a, b) => a.path.localeCompare(b.path) || PACKAGE_MANAGERS.indexOf(managerOf(a.manager)) - PACKAGE_MANAGERS.indexOf(managerOf(b.manager)));
+}
+
+/** Dossiers de dépendances installées d'un projet, relatifs à la racine du clone : jamais commités. */
+export function installedDirs(project: Project): string[] {
+  return project.manager === "composer" ? [path.posix.join(project.path, "vendor")] : [];
 }
 
 /** Lockfile d'un projet, relatif à la racine du clone. */

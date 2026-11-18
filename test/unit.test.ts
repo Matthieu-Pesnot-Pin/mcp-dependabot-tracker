@@ -8,6 +8,9 @@ import { nextPageUrl } from "../src/core/github.js";
 import { parseAuditReport, parseNpmJson, readPackageLock, npm } from "../src/core/managers/npm.js";
 import { detectProjects, diffLockfiles } from "../src/core/managers/index.js";
 import { parsePnpmAudit, pnpmFacts, pnpmVersion, readPnpmLock } from "../src/core/managers/pnpm.js";
+import { composerFacts, composerImage, parseComposerAudit, readComposerLock } from "../src/core/managers/composer.js";
+import { phpVersionFor, satisfies } from "../src/core/managers/php-version.js";
+import { installedDirs } from "../src/core/managers/index.js";
 import { branchName, isTrackerBranch, mergeAuditScope } from "../src/core/operations.js";
 import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
@@ -214,6 +217,64 @@ test("a pnpm-lock.yaml gives the versions of its packages; the pnpm of a project
   assert.equal(pnpmVersion({ packageManager: "pnpm@10.11.0" }), "11", "pnpm 10 cannot audit any more");
   assert.equal(pnpmVersion({ packageManager: "yarn@4.0.0" }), "11");
   assert.equal(pnpmVersion({}), "11");
+});
+
+const COMPOSER_REPORT = {
+  advisories: {
+    "phpmailer/phpmailer": { "0": { title: "RCE", cve: "CVE-1", link: "https://a/1", severity: "high", affectedVersions: "<6.1.6" }, "2": { title: "XSS", cve: null, link: null, severity: null, affectedVersions: "<6.5.0" } },
+    "guzzlehttp/psr7": [{ title: "CRLF", cve: "CVE-2", link: "https://a/2", severity: "medium", affectedVersions: "<2.12.1" }],
+  },
+  abandoned: {},
+};
+
+test("a composer audit report gives one vulnerability per package, whether PHP wrote its advisories as a list or an object", () => {
+  assert.deepEqual(
+    parseComposerAudit(COMPOSER_REPORT, "api").map((v) => [v.project, v.manager, v.name, v.severity, v.fix]),
+    [
+      ["api", "composer", "guzzlehttp/psr7", "moderate", "unknown"],
+      ["api", "composer", "phpmailer/phpmailer", "high", "unknown"],
+    ]
+  );
+  assert.deepEqual(parseComposerAudit({ advisories: [], abandoned: [] }, ""), [], "PHP writes an empty object as []");
+  const facts = composerFacts(COMPOSER_REPORT, "api", { "phpmailer/phpmailer": "v5.2.27" }) as any[];
+  assert.equal(facts[1].installed, "v5.2.27");
+  assert.deepEqual(facts[1].advisories.map((advisory: any) => advisory.affectedVersions), ["<6.1.6", "<6.5.0"]);
+  assert.throws(() => parseComposerAudit({}, "api"), /Unsupported composer audit report for api\/composer.lock/);
+  const lock = JSON.stringify({ packages: [{ name: "a/b", version: "1.0.0" }], "packages-dev": [{ name: "c/d", version: "v2.1.0" }] });
+  assert.deepEqual(readComposerLock(lock, ""), { "a/b": "1.0.0", "c/d": "v2.1.0" });
+  assert.throws(() => readComposerLock("{}", "api"), /api\/composer.lock has no "packages" list/);
+  assert.deepEqual(installedDirs({ path: "api", manager: "composer" }), ["api/vendor"]);
+  assert.deepEqual(installedDirs({ path: "", manager: "npm" }), []);
+});
+
+test("the PHP image of a Composer project follows config.platform.php, else the oldest version that require.php accepts", () => {
+  assert.equal(phpVersionFor({ config: { platform: { php: "8.3.12" } }, require: { php: "^8.2" } }), "8.3");
+  assert.equal(phpVersionFor({ require: { php: "^8.1" } }), "8.2");
+  assert.equal(phpVersionFor({ require: { php: ">=8.3 <8.5" } }), "8.3");
+  assert.equal(phpVersionFor({ require: { php: "~8.4.0" } }), "8.4");
+  assert.equal(phpVersionFor({ require: { php: "8.4.*" } }), "8.4");
+  assert.equal(phpVersionFor({ require: { php: "^7.4 || ^8.3" } }), "8.3");
+  assert.equal(phpVersionFor({ require: { php: ">=8.2.10" } }), "8.2");
+  assert.equal(phpVersionFor({ require: { php: "8.3 - 8.4" } }), "8.3");
+  assert.equal(phpVersionFor({}), "8.5", "without any constraint, the most recent PHP");
+  assert.throws(() => phpVersionFor({ require: { php: "^7.4" } }), /requires PHP \^7\.4: the official PHP images cover 8\.2, 8\.3, 8\.4, 8\.5/);
+  assert.throws(() => phpVersionFor({ config: { platform: { php: "8.1.0" } } }), /config\.platform\.php to 8\.1\.0/);
+  assert.equal(satisfies([8, 2, 0], ">=8.1,<8.3"), true);
+  assert.equal(satisfies([8, 3, 0], ">=8.1,<8.3"), false);
+  assert.equal(satisfies([8, 2, 5], "8.2.5"), true);
+  assert.equal(satisfies([8, 2, 4], "8.2.5"), false);
+  assert.equal(composerImage("8.4").name, "localhost/mcp-dependabot-tracker/composer:php8.4");
+  assert.match(composerImage("8.4").containerfile!, /^FROM docker\.io\/library\/php:8\.4-cli$/m);
+});
+
+test("the Composer tools of Claude update the lockfile only for named packages, and never run scripts or plugins while auditing", () => {
+  assert.deepEqual(toolArgs("composer_update_lock", { project: "api", packages: ["guzzlehttp/psr7"] }, "all"), [
+    "update", "guzzlehttp/psr7", "--with-all-dependencies", "--no-install", "--no-scripts", "--no-plugins", "--no-audit", "--ignore-platform-req=ext-*",
+  ]);
+  assert.throws(() => toolArgs("composer_update_lock", { project: "api", packages: [] }, "all"), /non-empty list/);
+  assert.throws(() => toolArgs("composer_update_lock", { project: "api", packages: ["--global"] }, "all"), /package or script name/);
+  assert.deepEqual(toolArgs("composer_audit", { project: "api" }, "production"), ["audit", "--locked", "--no-dev", "--no-scripts", "--no-plugins"]);
+  assert.deepEqual(toolArgs("composer_why", { project: "api", package: "psr/http-message" }, "all"), ["depends", "--locked", "--tree", "psr/http-message"]);
 });
 
 test("commands run without the secrets of the server in their environment", async () => {
@@ -1014,7 +1075,7 @@ test("operationSummary sums an operation up for the history of its repository", 
 
 /** Arguments du gestionnaire pour l'appel de l'outil `name` de Claude. */
 function toolArgs(name: string, args: Record<string, unknown>, scope: "production" | "all"): string[] {
-  const found = toolsOf(["npm", "pnpm"]).find(({ tool }) => tool.name === name);
+  const found = toolsOf(["npm", "pnpm", "composer"]).find(({ tool }) => tool.name === name);
   if (!found) throw new Error(`Unknown tool: ${name}`);
   return found.tool.args(args, scope);
 }
