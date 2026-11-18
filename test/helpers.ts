@@ -12,7 +12,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Point d'entrée compilé du paquet : `serve` lance le serveur, `mcp` le mode MCP. */
 export const SERVER_ENTRY = path.resolve(__dirname, "../src/index.js");
 
-/** Projet npm vulnérable : lodash (corrigé par `npm audit fix`) et nth-check (corrigé seulement par `--force`). */
+/**
+ * Projet npm vulnérable : lodash (corrigé par `npm audit fix`) et nth-check (corrigé seulement par `--force`).
+ * Ses manifestes s'appellent `*.fixture.json`, invisibles de npm et de Dependabot ; `LocalRemotes.create` leur rend leur nom.
+ */
 export const VULNERABLE_FIXTURE = path.resolve(__dirname, "../../test/fixtures/vulnerable");
 
 /** Même projet, nth-check en devDependency : un audit de production ne voit que lodash. */
@@ -58,6 +61,16 @@ export async function waitFor<T>(what: string, fn: () => T | Promise<T>, predica
   throw new Error(`Timed out waiting for ${what}. Last value: ${JSON.stringify(last)?.slice(0, 2000)}`);
 }
 
+/** Copie un dossier de fixture : `package.fixture.json` devient `package.json`, et de même pour tout `*.fixture.*`. */
+function copyFixture(source: string, target: string): void {
+  fs.cpSync(source, target, { recursive: true });
+  if (!fs.statSync(target).isDirectory()) return;
+  for (const entry of fs.readdirSync(target, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.includes(".fixture.")) continue;
+    fs.renameSync(path.join(entry.parentPath, entry.name), path.join(entry.parentPath, entry.name.replace(".fixture.", ".")));
+  }
+}
+
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
 }
@@ -88,7 +101,7 @@ export class LocalRemotes {
     try {
       git(work, ["init", "-b", branch]);
       for (const [target, source] of Object.entries(files)) {
-        fs.cpSync(source, path.join(work, target), { recursive: true });
+        copyFixture(source, path.join(work, target));
       }
       git(work, ["add", "-A"]);
       git(work, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "core.autocrlf=false", "commit", "-m", "initial"]);
