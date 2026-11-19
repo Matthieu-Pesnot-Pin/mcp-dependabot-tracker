@@ -73,8 +73,12 @@ function fixOf(advisory: any): FixKind {
   return target !== null && installed.some((major: number) => major < target) ? "major" : "available";
 }
 
-/** Avis d'un rapport `pnpm audit --json` ; lève une erreur sur un autre format. */
+/** Avis d'un rapport `pnpm audit --json` ; lève une erreur avec le message de pnpm sur un rapport d'erreur, et sur un autre format. */
 function advisoriesOf(report: any, project: string): any[] {
+  if (report?.error) {
+    const { code, message } = typeof report.error === "object" ? report.error : { code: undefined, message: String(report.error) };
+    throw new TrackerError(`pnpm audit failed for ${projectLabel(project)}pnpm-lock.yaml: ${[code, message].filter(Boolean).join(" ") || JSON.stringify(report.error)}`);
+  }
   if (!report || typeof report.advisories !== "object" || report.advisories === null) {
     throw new TrackerError(`Unsupported pnpm audit report for ${projectLabel(project)}pnpm-lock.yaml: expected an "advisories" object (pnpm 11 or later).`);
   }

@@ -169,6 +169,12 @@ const PNPM_REPORT = {
   metadata: {},
 };
 
+test("a pnpm audit error report fails with the message of pnpm", () => {
+  const report = { error: { code: "ERR_PNPM_AUDIT_NO_LOCKFILE", message: "No pnpm-lock.yaml found: Cannot audit a project without a lockfile" } };
+  assert.throws(() => parsePnpmAudit(report, "web"), /pnpm audit failed for web\/pnpm-lock\.yaml: ERR_PNPM_AUDIT_NO_LOCKFILE No pnpm-lock\.yaml found/);
+  assert.throws(() => parsePnpmAudit({ metadata: {} }, ""), /Unsupported pnpm audit report for pnpm-lock\.yaml/);
+});
+
 test("a pnpm audit report gives one vulnerability per package, with its worst severity and hardest fix", () => {
   assert.deepEqual(
     parsePnpmAudit(PNPM_REPORT, "web").map((v) => [v.project, v.manager, v.name, v.severity, v.fix]),
