@@ -24,7 +24,7 @@ export class CommandAbortedError extends Error {
 
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 
-/** Arrête le processus et ses enfants : sous Windows, `npm` tourne dans un `cmd.exe` qui ne transmet pas le signal. */
+/** Arrête le processus et ses enfants. */
 export function killTree(pid: number): void {
   if (process.platform === "win32") {
     spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
@@ -75,6 +75,9 @@ const PASSED_ENV = [
   "SSL_CERT_DIR",
   "NODE_EXTRA_CA_CERTS",
   "GIT_SSL_CAINFO",
+  "XDG_RUNTIME_DIR",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
 ];
 
 /** Environnement du serveur transmis aux commandes : les seules variables de `PASSED_ENV`. */
@@ -87,25 +90,18 @@ function inheritedEnv(): NodeJS.ProcessEnv {
 }
 
 /**
- * Lance `git`, `npm` ou `bwrap` sans shell, et attend sa fin. La commande reçoit
- * les variables système du serveur (`PASSED_ENV`), sans aucun de ses secrets, plus `options.env`. Sous Windows,
- * `npm` est un script `.cmd` que Node ne lance qu'à travers un shell : ses
- * arguments sont alors des options fixes, jamais une valeur venue de
- * l'utilisateur. Le code de sortie n'est pas interprété ici ; un dépassement de
+ * Lance une commande sans shell, et attend sa fin. La commande reçoit les
+ * variables système du serveur (`PASSED_ENV`), sans aucun de ses secrets, plus
+ * `options.env`. Le code de sortie n'est pas interprété ici ; un dépassement de
  * `timeoutMs` ou l'annulation par `signal` arrêtent la commande.
  */
-export function runCommand(command: "git" | "npm" | "bwrap", args: string[], options: CommandOptions): Promise<CommandResult> {
-  const viaShell = command === "npm" && process.platform === "win32";
-  if (viaShell && args.some((arg) => !/^[A-Za-z0-9=._-]+$/.test(arg))) {
-    throw new TrackerError(`Refused npm argument list: ${JSON.stringify(args)}.`);
-  }
+export function runCommand(command: string, args: string[], options: CommandOptions): Promise<CommandResult> {
   if (options.signal?.aborted) return Promise.reject(new CommandAbortedError());
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: { ...inheritedEnv(), ...options.env },
-      shell: viaShell,
       detached: process.platform !== "win32",
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -134,8 +130,8 @@ export function runCommand(command: "git" | "npm" | "bwrap", args: string[], opt
       fn();
     };
 
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stdout!.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr!.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.on("error", (err: any) => {
       finish(() =>
         reject(

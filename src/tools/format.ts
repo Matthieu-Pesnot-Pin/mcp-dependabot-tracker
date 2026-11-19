@@ -1,7 +1,7 @@
 import { ALERT_SEVERITIES, STEP_NAMES, type AuditScope, type Operation, type Repo } from "../../shared/schemas/model.schema.js";
 import type { RepoView } from "../../shared/schemas/api.schema.js";
 import { pendingAlerts } from "../../shared/alerts.js";
-import { projectLabel } from "../core/npm-audit.js";
+import { projectLabel } from "../core/managers/types.js";
 import { countBySeverity } from "../core/repos.js";
 
 /** Paquets cités en clair dans un résultat ; au-delà, le reste est compté. */
@@ -40,19 +40,19 @@ export function describeRepo(view: RepoView): string {
   if (repo.pullRequests.length > 0) {
     lines.push(`  Pull requests opened by the tracker, not merged yet: ${repo.pullRequests.map((pull) => `#${pull.number} ${pull.url}`).join(", ")}`);
   }
-  if (view.unfixable.length > 0) lines.push(`  Last npm audit found no published fix for: ${view.unfixable.join(", ")}`);
+  if (view.unfixable.length > 0) lines.push(`  Last audit found no published fix for: ${view.unfixable.join(", ")}`);
   if (view.cleanAudit) {
     const { at, scope } = view.cleanAudit;
     const alerts = scope === "production" ? "the Dependabot alerts on production dependencies" : "these Dependabot alerts";
-    lines.push(`  npm audit of ${at} (${scopeLabel(scope)}) found no vulnerability on the default branch: ${alerts} are probably not refreshed yet.`);
+    lines.push(`  Audit of ${at} (${scopeLabel(scope)}) found no vulnerability on the default branch: ${alerts} are probably not refreshed yet.`);
   }
   if (view.cleanProductionAudit) {
-    lines.push(`  npm audit of ${view.cleanProductionAudit.at} (production dependencies) found no vulnerability on the default branch; every open Dependabot alert is on a development dependency.`);
+    lines.push(`  Audit of ${view.cleanProductionAudit.at} (production dependencies) found no vulnerability on the default branch; every open Dependabot alert is on a development dependency.`);
   }
   if (view.auditFindings) {
     const { at, scope, count, severity } = view.auditFindings;
     lines.push(
-      `  npm audit of ${at} (${scopeLabel(scope)}) found ${count} vulnerabilit${count === 1 ? "y" : "ies"} (worst: ${severity}) on the default branch although Dependabot reports none there: Dependabot has probably not caught up yet.`
+      `  Audit of ${at} (${scopeLabel(scope)}) found ${count} vulnerabilit${count === 1 ? "y" : "ies"} (worst: ${severity}) on the default branch although Dependabot reports none there: Dependabot has probably not caught up yet.`
     );
   }
   if (activeOperation) lines.push(`  Operation in progress: ${activeOperation.id} (${activeOperation.kind})`);
@@ -80,15 +80,15 @@ function list<T>(items: T[], render: (item: T) => string): string {
 /** Libellé d'une étape, pour l'étape en cours. */
 const STEP_LABELS: Record<(typeof STEP_NAMES)[number], string> = {
   clone: "cloning the repository",
-  audit: "npm audit",
-  fix: "npm audit fix",
+  audit: "audit",
+  fix: "automatic fixes",
   repair: "fixes by Claude",
   push: "commit, push and pull request",
 };
 
 /** Compte rendu d'une opération pour l'agent : avancement, vulnérabilités, paquets modifiés, corrections par Claude, PR, erreur. */
 export function describeOperation(operation: Operation): string {
-  const title = operation.kind === "audit" ? "npm audit" : "Fix";
+  const title = operation.kind === "audit" ? "Audit" : "Fix";
   const lines = [`${title} of ${operation.repoId} (branch ${operation.baseBranch}), ${scopeLabel(operation.scope)} (operation ${operation.id}): ${operation.status}.`];
   if (operation.status === "running") {
     const step = STEP_NAMES.find((name) => operation.steps[name] === "running");
@@ -96,19 +96,19 @@ export function describeOperation(operation: Operation): string {
     if (step === "repair" && operation.repair) lines.push(`- Claude: ${operation.repair.turns} turn(s); last actions: ${operation.repair.activity.join(" · ") || "none yet"}`);
   }
   if (operation.projects.length > 0) {
-    lines.push(`- npm projects: ${operation.projects.map((project) => projectLabel(project) || "./").join(", ")}`);
+    lines.push(`- Projects: ${operation.projects.map((project) => `${projectLabel(project.path) || "./"} (${project.manager})`).join(", ")}`);
   }
   const { initial, afterFix, afterRepair } = operation.counts;
   if (initial !== null) {
     const parts = [`${initial} found`];
-    if (afterFix !== null) parts.push(`${afterFix} left after npm audit fix`);
+    if (afterFix !== null) parts.push(`${afterFix} left after the automatic fixes`);
     if (afterRepair !== null) parts.push(`${afterRepair} left after the fixes by Claude`);
     lines.push(`- Vulnerabilities: ${parts.join(", ")}`);
   }
   if (operation.remaining.length > 0) {
     lines.push(
       `- Remaining: ${list(operation.remaining, (vulnerability) => {
-        const fix = vulnerability.fix === "none" ? "no fix" : vulnerability.fix === "major" ? "fix needs a major upgrade" : "fix available";
+        const fix = { none: "no fix", major: "fix needs a major upgrade", available: "fix available", unknown: "fix unknown" }[vulnerability.fix];
         return `${projectLabel(vulnerability.project)}${vulnerability.name} (${vulnerability.severity}, ${fix})`;
       })}`
     );

@@ -1,0 +1,8 @@
+{
+    "name": "test/vulnerable-composer",
+    "require": {
+        "php": "^8.2",
+        "guzzlehttp/psr7": "^2.4",
+        "phpmailer/phpmailer": "5.2.27"
+    }
+}

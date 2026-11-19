@@ -5,7 +5,12 @@ import test from "node:test";
 
 import { parseRepoRef } from "../src/core/repo-ref.js";
 import { nextPageUrl } from "../src/core/github.js";
-import { diffLockfiles, parseAuditReport, parseLockfile, parseNpmJson } from "../src/core/npm-audit.js";
+import { parseAuditReport, parseNpmJson, readPackageLock, npm } from "../src/core/managers/npm.js";
+import { detectProjects, diffLockfiles } from "../src/core/managers/index.js";
+import { parsePnpmAudit, pnpmFacts, pnpmVersion, readPnpmLock } from "../src/core/managers/pnpm.js";
+import { composerFacts, composerImage, parseComposerAudit, readComposerLock } from "../src/core/managers/composer.js";
+import { phpVersionFor, satisfies } from "../src/core/managers/php-version.js";
+import { installedDirs } from "../src/core/managers/index.js";
 import { branchName, isTrackerBranch, mergeAuditScope } from "../src/core/operations.js";
 import { runCommand } from "../src/core/commands.js";
 import { MAX_SUGGESTIONS, searchRepositories } from "../shared/repo-search.js";
@@ -20,8 +25,9 @@ import { Hono } from "hono";
 import { readServerConfig } from "../src/core/server-config.js";
 import { resolveCloneDir, resolveDataDir } from "../src/core/data-dir.js";
 import { describeOperation } from "../src/tools/format.js";
-import { assertSandboxAvailable, bwrapArgs, projectDir } from "../src/core/npm-sandbox.js";
-import { npmArgs } from "../src/npm-tools.js";
+import { assertSandboxAvailable } from "../src/core/sandbox.js";
+import { assertContainersAvailable, imageId, projectDir, removeImage, runArgs, runInContainer } from "../src/core/containers.js";
+import { toolsOf } from "../src/package-tools.js";
 import { organizerUrl } from "../src/core/organizer.js";
 import { adoptEnvGitHubToken, encryptStoredTokens, readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
 import { tokenExpiration } from "../src/core/github.js";
@@ -129,15 +135,146 @@ test("parseNpmJson surfaces npm errors and non-JSON output", () => {
   assert.deepEqual(parseNpmJson('{"ok":1}', "", "npm"), { ok: 1 });
 });
 
-test("diffLockfiles lists changed, added and removed packages", () => {
-  const before = { packages: { "": { version: "1.0.0" }, "node_modules/a": { version: "1.0.0" }, "node_modules/b": { version: "2.0.0" }, "node_modules/c": { version: "1.0.0" } } };
-  const after = { packages: { "": { version: "1.0.0" }, "node_modules/a": { version: "1.1.0" }, "node_modules/b": { version: "2.0.0" }, "node_modules/x/node_modules/d": { version: "3.0.0" } } };
-  assert.deepEqual(diffLockfiles(before, after, ""), [
-    { project: "", name: "a", from: "1.0.0", to: "1.1.0" },
-    { project: "", name: "c", from: "1.0.0", to: null },
-    { project: "", name: "x/node_modules/d", from: null, to: "3.0.0" },
+test("diffLockfiles lists changed, added and removed packages of a package-lock.json", () => {
+  const before = readPackageLock(JSON.stringify({ packages: { "": { version: "1.0.0" }, "node_modules/a": { version: "1.0.0" }, "node_modules/b": { version: "2.0.0" }, "node_modules/c": { version: "1.0.0" } } }), "");
+  const after = readPackageLock(JSON.stringify({ packages: { "": { version: "1.0.0" }, "node_modules/a": { version: "1.1.0" }, "node_modules/b": { version: "2.0.0" }, "node_modules/x/node_modules/d": { version: "3.0.0" } } }), "");
+  assert.deepEqual(diffLockfiles(before, after, { path: "", manager: "npm" }), [
+    { project: "", manager: "npm", name: "a", from: "1.0.0", to: "1.1.0" },
+    { project: "", manager: "npm", name: "c", from: "1.0.0", to: null },
+    { project: "", manager: "npm", name: "x/node_modules/d", from: null, to: "3.0.0" },
   ]);
-  assert.throws(() => parseLockfile('{"lockfileVersion":1,"dependencies":{}}', "gui"), /gui\/package-lock.json has no "packages" section/);
+  assert.throws(() => readPackageLock('{"lockfileVersion":1,"dependencies":{}}', "gui"), /gui\/package-lock.json has no "packages" section/);
+});
+
+test("the projects of a repository are the folders of the tracked lockfiles", () => {
+  assert.deepEqual(detectProjects(["package-lock.json", "gui/package-lock.json", "gui/package.json", "README.md", "docs/package-lock.json.bak"]), [
+    { path: "", manager: "npm" },
+    { path: "gui", manager: "npm" },
+  ]);
+  assert.deepEqual(detectProjects(["web/pnpm-lock.yaml", "web/packages/a/package.json", "package-lock.json"]), [
+    { path: "", manager: "npm" },
+    { path: "web", manager: "pnpm" },
+  ]);
+  assert.deepEqual(detectProjects(["README.md"]), []);
+});
+
+const PNPM_REPORT = {
+  advisories: {
+    "1": { id: 1, module_name: "lodash", severity: "moderate", title: "ReDoS", url: "https://a/1", vulnerable_versions: "<4.17.21", patched_versions: ">=4.17.21", findings: [{ version: "4.17.20", paths: ["packages__web>lodash"], dev: false }] },
+    "2": { id: 2, module_name: "lodash", severity: "high", title: "Injection", url: "https://a/2", vulnerable_versions: "<=4.17.23", patched_versions: ">=4.18.1", findings: [{ version: "4.17.20", paths: ["packages__web>lodash"], dev: false }] },
+    GHSA: { id: "GHSA-x", module_name: "nth-check", severity: "high", title: "ReDoS", url: "https://a/3", vulnerable_versions: "<2.0.1", patched_versions: ">=2.0.1", findings: [{ version: "1.0.2", paths: ["packages__web>css-select>nth-check"], dev: false }] },
+    "4": { id: 4, module_name: "request", severity: "critical", title: "SSRF", url: "https://a/4", vulnerable_versions: "*", patched_versions: null, findings: [{ version: "2.88.2", paths: ["request"], dev: true }] },
+  },
+  metadata: {},
+};
+
+test("a pnpm audit report gives one vulnerability per package, with its worst severity and hardest fix", () => {
+  assert.deepEqual(
+    parsePnpmAudit(PNPM_REPORT, "web").map((v) => [v.project, v.manager, v.name, v.severity, v.fix]),
+    [
+      ["web", "pnpm", "lodash", "high", "available"],
+      ["web", "pnpm", "nth-check", "high", "major"],
+      ["web", "pnpm", "request", "critical", "none"],
+    ]
+  );
+  const facts = pnpmFacts(PNPM_REPORT, "web") as any[];
+  assert.deepEqual(facts[0].advisories.map((advisory: any) => advisory.patched), [">=4.17.21", ">=4.18.1"]);
+  assert.deepEqual(facts[1].advisories[0].paths, ["packages__web>css-select>nth-check"]);
+  assert.throws(() => parsePnpmAudit({ actions: [] }, ""), /expected an "advisories" object \(pnpm 11 or later\)/);
+});
+
+test("a pnpm-lock.yaml gives the versions of its packages; the pnpm of a project is the one of packageManager when it can audit", () => {
+  const lock = [
+    "lockfileVersion: '9.0'",
+    "",
+    "importers:",
+    "",
+    "  .:",
+    "    dependencies:",
+    "      lodash:",
+    "        specifier: ^4.17.20",
+    "        version: 4.17.20",
+    "",
+    "packages:",
+    "",
+    "  '@babel/core@7.24.0':",
+    "    resolution: {integrity: sha512-x}",
+    "",
+    "  lodash@4.17.20:",
+    "    resolution: {integrity: sha512-y}",
+    "",
+    "  lodash@3.10.1:",
+    "    resolution: {integrity: sha512-z}",
+    "",
+    "snapshots:",
+    "",
+    "  lodash@4.17.20: {}",
+  ].join("\n");
+  assert.deepEqual(readPnpmLock(lock, ""), { "@babel/core": "7.24.0", lodash: "3.10.1, 4.17.20" });
+  assert.throws(() => readPnpmLock("lockfileVersion: '6.0'\n", "web"), /web\/pnpm-lock.yaml has lockfile version 6.0: version 9/);
+  assert.equal(pnpmVersion({ packageManager: "pnpm@12.1.0+sha512.abc" }), "12.1.0");
+  assert.equal(pnpmVersion({ packageManager: "pnpm@11" }), "11");
+  assert.equal(pnpmVersion({ packageManager: "pnpm@10.11.0" }), "11", "pnpm 10 cannot audit any more");
+  assert.equal(pnpmVersion({ packageManager: "yarn@4.0.0" }), "11");
+  assert.equal(pnpmVersion({}), "11");
+});
+
+const COMPOSER_REPORT = {
+  advisories: {
+    "phpmailer/phpmailer": { "0": { title: "RCE", cve: "CVE-1", link: "https://a/1", severity: "high", affectedVersions: "<6.1.6" }, "2": { title: "XSS", cve: null, link: null, severity: null, affectedVersions: "<6.5.0" } },
+    "guzzlehttp/psr7": [{ title: "CRLF", cve: "CVE-2", link: "https://a/2", severity: "medium", affectedVersions: "<2.12.1" }],
+  },
+  abandoned: {},
+};
+
+test("a composer audit report gives one vulnerability per package, whether PHP wrote its advisories as a list or an object", () => {
+  assert.deepEqual(
+    parseComposerAudit(COMPOSER_REPORT, "api").map((v) => [v.project, v.manager, v.name, v.severity, v.fix]),
+    [
+      ["api", "composer", "guzzlehttp/psr7", "moderate", "unknown"],
+      ["api", "composer", "phpmailer/phpmailer", "high", "unknown"],
+    ]
+  );
+  assert.deepEqual(parseComposerAudit({ advisories: [], abandoned: [] }, ""), [], "PHP writes an empty object as []");
+  const facts = composerFacts(COMPOSER_REPORT, "api", { "phpmailer/phpmailer": "v5.2.27" }) as any[];
+  assert.equal(facts[1].installed, "v5.2.27");
+  assert.deepEqual(facts[1].advisories.map((advisory: any) => advisory.affectedVersions), ["<6.1.6", "<6.5.0"]);
+  assert.throws(() => parseComposerAudit({}, "api"), /Unsupported composer audit report for api\/composer.lock/);
+  const lock = JSON.stringify({ packages: [{ name: "a/b", version: "1.0.0" }], "packages-dev": [{ name: "c/d", version: "v2.1.0" }] });
+  assert.deepEqual(readComposerLock(lock, ""), { "a/b": "1.0.0", "c/d": "v2.1.0" });
+  assert.throws(() => readComposerLock("{}", "api"), /api\/composer.lock has no "packages" list/);
+  assert.deepEqual(installedDirs({ path: "api", manager: "composer" }), ["api/vendor"]);
+  assert.deepEqual(installedDirs({ path: "", manager: "npm" }), []);
+});
+
+test("the PHP image of a Composer project follows config.platform.php, else the oldest version that require.php accepts", () => {
+  assert.equal(phpVersionFor({ config: { platform: { php: "8.3.12" } }, require: { php: "^8.2" } }), "8.3");
+  assert.equal(phpVersionFor({ require: { php: "^8.1" } }), "8.2");
+  assert.equal(phpVersionFor({ require: { php: ">=8.3 <8.5" } }), "8.3");
+  assert.equal(phpVersionFor({ require: { php: "~8.4.0" } }), "8.4");
+  assert.equal(phpVersionFor({ require: { php: "8.4.*" } }), "8.4");
+  assert.equal(phpVersionFor({ require: { php: "^7.4 || ^8.3" } }), "8.3");
+  assert.equal(phpVersionFor({ require: { php: ">=8.2.10" } }), "8.2");
+  assert.equal(phpVersionFor({ require: { php: "8.3 - 8.4" } }), "8.3");
+  assert.equal(phpVersionFor({}), "8.5", "without any constraint, the most recent PHP");
+  assert.throws(() => phpVersionFor({ require: { php: "^7.4" } }), /requires PHP \^7\.4: the official PHP images cover 8\.2, 8\.3, 8\.4, 8\.5/);
+  assert.throws(() => phpVersionFor({ config: { platform: { php: "8.1.0" } } }), /config\.platform\.php to 8\.1\.0/);
+  assert.equal(satisfies([8, 2, 0], ">=8.1,<8.3"), true);
+  assert.equal(satisfies([8, 3, 0], ">=8.1,<8.3"), false);
+  assert.equal(satisfies([8, 2, 5], "8.2.5"), true);
+  assert.equal(satisfies([8, 2, 4], "8.2.5"), false);
+  assert.equal(composerImage("8.4").name, "localhost/mcp-dependabot-tracker/composer:php8.4");
+  assert.match(composerImage("8.4").containerfile!, /^FROM docker\.io\/library\/php:8\.4-cli$/m);
+});
+
+test("the Composer tools of Claude update the lockfile only for named packages, and never run scripts or plugins while auditing", () => {
+  assert.deepEqual(toolArgs("composer_update_lock", { project: "api", packages: ["guzzlehttp/psr7"] }, "all"), [
+    "update", "guzzlehttp/psr7", "--with-all-dependencies", "--no-install", "--no-scripts", "--no-plugins", "--no-audit", "--ignore-platform-req=ext-*",
+  ]);
+  assert.throws(() => toolArgs("composer_update_lock", { project: "api", packages: [] }, "all"), /non-empty list/);
+  assert.throws(() => toolArgs("composer_update_lock", { project: "api", packages: ["--global"] }, "all"), /package or script name/);
+  assert.deepEqual(toolArgs("composer_audit", { project: "api" }, "production"), ["audit", "--locked", "--no-dev", "--no-scripts", "--no-plugins"]);
+  assert.deepEqual(toolArgs("composer_why", { project: "api", package: "psr/http-message" }, "all"), ["depends", "--locked", "--tree", "psr/http-message"]);
 });
 
 test("commands run without the secrets of the server in their environment", async () => {
@@ -213,7 +350,8 @@ test("resolveDataDir requires DATA_DIR, creates it, and resolveCloneDir creates 
 });
 
 test("branchName encodes the local date and time down to the second", () => {
-  assert.equal(branchName(new Date(2026, 9, 28, 14, 32, 5)), "fix/npm-audit-2026-10-28-143205");
+  assert.equal(branchName(new Date(2026, 9, 28, 14, 32, 5)), "fix/deps-audit-2026-10-28-143205");
+  assert.equal(isTrackerBranch("fix/deps-audit-2026-10-28-143205"), true);
 });
 
 test("trackerPullRequests keeps the open pull requests of the tracker's own branches", () => {
@@ -290,8 +428,8 @@ test("auditFindings reports what the latest audit of the default branch found wh
       steps: { clone: "done", audit: "done", fix: "skipped", repair: "skipped", push: "skipped" },
       counts: { initial: 2, afterFix: null, afterRepair: null },
       found: [
-        { project: "", name: "lodash", severity: "moderate", fix: "available" },
-        { project: "", name: "tar", severity: "high", fix: "none" },
+        { project: "", manager: "npm", name: "lodash", severity: "moderate", fix: "available" },
+        { project: "", manager: "npm", name: "tar", severity: "high", fix: "none" },
       ],
       ...overrides,
     });
@@ -317,8 +455,8 @@ test("lastAudit sums up the latest audit, whatever its branch", () => {
       createdAt: "2026-03-01T10:00:00.000Z",
       steps: { clone: "done", audit: "done", fix: "skipped", repair: "skipped", push: "skipped" },
       found: [
-        { project: "", name: "lodash", severity: "moderate", fix: "available" },
-        { project: "", name: "tar", severity: "high", fix: "none" },
+        { project: "", manager: "npm", name: "lodash", severity: "moderate", fix: "available" },
+        { project: "", manager: "npm", name: "tar", severity: "high", fix: "none" },
       ],
       ...overrides,
     });
@@ -332,7 +470,7 @@ test("lastAudit sums up the latest audit, whatever its branch", () => {
     id: "op-4",
     kind: "fix",
     updatedAt: "2026-03-01T10:20:00.000Z",
-    remaining: [{ project: "", name: "tar", severity: "low", fix: "none" }],
+    remaining: [{ project: "", manager: "npm", name: "tar", severity: "low", fix: "none" }],
     branch: "fix/npm-audit-2026-03-01-100000",
     pullRequest: { number: 12, url: "https://github.com/octo/demo/pull/12" },
   });
@@ -403,10 +541,10 @@ test("unfixablePackages lists the packages without a published fix from the late
     status: "done",
     steps: { clone: "done", audit: "done", fix: "done", repair: "skipped", push: "skipped" },
     remaining: [
-      { project: "", name: "xlsx", severity: "high", fix: "none" },
-      { project: "gui", name: "xlsx", severity: "high", fix: "none" },
-      { project: "", name: "nth-check", severity: "high", fix: "major" },
-      { project: "", name: "abc", severity: "low", fix: "none" },
+      { project: "", manager: "npm", name: "xlsx", severity: "high", fix: "none" },
+      { project: "gui", manager: "npm", name: "xlsx", severity: "high", fix: "none" },
+      { project: "", manager: "npm", name: "nth-check", severity: "high", fix: "major" },
+      { project: "", manager: "npm", name: "abc", severity: "low", fix: "none" },
     ],
   });
   const target = repo("octo/demo", [alert(1, "high", "xlsx")]);
@@ -564,11 +702,29 @@ test("changes coming from another site are refused", () => {
   assert.match(crossSiteRejection("DELETE", { origin: "https://evil.example" }, app)!, /Origin/);
 });
 
+test("Store reads an operation saved before the package managers: npm projects, vulnerabilities and changes", () => {
+  const temp = makeTempDir("tracker-managers-");
+  try {
+    const store = new Store(temp.dir);
+    const saved: any = operation({ id: "op-old" });
+    saved.projects = ["", "gui"];
+    saved.remaining = [{ project: "gui", name: "lodash", severity: "high", fix: "available" }];
+    saved.changes = [{ project: "", name: "lodash", from: "1.0.0", to: "1.0.1" }];
+    fs.writeFileSync(path.join(temp.dir, "operations", "op-old.json"), JSON.stringify(saved));
+    const read = store.getOperation("op-old");
+    assert.deepEqual(read.projects, [{ path: "", manager: "npm" }, { path: "gui", manager: "npm" }]);
+    assert.equal(read.remaining[0].manager, "npm");
+    assert.equal(read.changes[0].manager, "npm");
+  } finally {
+    temp.cleanup();
+  }
+});
+
 test("Store reads an operation saved without the vulnerabilities of its first audit", () => {
   const temp = makeTempDir("tracker-found-");
   try {
     const store = new Store(temp.dir);
-    const remaining = [{ project: "", name: "lodash", severity: "high" as const, fix: "available" as const }];
+    const remaining = [{ project: "", manager: "npm" as const, name: "lodash", severity: "high" as const, fix: "available" as const }];
     for (const [id, afterFix] of [["op-audit", null], ["op-fix", 1]] as const) {
       const saved = { ...operation({ id, remaining, counts: { initial: 1, afterFix, afterRepair: null } }) } as Partial<Operation>;
       delete saved.found;
@@ -835,17 +991,17 @@ test("describeOperation reports counts, changes and the pull request", () => {
   const text = describeOperation(
     operation({
       status: "done",
-      projects: ["", "gui"],
+      projects: [{ path: "", manager: "npm" }, { path: "gui", manager: "npm" }],
       steps: { clone: "done", audit: "done", fix: "done", repair: "skipped", push: "done" },
       counts: { initial: 4, afterFix: 2, afterRepair: null },
-      changes: [{ project: "gui", name: "lodash", from: "4.17.20", to: "4.18.1" }],
+      changes: [{ project: "gui", manager: "npm", name: "lodash", from: "4.17.20", to: "4.18.1" }],
       branch: "fix/npm-audit-2026-10-28-143205",
       pullRequest: { number: 7, url: "https://github.com/octo/demo/pull/7" },
     })
   );
   assert.match(text, /^Fix of octo\/demo \(branch main\), production dependencies \(operation op-1\): done\./);
-  assert.match(text, /npm projects: \.\/, gui\//);
-  assert.match(text, /Vulnerabilities: 4 found, 2 left after npm audit fix/);
+  assert.match(text, /Projects: \.\/ \(npm\), gui\/ \(npm\)/);
+  assert.match(text, /Vulnerabilities: 4 found, 2 left after the automatic fixes/);
   assert.match(text, /Updated packages \(1\): gui\/lodash 4\.17\.20 → 4\.18\.1/);
   assert.match(text, /Pull request #7: https:\/\/github.com\/octo\/demo\/pull\/7 \(branch fix\/npm-audit-2026-10-28-143205\)/);
 
@@ -897,9 +1053,9 @@ test("setup-mcp declares the MCP mode with the server address and an agent token
   }
 });
 
-test("the npm commands check that bubblewrap can build a sandbox on Linux, and only there", async () => {
+test("the fixes by Claude check that bubblewrap can build a sandbox on Linux, and only there", async () => {
   await assertSandboxAvailable("win32", "no-such-bwrap");
-  await assert.rejects(assertSandboxAvailable("linux", "no-such-bwrap"), /need bubblewrap \(bwrap\).*not in the PATH of the server\. Install it on the server: sudo apt-get install -y bubblewrap socat/);
+  await assert.rejects(assertSandboxAvailable("linux", "no-such-bwrap"), /The fixes by Claude need bubblewrap \(bwrap\).*not in the PATH of the server\. Install it on the server: sudo apt-get install -y bubblewrap socat/);
   await assert.rejects(assertSandboxAvailable("linux", process.execPath), /bubblewrap \(bwrap\) is installed but cannot create a sandbox for the account of the server: .*--ro-bind[\s\S]*apparmor_restrict_unprivileged_userns/);
 });
 
@@ -917,43 +1073,127 @@ test("operationSummary sums an operation up for the history of its repository", 
   assert.ok(!("log" in fix) && !("repair" in fix), "the history leaves the log and the session of Claude out");
 });
 
+/** Arguments du gestionnaire pour l'appel de l'outil `name` de Claude. */
+function toolArgs(name: string, args: Record<string, unknown>, scope: "production" | "all"): string[] {
+  const found = toolsOf(["npm", "pnpm", "composer"]).find(({ tool }) => tool.name === name);
+  if (!found) throw new Error(`Unknown tool: ${name}`);
+  return found.tool.args(args, scope);
+}
+
 test("the npm tools of Claude run fixed npm commands, with names only as arguments", () => {
-  assert.deepEqual(npmArgs("npm_install_lockfile", { project: "", packages: ["mermaid@12.0.1"] }, "production"), ["install", "--package-lock-only", "--ignore-scripts", "mermaid@12.0.1"]);
-  assert.deepEqual(npmArgs("npm_audit", { project: "web" }, "production"), ["audit", "--omit=dev"]);
-  assert.deepEqual(npmArgs("npm_audit", { project: "web" }, "all"), ["audit"]);
-  assert.deepEqual(npmArgs("npm_run", { project: "", script: "test:unit" }, "all"), ["run", "test:unit"]);
-  assert.deepEqual(npmArgs("tsc", { project: "" }, "all"), ["exec", "--no", "--", "tsc", "--noEmit"]);
-  assert.throws(() => npmArgs("npm_install_lockfile", { project: "", packages: ["--global"] }, "all"), /package or script name/);
-  assert.throws(() => npmArgs("npm_run", { project: "", script: "test; rm -rf /" }, "all"), /package or script name/);
-  assert.throws(() => npmArgs("npm_ci", { project: "", force: true }, "all"), /force/);
+  assert.deepEqual(toolArgs("npm_install_lockfile", { project: "", packages: ["mermaid@12.0.1"] }, "production"), ["install", "--package-lock-only", "--ignore-scripts", "mermaid@12.0.1"]);
+  assert.deepEqual(toolArgs("npm_audit", { project: "web" }, "production"), ["audit", "--omit=dev"]);
+  assert.deepEqual(toolArgs("npm_audit", { project: "web" }, "all"), ["audit"]);
+  assert.deepEqual(toolArgs("npm_run", { project: "", script: "test:unit" }, "all"), ["run", "test:unit"]);
+  assert.deepEqual(toolArgs("tsc", { project: "" }, "all"), ["exec", "--no", "--", "tsc", "--noEmit"]);
+  assert.throws(() => toolArgs("npm_install_lockfile", { project: "", packages: ["--global"] }, "all"), /package or script name/);
+  assert.throws(() => toolArgs("npm_run", { project: "", script: "test; rm -rf /" }, "all"), /package or script name/);
+  assert.throws(() => toolArgs("npm_ci", { project: "", force: true }, "all"), /force/);
+  assert.deepEqual(
+    toolsOf(["npm"]).map(({ tool }) => tool.name),
+    ["npm_install_lockfile", "npm_audit", "npm_ci", "npm_test", "npm_run", "npm_ls", "tsc"]
+  );
+  assert.deepEqual(npm.command({ runtime: { command: ["podman"] }, workspace: { root: process.cwd(), cache: "c" }, scope: "all", log: () => {} }, "", ["ci"]).command, ["npm", "ci"]);
 });
 
-test("the npm tools of Claude only run in a project folder of the clone", () => {
-  const temp = makeTempDir("npm-tools-");
+test("the pnpm tools of Claude run fixed pnpm commands, and only the tools of the managers of the repository are served", () => {
+  assert.deepEqual(toolArgs("pnpm_install_lockfile", { project: "" }, "all"), ["install", "--lockfile-only", "--ignore-scripts"]);
+  assert.deepEqual(toolArgs("pnpm_audit", { project: "" }, "production"), ["audit", "--prod"]);
+  assert.deepEqual(toolArgs("pnpm_run", { project: "", script: "build", filter: "web" }, "all"), ["--filter", "web", "run", "build"]);
+  assert.deepEqual(toolArgs("pnpm_why", { project: "", package: "lodash" }, "all"), ["why", "-r", "lodash"]);
+  assert.throws(() => toolArgs("pnpm_run", { project: "", script: "build", filter: "--global" }, "all"), /package or script name/);
+  assert.ok(toolsOf(["pnpm"]).every(({ tool }) => tool.name.startsWith("pnpm_")));
+  assert.ok(!toolsOf(["npm"]).some(({ tool }) => tool.name.startsWith("pnpm_")));
+});
+
+test("the package manager commands only run in a project folder of the clone", () => {
+  const temp = makeTempDir("containers-");
   try {
     const root = path.join(temp.dir, "repo");
     fs.mkdirSync(path.join(root, "web", "node_modules", "x"), { recursive: true });
+    fs.mkdirSync(path.join(root, "vendor", "y"), { recursive: true });
     fs.writeFileSync(path.join(root, "package.json"), "{}");
     fs.writeFileSync(path.join(root, "web", "package.json"), "{}");
     fs.writeFileSync(path.join(root, "web", "node_modules", "x", "package.json"), "{}");
-    const sandbox = { root, cache: path.join(temp.dir, "npm-cache") };
-    assert.equal(projectDir(sandbox, ""), root);
-    assert.equal(projectDir(sandbox, "web"), path.join(root, "web"));
-    assert.throws(() => projectDir(sandbox, ".."), /not a project folder/);
-    assert.throws(() => projectDir(sandbox, "web/node_modules/x"), /not a project folder/);
-    assert.throws(() => projectDir(sandbox, "src"), /has no package.json/);
+    fs.writeFileSync(path.join(root, "vendor", "y", "composer.json"), "{}");
+    const workspace = { root, cache: path.join(temp.dir, "cache") };
+    assert.equal(projectDir(workspace, "", "package.json"), root);
+    assert.equal(projectDir(workspace, "web", "package.json"), path.join(root, "web"));
+    assert.throws(() => projectDir(workspace, "..", "package.json"), /not a project folder/);
+    assert.throws(() => projectDir(workspace, "web/node_modules/x", "package.json"), /not a project folder/);
+    assert.throws(() => projectDir(workspace, "vendor/y", "composer.json"), /not a project folder/);
+    assert.throws(() => projectDir(workspace, "src", "package.json"), /has no package.json/);
+  } finally {
+    temp.cleanup();
+  }
+});
 
-    const args = bwrapArgs(sandbox, path.join(root, "web"), ["ci"]);
-    const pairs = (flag: string) => args.flatMap((arg, index) => (arg === flag ? [[args[index + 1], args[index + 2]]] : []));
-    assert.deepEqual(pairs("--bind"), [[root, root], [sandbox.cache, sandbox.cache]], "only the clone and the npm cache are writable");
-    assert.ok(!pairs("--ro-bind").some(([source]) => source === "/" || source === temp.dir), "the rest of the server stays hidden");
-    assert.ok(!pairs("--ro-bind").some(([, target]) => target === "/etc" || target === "/opt" || target === "/home"), "/etc is mounted file by file, /opt and /home not at all");
-    assert.ok(pairs("--ro-bind").every(([, target]) => !target.startsWith("/etc/") || /^\/etc\/(resolv\.conf|hosts|host\.conf|gai\.conf|nsswitch\.conf|passwd|group|ssl|ca-certificates(\.conf)?|pki|crypto-policies|ld\.so\.(cache|conf|conf\.d)|alternatives|localtime|os-release)$/.test(target)));
-    assert.ok(args.includes("--clearenv"));
-    assert.deepEqual(args.slice(args.indexOf("--chdir"), args.indexOf("--chdir") + 2), ["--chdir", path.join(root, "web")]);
-    assert.deepEqual(args.slice(-2), ["npm", "ci"]);
-    const extra = bwrapArgs(sandbox, root, ["audit"], { npm_config_fund: "false" });
-    assert.ok(extra.join(" ").includes("--setenv npm_config_fund false"), "the variables of the command are set inside the sandbox");
+test("a container mounts the clone and the cache only, without capabilities, privileges or secrets", () => {
+  const workspace = { root: "/srv/op/repo", cache: "/srv/op/cache" };
+  const args = runArgs(workspace, "c-1", { image: "docker.io/library/node:26-slim", cwd: "web", command: ["npm", "ci"], env: { npm_config_cache: "/cache/npm" } });
+  const values = (flag: string) => args.flatMap((arg, index) => (arg === flag ? [args[index + 1]] : []));
+  assert.equal(args[0], "run");
+  assert.deepEqual(values("--volume"), ["/srv/op/repo:/work", "/srv/op/cache:/cache"], "only the clone and the cache of the operation are mounted");
+  for (const flag of ["--rm", "--init", "--pull=never", "--userns=keep-id", "--cap-drop=all", "--security-opt=no-new-privileges", "--read-only"]) assert.ok(args.includes(flag), flag);
+  assert.deepEqual(values("--workdir"), ["/work/web"]);
+  assert.deepEqual(values("--name"), ["c-1"]);
+  assert.ok(values("--env").includes("npm_config_cache=/cache/npm"));
+  assert.ok(values("--env").includes("HOME=/tmp"));
+  assert.ok(!values("--env").some((entry) => /^(GITHUB_TOKEN|VAULT_KEY|AUTH_SECRET|PATH)=/.test(entry)), "no variable of the server reaches the container");
+  assert.deepEqual(args.slice(-3), ["docker.io/library/node:26-slim", "npm", "ci"]);
+});
+
+test("Podman must be installed and rootless", async () => {
+  const temp = makeTempDir("podman-check-");
+  try {
+    await assert.rejects(assertContainersAvailable({ command: ["no-such-podman"] }, temp.dir), /Podman cannot be started.*sudo apt-get install -y podman uidmap passt/s);
+    const rootful = path.join(temp.dir, "rootful.js");
+    fs.writeFileSync(rootful, "process.stdout.write('false\\n');");
+    await assert.rejects(assertContainersAvailable({ command: [process.execPath, rootful] }, temp.dir), /Podman runs rootful/);
+    const rootless = path.join(temp.dir, "rootless.js");
+    fs.writeFileSync(rootless, "process.stdout.write('true\\n');");
+    await assertContainersAvailable({ command: [process.execPath, rootless] }, temp.dir);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("the id of a missing image is null, and a refused removal gives Podman's reason", async () => {
+  const temp = makeTempDir("podman-images-");
+  try {
+    const script = path.join(temp.dir, "podman.js");
+    fs.writeFileSync(
+      script,
+      [
+        "const [sub, ...args] = process.argv.slice(2);",
+        "if (sub === 'image') { if (args.at(-1) === 'known') { console.log('sha-1'); } else { console.error('image not known'); process.exit(125); } }",
+        "if (sub === 'rmi') { if (args[0] === 'busy') { console.error('Error: image used by 1 container'); process.exit(2); } }",
+      ].join("\n")
+    );
+    const runtime = { command: [process.execPath, script] };
+    assert.equal(await imageId(runtime, "known", temp.dir), "sha-1");
+    assert.equal(await imageId(runtime, "missing", temp.dir), null);
+    assert.equal(await removeImage(runtime, "old", temp.dir), null);
+    assert.match((await removeImage(runtime, "busy", temp.dir)) ?? "", /image used by 1 container/);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("a cancelled container command removes its container", async () => {
+  const temp = makeTempDir("podman-cancel-");
+  try {
+    const script = path.join(temp.dir, "podman.js");
+    const log = path.join(temp.dir, "calls.txt");
+    fs.writeFileSync(script, `require("fs").appendFileSync(${JSON.stringify(log)}, process.argv.slice(2).slice(0, 2).join(" ") + "\\n"); if (process.argv[2] === "run") setInterval(() => {}, 1000);`);
+    const controller = new AbortController();
+    const running = runInContainer({ command: [process.execPath, script] }, { root: temp.dir, cache: path.join(temp.dir, "cache") }, { image: "img", cwd: "", command: ["sleep"] }, { signal: controller.signal });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    controller.abort();
+    await assert.rejects(running, /Cancelled/);
+    const calls = fs.readFileSync(log, "utf-8").split("\n").filter(Boolean);
+    assert.equal(calls[0], "run --rm");
+    assert.equal(calls[1], "rm --force", "the container is removed, it would outlive the podman client");
   } finally {
     temp.cleanup();
   }

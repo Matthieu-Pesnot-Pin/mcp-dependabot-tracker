@@ -21,6 +21,21 @@ export const VULNERABLE_FIXTURE = path.resolve(__dirname, "../../test/fixtures/v
 /** Même projet, nth-check en devDependency : un audit de production ne voit que lodash. */
 export const VULNERABLE_DEV_FIXTURE = path.resolve(__dirname, "../../test/fixtures/vulnerable-dev");
 
+/**
+ * Workspace pnpm vulnérable : `packages/web` dépend de lodash (corrigé par
+ * `pnpm audit --fix=update`) et de nth-check (correction majeure), et de
+ * minimist en devDependency ; son `packageManager` demande pnpm 10, qui ne sait
+ * plus auditer.
+ */
+export const VULNERABLE_PNPM_FIXTURE = path.resolve(__dirname, "../../test/fixtures/vulnerable-pnpm");
+
+/**
+ * Projet Composer vulnérable (PHP ^8.2) : guzzlehttp/psr7 2.4.0, corrigé dans
+ * sa contrainte `^2.4`, et phpmailer/phpmailer épinglé en 5.2.27, qu'aucune
+ * mise à jour ne corrige sans changer composer.json.
+ */
+export const VULNERABLE_COMPOSER_FIXTURE = path.resolve(__dirname, "../../test/fixtures/vulnerable-composer");
+
 /** Crée un répertoire temporaire et renvoie sa fonction de suppression. */
 export function makeTempDir(prefix: string): { dir: string; cleanup: () => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -307,6 +322,34 @@ export class FakeGitHub {
     }
     return this.send(res, 404, { message: "Not Found" });
   }
+}
+
+/** Faux Podman des tests (voir fake-podman.ts), qui note ses appels dans `logFile`. */
+export function fakeContainers(logFile: string): { command: string[] } {
+  return { command: [process.execPath, path.resolve(__dirname, "fake-podman.js"), logFile] };
+}
+
+/** Appels reçus par le faux Podman, dans l'ordre. */
+export function podmanCalls(logFile: string): { subcommand: string; args: string[]; image?: string; workdir?: string; env?: Record<string, string>; command?: string[]; containerfile?: string }[] {
+  if (!fs.existsSync(logFile)) return [];
+  return fs
+    .readFileSync(logFile, "utf-8")
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line));
+}
+
+/**
+ * Dossier qui contient un exécutable `podman` qui lance le faux Podman, à
+ * placer en tête du PATH d'un serveur lancé par les tests ; null sous Windows,
+ * où Node ne lance un script sans extension `.exe` qu'à travers un shell.
+ */
+export function fakePodmanBin(dir: string, logFile: string): string | null {
+  if (process.platform === "win32") return null;
+  fs.mkdirSync(dir, { recursive: true });
+  const [node, script] = fakeContainers(logFile).command;
+  fs.writeFileSync(path.join(dir, "podman"), `#!/bin/sh\nexec "${node}" "${script}" "${logFile}" "$@"\n`, { mode: 0o755 });
+  return dir;
 }
 
 /** Faux Claude Code des tests : son comportement dépend du token reçu (voir fake-claude.ts). */

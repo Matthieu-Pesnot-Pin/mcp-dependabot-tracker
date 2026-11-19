@@ -85,6 +85,9 @@ function normalizeOperation(operation: any): unknown {
     counts: operation.counts && typeof operation.counts === "object" ? { afterRepair: null, ...operation.counts } : operation.counts,
     repair: operation.repair ? { events: [], ...operation.repair } : null,
     scope: operation.scope ?? "all",
+    projects: Array.isArray(operation.projects)
+      ? operation.projects.map((project: unknown) => (typeof project === "string" ? { path: project, manager: "npm" } : project))
+      : operation.projects,
   };
 }
 

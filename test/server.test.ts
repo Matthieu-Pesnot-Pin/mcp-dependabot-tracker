@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test, { after, before } from "node:test";
 
-import { FakeGitHub, LocalRemotes, McpClient, SERVER_ENTRY, TEST_AUTH_SECRET, TEST_USER, TEST_VAULT_KEY, TrackerServer, VULNERABLE_FIXTURE, baseEnv, runUserCommand, signIn, freePort, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
+import { FakeGitHub, fakePodmanBin, LocalRemotes, McpClient, SERVER_ENTRY, TEST_AUTH_SECRET, TEST_USER, TEST_VAULT_KEY, TrackerServer, VULNERABLE_FIXTURE, baseEnv, runUserCommand, signIn, freePort, makeTempDir, npmRegistryReachable, waitFor } from "./helpers.js";
 
 /**
  * Serveur réel lancé par `serve` sur un port libre, la fausse API GitHub et des
@@ -14,7 +14,11 @@ import { FakeGitHub, LocalRemotes, McpClient, SERVER_ENTRY, TEST_AUTH_SECRET, TE
  */
 
 const online = await npmRegistryReachable();
-const skip = online ? false : "the npm registry is unreachable: npm audit needs it";
+const skip = !online
+  ? "the npm registry is unreachable: npm audit needs it"
+  : process.platform === "win32"
+    ? "the server launches the fake Podman through a POSIX script"
+    : false;
 
 let server: TrackerServer;
 let client: McpClient;
@@ -78,6 +82,8 @@ before(async () => {
     APP_URL: `http://localhost:${port}`,
     AUTH_SECRET: TEST_AUTH_SECRET,
   };
+  const podmanBin = fakePodmanBin(path.join(temp.dir, "bin"), path.join(temp.dir, "podman.jsonl"));
+  if (podmanBin) serverEnv.PATH = `${podmanBin}${path.delimiter}${process.env.PATH}`;
   const account = await runUserCommand(serverEnv, ["add", TEST_USER.email], `${TEST_USER.password}\n`);
   assert.equal(account.code, 0, account.stderr);
   server = new TrackerServer(serverEnv);
@@ -407,7 +413,7 @@ test("the GUI audits every repository; the agent sees what Dependabot misses", {
 test("the agent starts an audit and follows it to the end", { skip }, async () => {
   const started = await client.callTool("run_audit", { repository: "octo/demo" });
   assert.equal(started.isError, false, started.text);
-  assert.match(started.text, /^npm audit of octo\/demo \(branch main\), production dependencies \(operation op-[a-z0-9-]+\): running\./);
+  assert.match(started.text, /^Audit of octo\/demo \(branch main\), production dependencies \(operation op-[a-z0-9-]+\): running\./);
   const id = operationId(started.text);
   assert.match((await client.callTool("run_audit", { repository: "octo/demo" })).text, /already in progress on octo\/demo/);
 
@@ -426,9 +432,9 @@ test("the agent fixes without Claude, to the pull request; the result links to t
   const fixed = await settledOperation(id);
   assert.equal(fixed.isError, false, fixed.text);
   assert.match(fixed.text, /^Fix of octo\/demo \(branch main\), production dependencies \(operation op-[a-z0-9-]+\): done\./);
-  assert.match(fixed.text, /Vulnerabilities: 2 found, 1 left after npm audit fix/);
+  assert.match(fixed.text, /Vulnerabilities: 2 found, 1 left after the automatic fixes/);
   assert.match(fixed.text, /nth-check \(\w+, fix needs a major upgrade\)/);
-  assert.match(fixed.text, /Pull request #\d+: https:\/\/github\.com\/octo\/demo\/pull\/\d+ \(branch fix\/npm-audit-/);
+  assert.match(fixed.text, /Pull request #\d+: https:\/\/github\.com\/octo\/demo\/pull\/\d+ \(branch fix\/deps-audit-/);
   assert.doesNotMatch(fixed.text, /Fixes by Claude/);
 
   const operation = (await call("GET", `operations/${id}`)).json.operation;
@@ -460,9 +466,9 @@ test("the GUI runs a fix to the pull request without any decision, and the PR ta
   const done = await waitFor("done", read, (op) => op.status === "done" || op.status === "failed");
   assert.equal(done.status, "done", done.error);
   assert.equal(done.steps.repair, "failed", "Claude is not configured on this server");
-  assert.match(done.repair.error, /need the organizer connection and the Claude token/);
+  assert.match(done.repair.error, /The fixes by Claude need the Claude token: set it in the settings/);
   const pull = github.pulls.at(-1)!;
-  assert.equal(pull.title, "fix(deps): resolve npm audit vulnerabilities");
+  assert.equal(pull.title, "fix(deps): resolve vulnerable dependencies");
   assert.match(pull.body, /^> \[!WARNING\]\n> Claude Code could not fix the remaining vulnerabilities/);
   assert.equal(done.pullRequest.number, pull.number);
   assert.equal((await call("POST", `operations/${id}/cancel`)).status, 409);

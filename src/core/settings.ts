@@ -139,9 +139,9 @@ export function deployToken(settings: Settings): string | null {
   return settings.deploy.token;
 }
 
-/** Vrai quand l'organizer (connexion testée) et Claude sont configurés. */
+/** Vrai quand Claude est configuré ; l'organizer, facultatif, ne reçoit que son rapport. */
 export function analysisReady(settings: Settings): boolean {
-  return organizerConnection(settings) !== null && settings.organizer.space !== null && settings.claude.token !== null;
+  return settings.claude.token !== null;
 }
 
 function tokenHint(token: string | null): string | null {

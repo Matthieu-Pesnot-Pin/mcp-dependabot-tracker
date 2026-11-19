@@ -11,7 +11,7 @@ const OPERATION_PROPERTY = { type: "string", description: "Id of the operation, 
 const SCOPE_PROPERTY = {
   type: "string",
   enum: [...AUDIT_SCOPES],
-  description: "production (default): npm audit and its fixes run with --omit=dev and leave the devDependencies out. all: every dependency, devDependencies included.",
+  description: "production (default): the audit and its fixes leave the development dependencies out (npm --omit=dev, pnpm --prod, composer --no-dev). all: every dependency, development ones included.",
 };
 
 /** Outils du mode MCP. */
@@ -34,20 +34,20 @@ export const TOOLS = [
   {
     name: "run_audit",
     description:
-      "Start npm audit on a temporary clone of the analysed branch, in every directory that holds a package-lock.json. Nothing is changed; the clone is deleted at the end. Returns at once with the id of the operation: follow it with get_operation.",
+      "Start the audit of a temporary clone of the analysed branch, in every folder that tracks a lockfile: npm audit (package-lock.json), pnpm audit (pnpm-lock.yaml), composer audit (composer.lock). Nothing is changed; the clone is deleted at the end. Returns at once with the id of the operation: follow it with get_operation.",
     inputSchema: { type: "object" as const, properties: { repository: REPOSITORY_PROPERTY, scope: SCOPE_PROPERTY }, required: ["repository"] },
   },
   {
     name: "fix_vulnerabilities",
     description:
-      "Start the fix of the npm vulnerabilities of a tracked repository, the same as the user's Fix button: in a temporary clone of the analysed branch, npm audit, then npm audit fix --package-lock-only --ignore-scripts, then, when vulnerabilities remain, the fixes by Claude (Claude Code analyses and fixes them in the code, runs the tests and reports in an organizer task), then a commit on a new branch fix/npm-audit-<date>-<time>, its push and a pull request to the analysed branch. " +
+      "Start the fix of the vulnerable dependencies of a tracked repository, the same as the user's Fix button: in a temporary clone of the analysed branch, the audit of every project, then the automatic fixes of its package manager on the lockfiles only (npm audit fix --package-lock-only --ignore-scripts, pnpm audit --fix=update --lockfile-only --ignore-scripts, composer update of the vulnerable packages --no-install --no-scripts --no-plugins), then, when vulnerabilities remain, the fixes by Claude (Claude Code analyses and fixes them in the code, runs the tests and reports in an organizer task), then a commit on a new branch fix/deps-audit-<date>-<time>, its push and a pull request to the analysed branch. " +
       "Returns at once with the id of the operation: follow it with get_operation. A fix with Claude can take several minutes.",
     inputSchema: {
       type: "object" as const,
       properties: {
         repository: REPOSITORY_PROPERTY,
         scope: SCOPE_PROPERTY,
-        claude: { type: "boolean", description: "Let Claude fix what npm audit fix leaves (default true). false: only the fixes of npm audit fix are pushed." },
+        claude: { type: "boolean", description: "Let Claude fix what the automatic fixes leave (default true). false: only the automatic fixes are pushed." },
       },
       required: ["repository"],
     },

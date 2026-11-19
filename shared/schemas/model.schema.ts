@@ -5,10 +5,23 @@ export const ALERT_SEVERITIES = ["critical", "high", "medium", "low"] as const;
 
 export type AlertSeverity = (typeof ALERT_SEVERITIES)[number];
 
-/** Gravités d'une vulnérabilité rapportée par `npm audit`, de la plus grave à la moins grave. */
+/** Gravités d'une vulnérabilité rapportée par un audit, de la plus grave à la moins grave (échelle de `npm audit`). */
 export const NPM_SEVERITIES = ["critical", "high", "moderate", "low", "info"] as const;
 
 export type NpmSeverity = (typeof NPM_SEVERITIES)[number];
+
+/** Gestionnaires de paquets des projets d'un dépôt. */
+export const MANAGERS = ["npm", "pnpm", "composer"] as const;
+
+export type ManagerId = (typeof MANAGERS)[number];
+
+/** Projet d'un dépôt : dossier de son lockfile (`""` pour la racine) et gestionnaire de paquets. */
+export const ProjectSchema = z.object({
+  path: z.string(),
+  manager: z.enum(MANAGERS),
+});
+
+export type Project = z.infer<typeof ProjectSchema>;
 
 /**
  * Périmètre d'un audit et de ses corrections : `production` laisse de côté les
@@ -57,7 +70,7 @@ export const HandledAlertSchema = z.object({
 
 export type HandledAlert = z.infer<typeof HandledAlertSchema>;
 
-/** Pull request ouverte par le tracker, ni mergée ni fermée ; `branch` est sa branche `fix/npm-audit-…`. */
+/** Pull request ouverte par le tracker, ni mergée ni fermée ; `branch` est sa branche `fix/deps-audit-…`. */
 export const PullRequestSchema = z.object({
   number: z.number().int(),
   url: z.string(),
@@ -139,14 +152,19 @@ export const STEP_STATES = ["pending", "running", "done", "skipped", "failed"] a
 
 export type StepState = (typeof STEP_STATES)[number];
 
-/** Correction proposée par `npm audit` : aucune, dans les plages déclarées, ou par une version majeure. */
-export const FIX_KINDS = ["none", "available", "major"] as const;
+/**
+ * Correction d'une vulnérabilité d'après l'audit : aucune version corrigée,
+ * correction dans la même version majeure, par une version majeure, ou
+ * inconnue quand l'audit ne donne pas de version corrigée (Composer).
+ */
+export const FIX_KINDS = ["none", "available", "major", "unknown"] as const;
 
 export type FixKind = (typeof FIX_KINDS)[number];
 
-/** Vulnérabilité d'un projet npm du dépôt ; `project` est le dossier du lockfile, `""` pour la racine. */
+/** Vulnérabilité d'un projet du dépôt ; `project` est le dossier du lockfile, `""` pour la racine. */
 export const VulnerabilitySchema = z.object({
   project: z.string(),
+  manager: z.enum(MANAGERS).default("npm"),
   name: z.string(),
   severity: z.enum(NPM_SEVERITIES),
   fix: z.enum(FIX_KINDS),
@@ -157,6 +175,7 @@ export type Vulnerability = z.infer<typeof VulnerabilitySchema>;
 /** Paquet du lockfile dont la version a changé ; `from` null pour un ajout, `to` null pour un retrait. */
 export const ChangeSchema = z.object({
   project: z.string(),
+  manager: z.enum(MANAGERS).default("npm"),
   name: z.string(),
   from: z.string().nullable(),
   to: z.string().nullable(),
@@ -173,10 +192,12 @@ export const TEST_OUTCOMES = ["passed", "failed", "not_run"] as const;
 
 /**
  * Rapport rendu par Claude à la fin de ses corrections : résumé, changement de
- * chaque fichier, message du commit et résultat des tests.
+ * chaque fichier, message du commit, résultat des tests et, sans organizer, son
+ * rapport détaillé en markdown, repris dans la pull request.
  */
 export const RepairReportSchema = z.object({
   summary: z.string(),
+  details: z.string().optional(),
   changes: z.array(z.object({ file: z.string(), change: z.string() })),
   commitMessage: z.string(),
   tests: z.object({ outcome: z.enum(TEST_OUTCOMES), detail: z.string() }),
@@ -254,7 +275,7 @@ export const OperationSchema = z.object({
     repair: z.enum(STEP_STATES),
     push: z.enum(STEP_STATES),
   }),
-  projects: z.array(z.string()),
+  projects: z.array(ProjectSchema),
   counts: z.object({
     initial: z.number().int().nullable(),
     afterFix: z.number().int().nullable(),
@@ -273,4 +294,4 @@ export const OperationSchema = z.object({
 
 export type Operation = z.infer<typeof OperationSchema>;
 
-export const DEFAULT_COMMIT_MESSAGE = "fix(deps): resolve npm audit vulnerabilities";
+export const DEFAULT_COMMIT_MESSAGE = "fix(deps): resolve vulnerable dependencies";

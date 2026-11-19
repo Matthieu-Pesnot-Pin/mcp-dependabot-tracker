@@ -255,7 +255,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
         </button>
       </div>
 
-      <p className="section-label">Organizer — où Claude dépose son rapport</p>
+      <p className="section-label">Organizer — où Claude dépose son rapport (facultatif)</p>
       <div className="panel settings-card">
         <div className="settings-fields">
           <label className="settings-field">
@@ -276,7 +276,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
               </span>
             </>
           ) : (
-            <span className="muted">Indiquez l'adresse du site et un token d'agent, créé dans l'organizer (Paramètres › Agents).</span>
+            <span className="muted">Sans organizer, le rapport de Claude est dans la pull request. Pour le recevoir aussi dans une tâche, indiquez l'adresse du site et un token d'agent, créé dans l'organizer (Paramètres › Agents).</span>
           )}
           <span className="spacer" />
           {view.organizer.tokenHint !== null && (
@@ -306,7 +306,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
           ) : (
             <>
               <Icon name="circle-alert" className="text-warning" />
-              <span>Non connecté — sans Claude, une correction pousse les seules corrections de npm audit fix</span>
+              <span>Non connecté — sans Claude, une correction pousse les seules corrections automatiques</span>
             </>
           )}
         </div>
@@ -349,7 +349,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
         <div className="right">
           <div>
             <div className="right-label">Limites d'une session</div>
-            <div className="right-description">Claude est lancé dès que npm audit fix laisse des vulnérabilités</div>
+            <div className="right-description">Claude est lancé dès que les corrections automatiques laissent des vulnérabilités</div>
           </div>
           <div className="limits">
             <input

@@ -17,10 +17,12 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
  * Avec `--mcp-config`, il écrit `src/fixed.js`, un fichier dans
  * `node_modules`, les fichiers vides `.npmrc` et `yarn.lock` que crée le bac à
  * sable de Claude Code, et un hook `.git/hooks/pre-commit` qui crée
- * `<CLAUDE_CONFIG_DIR>/hook-ran.txt`, appelle l'outil `npm_ls` du serveur `npm` de la
+ * `<CLAUDE_CONFIG_DIR>/hook-ran.txt`, appelle l'outil `npm_ls` du serveur `packages` de la
  * configuration et note sa réponse dans `<CLAUDE_CONFIG_DIR>/npm-tools.txt`,
  * puis crée la tâche du rapport sur le faux organizer, avec l'adresse et le
- * token de la configuration ; sans, il répond simplement.
+ * token de la configuration ; sans organizer dans la configuration, il rend
+ * son rapport détaillé dans le résultat. Sans `--mcp-config`, il répond
+ * simplement.
  */
 
 const args = process.argv.slice(2);
@@ -65,11 +67,16 @@ async function main() {
   }
 
   const servers = JSON.parse(fs.readFileSync(configFile, "utf-8")).mcpServers;
-  const { ORGANIZER_URL: url, ORGANIZER_TOKEN: organizerToken } = servers.organizer.env;
   const prompt = option("-p") ?? "";
-  const ownerId = /member id ([^)\s]+)\)/.exec(prompt)?.[1] ?? "";
-  const tag = /set its tags to exactly \["([^"]+)"\]/.exec(prompt)?.[1] ?? "";
-  await repair(url, organizerToken, ownerId, tag, servers.npm);
+  const organizer = servers.organizer
+    ? {
+        url: servers.organizer.env.ORGANIZER_URL,
+        token: servers.organizer.env.ORGANIZER_TOKEN,
+        ownerId: /member id ([^)\s]+)\)/.exec(prompt)?.[1] ?? "",
+        tag: /set its tags to exactly \["([^"]+)"\]/.exec(prompt)?.[1] ?? "",
+      }
+    : null;
+  await repair(organizer, servers.packages);
 }
 
 /** Appelle un outil d'un serveur MCP stdio de la configuration et rend le texte de sa réponse. */
@@ -84,7 +91,15 @@ async function callMcpTool(server: { command: string; args: string[] }, name: st
   }
 }
 
-async function repair(url: string, organizerToken: string, ownerId: string, tag: string, npm: { command: string; args: string[] }) {
+/** Organizer de la configuration, s'il y en a un : adresse, token, membre à assigner et tag demandés par la consigne. */
+interface FakeOrganizerTarget {
+  url: string;
+  token: string;
+  ownerId: string;
+  tag: string;
+}
+
+async function repair(organizer: FakeOrganizerTarget | null, npm: { command: string; args: string[] }) {
   emit({ type: "assistant", message: { id: "m-1", content: [{ type: "tool_use", name: "Read", input: { file_path: path.join(process.cwd(), "package.json") } }] } });
   emit({ type: "assistant", message: { id: "m-2", content: [{ type: "text", text: "nth-check sert à css-select ; je le monte en v3." }] } });
   if (token !== "idle") {
@@ -102,10 +117,17 @@ async function repair(url: string, organizerToken: string, ownerId: string, tag:
     emit({ type: "result", subtype: "success", is_error: true, result: "The tests could not start", num_turns: 2 });
     process.exit(1);
   }
-  const { task } = await call(url, organizerToken, "POST", "tasks", { title: "Rapport de correction — nth-check en v3", description: "Rapport" });
-  emit({ type: "assistant", message: { id: "m-4", content: [{ type: "tool_use", name: "mcp__organizer__create_task", input: {} }] } });
-  await call(url, organizerToken, "PUT", `tasks/${task.key}/assignees`, { assignees: [ownerId] });
-  if (token !== "untagged") await call(url, organizerToken, "PUT", `tasks/${task.key}/tags`, { tags: [tag] });
+  let own: Record<string, string>;
+  if (organizer) {
+    const { task } = await call(organizer.url, organizer.token, "POST", "tasks", { title: "Rapport de correction — nth-check en v3", description: "Rapport" });
+    emit({ type: "assistant", message: { id: "m-4", content: [{ type: "tool_use", name: "mcp__organizer__create_task", input: {} }] } });
+    await call(organizer.url, organizer.token, "PUT", `tasks/${task.key}/assignees`, { assignees: [organizer.ownerId] });
+    if (token !== "untagged") await call(organizer.url, organizer.token, "PUT", `tasks/${task.key}/tags`, { tags: [organizer.tag] });
+    own = { task: task.key };
+  } else {
+    emit({ type: "assistant", message: { id: "m-4", content: [{ type: "text", text: "Rapport rédigé." }] } });
+    own = { details: "## Analyse\n\nnth-check est atteignable par css-select." };
+  }
   emit({
     type: "result",
     subtype: "success",
@@ -113,7 +135,7 @@ async function repair(url: string, organizerToken: string, ownerId: string, tag:
     num_turns: 4,
     result: "done",
     structured_output: {
-      task: task.key,
+      ...own,
       summary: "nth-check monté en v3.",
       changes: token === "idle" ? [] : [{ file: "src/fixed.js", change: "correctif appliqué" }],
       commitMessage: "fix(deps): apply the fixes by Claude",
