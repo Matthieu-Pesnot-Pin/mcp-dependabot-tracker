@@ -255,7 +255,7 @@ function RepoTableHead() {
  * Ligne d'un dépôt de l'accueil : le nom, suivi au survol du lien vers sa page
  * GitHub sous `githubServerUrl` (en permanence sur un écran tactile) et de ses
  * tags, `currentTag` mis en avant, puis les
- * colonnes « Sécurité », « Dernier audit » et « Suivi », de largeur fixe, puis
+ * colonnes « Sécurité », « Dernier audit » et « Suivi », puis
  * les boutons et le chevron. Avec `hoverActions`, les boutons n'apparaissent
  * qu'au survol de la ligne, ou en permanence sur un écran tactile.
  */
@@ -758,7 +758,7 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
   return (
     <div className="home">
       {repos.data && <CategorySidebar categories={categories} views={tracked} deprecatedCount={deprecated.length} tab={tab} onChanged={repos.reload} />}
-      <div className="page">
+      <div className="page page-wide">
         <div className="home-head">
           {tagName !== null ? (
             <h1 className="page-title page-title-tag">

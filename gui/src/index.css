@@ -264,6 +264,10 @@ code {
   padding: 32px 0 64px;
 }
 
+.page-wide {
+  width: 1200px;
+}
+
 .page-title {
   font-size: 22px;
   font-weight: 600;
@@ -737,13 +741,14 @@ code {
 
 /*
  * Tableau des dépôts de l'accueil : l'en-tête et chaque ligne partagent les
- * colonnes du tableau (subgrid). Sécurité, dernier audit et suivi ont une
- * largeur fixe ; un contenu trop long est coupé, jamais poussé sur la colonne
- * voisine.
+ * colonnes du tableau (subgrid). La colonne du nom prend la largeur du plus
+ * long nom en priorité ; sécurité, dernier audit et suivi se partagent le
+ * reste au-delà de leur largeur minimale. Un contenu trop long est coupé,
+ * jamais poussé sur la colonne voisine.
  */
 .repo-table {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) 170px 215px 180px auto 16px;
+  grid-template-columns: minmax(160px, max-content) minmax(130px, 1fr) minmax(170px, 1fr) minmax(100px, 1fr) auto 16px;
   column-gap: 20px;
 }
 
@@ -802,6 +807,7 @@ code {
 
 .repo-name {
   min-width: 0;
+  max-width: 420px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
