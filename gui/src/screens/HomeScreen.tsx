@@ -153,20 +153,29 @@ function SecurityCell({ view }: { view: RepoView }) {
 }
 
 /**
- * Colonne « Dernier audit » : l'opération en cours, sinon le résultat du
- * dernier audit et sa date, celui qui suit les corrections pour une correction
- * qui a ouvert une pull request ; « Prod. OK » pour un audit des seules
- * dépendances de production sans vulnérabilité. La branche et le périmètre
- * sont en infobulle.
+ * Colonne « Dernier audit » : l'opération en cours ; sinon l'échec de la
+ * dernière opération quand elle a échoué avant d'avoir audité (clone ou
+ * audit), avec son erreur en infobulle ; sinon le résultat du dernier audit et
+ * sa date, celui qui suit les corrections pour une correction qui a ouvert une
+ * pull request ; « Prod. OK » pour un audit des seules dépendances de
+ * production sans vulnérabilité. La branche et le périmètre sont en infobulle.
  */
 function AuditCell({ view }: { view: RepoView }) {
-  const { activeOperation, lastAudit } = view
+  const { activeOperation, latestOperation, lastAudit } = view
   if (activeOperation) {
     const repairing = activeOperation.steps.repair === 'running'
     return (
       <span className="cell-mark cell-shrink status-busy">
         <Icon name="loader-circle" size={14} className="spin" />
         <span className="cell-ellipsis">{repairing ? 'Corrections par Claude…' : activeOperation.kind === 'audit' ? 'Audit en cours' : 'Correction en cours'}</span>
+      </span>
+    )
+  }
+  if (latestOperation?.status === 'failed' && latestOperation.steps.audit !== 'done') {
+    return (
+      <span className="cell-mark cell-shrink status-error" title={`Échec du ${dayAndTime(latestOperation.updatedAt)} : ${latestOperation.error ?? 'erreur inconnue'}`}>
+        <Icon name="circle-x" size={14} />
+        <span className="cell-ellipsis">Audit en échec · {shortDayAndTime(latestOperation.updatedAt)}</span>
       </span>
     )
   }
