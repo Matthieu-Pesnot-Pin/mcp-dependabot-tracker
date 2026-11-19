@@ -2,6 +2,7 @@
 
 /**
  * Point d'entrée du paquet :
+ *   setup                                          installe le serveur sur cette machine (Linux, systemd, en root) ;
  *   serve                                          le serveur Dependabot Tracker (interface, API, opérations) ;
  *   mcp                                            le mode MCP, lancé par un agent, qui pilote un serveur ;
  *   user add|password|totp|remove|list             gère les comptes de l'interface ;
@@ -14,6 +15,7 @@ const { USERS_USAGE } = await import("./cli/users.js");
 
 const USAGE = [
   "Usage :",
+  "  mcp-dependabot-tracker setup [options]                               installe le serveur sur cette machine (Linux, systemd, en root ; --help)",
   "  mcp-dependabot-tracker serve                                         lance le serveur",
   "  mcp-dependabot-tracker mcp                                           mode MCP, lancé par un agent (SERVER_URL, AGENT_TOKEN)",
   USERS_USAGE,
@@ -38,6 +40,14 @@ if (argv.includes("--generate-vault-key")) {
     process.exit(1);
   }
   process.exit(runSetupMcp({ cwd: process.cwd(), force: argv.includes("--force"), connection: parsed.connection }));
+} else if (argv[0] === "setup") {
+  const { SETUP_USAGE, realHost, runSetup } = await import("./cli/setup.js");
+  if (argv.includes("--help")) {
+    console.log(SETUP_USAGE);
+  } else {
+    const { packageRoot } = await import("./server/serve.js");
+    process.exit(await runSetup(argv.slice(1), realHost(packageRoot())));
+  }
 } else if (argv[0] === "serve") {
   const { serve } = await import("./server/serve.js");
   await serve();

@@ -31,7 +31,7 @@ import { createApp } from "./app.js";
 const SYNC_CHECK_MS = 60_000;
 
 /** Racine du paquet : le premier dossier qui contient un package.json, en remontant depuis ce module. */
-function packageRoot(): string {
+export function packageRoot(): string {
   let current = path.dirname(fileURLToPath(import.meta.url));
   while (!fs.existsSync(path.join(current, "package.json"))) {
     const parent = path.dirname(current);

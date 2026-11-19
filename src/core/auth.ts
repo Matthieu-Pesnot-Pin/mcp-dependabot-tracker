@@ -83,6 +83,11 @@ export function createAuth(dataDir: string, env: AuthEnv) {
 
 export type Auth = ReturnType<typeof createAuth>;
 
+/** Ferme la base SQLite d'une instance. */
+export function closeAuth(auth: Auth): void {
+  (auth.options.database as InstanceType<typeof Database>).close();
+}
+
 /** Crée ou complète les tables de Better Auth. */
 export async function migrateAuth(auth: Auth): Promise<void> {
   const { runMigrations } = await getMigrations(auth.options);

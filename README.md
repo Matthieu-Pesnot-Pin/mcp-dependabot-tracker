@@ -23,6 +23,28 @@ L'agent fait ce que fait l'utilisateur pour les corrections : il liste les dép�
 
 ## Installation
 
+### Installation sur un serveur Linux : `setup`
+
+Sur une machine Linux avec systemd (Debian, Ubuntu), une seule commande, en root, installe tout le serveur :
+
+```bash
+sudo mcp-dependabot-tracker setup
+```
+
+Elle pose ses questions, en proposant les valeurs du `.env` existant : adresse publique (`https://…`), port d'écoute sur `127.0.0.1` (4700), compte système du service (`dependabot-tracker`), répertoire des données (`<dossier du compte>/data`), nginx et certificat, premier compte de l'interface (mot de passe saisi sans écho). Elle récapitule, demande confirmation, puis :
+
+1. installe les paquets manquants : `git`, `podman`, `uidmap`, `passt`, `slirp4netns`, `catatonit`, `bubblewrap`, `socat`, plus `nginx`, `certbot` et `python3-certbot-nginx` s'ils sont demandés ;
+2. crée le compte système du service, lui attribue une plage de sous-identifiants libre (la suite de toutes celles de `/etc/subuid` et `/etc/subgid`) et active son lingering (`/run/user/<uid>`) ;
+3. écrit le `.env` de la racine du paquet (`DATA_DIR`, `APP_URL`, `APP_PORT`, `TRUSTED_PROXIES`, et `VAULT_KEY` et `AUTH_SECRET`, générés au premier passage puis conservés), lisible par root et le groupe du service seulement ; les autres lignes du fichier sont gardées ;
+4. crée le premier compte de l'interface ;
+5. prépare Podman rootless sous le compte du service (`podman system migrate`) et vérifie qu'il est bien rootless ;
+6. écrit l'unité `/etc/systemd/system/dependabot-tracker.service`, l'active et (re)démarre le service, puis attend que le serveur réponde ;
+7. avec nginx, écrit et active le site `/etc/nginx/sites-available/dependabot-tracker` (proxy vers `127.0.0.1:<port>`), recharge nginx, puis obtient le certificat avec certbot (`--redirect`). Un site nginx déjà activé qui sert la même adresse est gardé tel quel.
+
+L'unité garde le durcissement compatible avec Podman rootless et le bac à sable de Claude Code : `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp`, l'écriture limitée au dossier du compte, aux données et à `/run/user/<uid>`, mais ni `NoNewPrivileges` (`newuidmap` et `newgidmap` sont setuid), ni `RestrictSUIDSGID` (la copie d'une image aux identifiants décalés de `--userns=keep-id` remet les bits setuid et setgid de ses fichiers), ni `RestrictNamespaces`, `PrivateUsers` ou `SystemCallFilter` (bubblewrap).
+
+Relancée, la commande reprend la configuration en place : clés, compte de service, plage de sous-identifiants et comptes existants sont gardés, l'unité est réécrite. Sans terminal, ou avec `--non-interactive`, rien n'est demandé : chaque réponse vient d'une option (`--app-url`, `--port`, `--service-user`, `--data-dir`, `--nginx=oui|non`, `--certbot=oui|non`, `--admin-email`, `--admin-name`), sinon du `.env` ou du défaut, et le mot de passe de `SETUP_ADMIN_PASSWORD`. `setup --help` les liste. Il reste ensuite à saisir dans l'interface le token GitHub du tracker, puis le token Claude.
+
 ### Le serveur
 
 ```bash
@@ -41,7 +63,7 @@ sudo loginctl enable-linger "$(whoami)"
 podman info --format '{{.Host.Security.Rootless}}'
 ```
 
-La deuxième commande doit afficher une plage pour le compte dans `/etc/subuid` et dans `/etc/subgid` ; sinon, ajoutez-en une (`sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$(whoami)"`), puis lancez `podman system migrate`. La dernière doit afficher `true`. Un service systemd lancé sous ce compte déclare aussi le dossier d'exécution de l'utilisateur, que Podman rootless attend : `Environment=XDG_RUNTIME_DIR=/run/user/<uid du compte>`.
+La deuxième commande doit afficher une plage pour le compte dans `/etc/subuid` et dans `/etc/subgid` ; sinon, ajoutez-en une (`sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$(whoami)"`), puis lancez `podman system migrate`. La dernière doit afficher `true`. Un service systemd lancé sous ce compte déclare aussi le dossier d'exécution de l'utilisateur, que Podman rootless attend : `Environment=XDG_RUNTIME_DIR=/run/user/<uid du compte>`, le laisse en écriture (`ReadWritePaths=/run/user/<uid du compte>` avec `ProtectSystem=strict`), et ne pose ni `NoNewPrivileges` ni `RestrictSUIDSGID` (voir l'unité écrite par `setup`, ci-dessus).
 
 Le serveur exige une clé de coffre, `VAULT_KEY`, qui chiffre les clés privées SSH des serveurs de déploiement et les tokens de l'organizer et de Claude. Générez-la une fois et déclarez-la comme variable secrète du service :
 

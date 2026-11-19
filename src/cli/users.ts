@@ -1,9 +1,9 @@
-import readline from "readline";
 import QRCode from "qrcode";
 
 import { addUser, createAuth, currentTotpCode, disableTotp, enableTotp, listUsers, migrateAuth, prepareTotp, removeUser, setUserPassword, type Auth } from "../core/auth.js";
 import { resolveDataDir } from "../core/data-dir.js";
 import { readAuthEnv } from "../core/server-config.js";
+import { promptHidden, promptLine } from "./prompt.js";
 
 export const USERS_USAGE = [
   "  mcp-dependabot-tracker user add <email> [--name=<nom>]               crée un compte (mot de passe demandé)",
@@ -12,34 +12,6 @@ export const USERS_USAGE = [
   "  mcp-dependabot-tracker user remove <email>                           supprime le compte",
   "  mcp-dependabot-tracker user list                                     liste les comptes",
 ].join("\n");
-
-/** Lit une ligne sur le terminal sans l'afficher. */
-function promptHidden(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-    const output = rl as unknown as { _writeToOutput: (text: string) => void; output: NodeJS.WriteStream };
-    let muted = false;
-    output._writeToOutput = (text: string) => {
-      if (!muted || text.includes("\n")) output.output.write(muted ? "\n" : text);
-    };
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer);
-    });
-    muted = true;
-  });
-}
-
-/** Lit une ligne sur le terminal. */
-function promptLine(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-}
 
 /** Essais du code de l'application avant l'abandon de l'activation. */
 const TOTP_CONFIRMATION_TRIES = 3;
