@@ -28,6 +28,7 @@ import { describeOperation } from "../src/tools/format.js";
 import { assertSandboxAvailable } from "../src/core/sandbox.js";
 import { assertContainersAvailable, imageId, projectDir, removeImage, runArgs, runInContainer } from "../src/core/containers.js";
 import { toolsOf } from "../src/package-tools.js";
+import { packagesServer } from "../src/core/repair.js";
 import { organizerUrl } from "../src/core/organizer.js";
 import { adoptEnvGitHubToken, encryptStoredTokens, readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
 import { tokenExpiration } from "../src/core/github.js";
@@ -1079,6 +1080,24 @@ function toolArgs(name: string, args: Record<string, unknown>, scope: "productio
   if (!found) throw new Error(`Unknown tool: ${name}`);
   return found.tool.args(args, scope);
 }
+
+test("the packages server of Claude gets the system variables of the server, where Podman finds its images, and none of its secrets", () => {
+  const saved = { HOME: process.env.HOME, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, VAULT_KEY: process.env.VAULT_KEY };
+  process.env.HOME = "/var/lib/dependabot-tracker";
+  process.env.XDG_RUNTIME_DIR = "/run/user/984";
+  process.env.VAULT_KEY = "secret";
+  try {
+    const server = packagesServer({ cwd: "/clone/repo", scope: "production", managers: ["npm"], containers: { command: ["podman"] } }, "/clone/cache");
+    assert.equal(server.env.HOME, "/var/lib/dependabot-tracker");
+    assert.equal(server.env.XDG_RUNTIME_DIR, "/run/user/984");
+    assert.equal(server.env.VAULT_KEY, undefined);
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
 
 test("the npm tools of Claude run fixed npm commands, with names only as arguments", () => {
   assert.deepEqual(toolArgs("npm_install_lockfile", { project: "", packages: ["mermaid@12.0.1"] }, "production"), ["install", "--package-lock-only", "--ignore-scripts", "mermaid@12.0.1"]);

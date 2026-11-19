@@ -5,6 +5,7 @@ import { z } from "zod";
 import { RepairReportSchema, TEST_OUTCOMES, type AuditScope, type ManagerId, type Operation, type OrganizerTask, type RepairReport, type SessionEvent } from "../../shared/schemas/model.schema.js";
 import type { Settings } from "../../shared/schemas/settings.schema.js";
 import { runClaudeSession, type ClaudeRuntime } from "./claude.js";
+import { inheritedEnv } from "./commands.js";
 import { TrackerError } from "./errors.js";
 import { CACHE_DIR, type ContainerRuntime } from "./containers.js";
 import { managerOf } from "./managers/index.js";
@@ -63,12 +64,19 @@ export function organizerServer(connection: OrganizerConnection) {
   return { ...launch, env: { ORGANIZER_URL: connection.url, ORGANIZER_TOKEN: connection.token } };
 }
 
-/** Lancement du serveur `package-tools` du tracker sur le clone et le cache de l'opération, avec les outils de ses gestionnaires. */
-function packagesServer(input: RepairInput, cache: string) {
+/**
+ * Lancement du serveur `package-tools` du tracker sur le clone et le cache de
+ * l'opération, avec les outils de ses gestionnaires. Il reçoit les variables
+ * système du serveur (`HOME`, `XDG_RUNTIME_DIR`…), qui remplacent celles de
+ * Claude Code : Podman rootless y trouve le stockage et le dossier
+ * d'exécution du compte du serveur, où sont ses images.
+ */
+export function packagesServer(input: Pick<RepairInput, "cwd" | "scope" | "managers" | "containers">, cache: string) {
   const entry = fileURLToPath(new URL("../package-tools.js", import.meta.url));
   return {
     command: process.execPath,
     args: [entry, "--root", input.cwd, "--cache", cache, "--scope", input.scope, "--managers", input.managers.join(","), "--runtime", JSON.stringify(input.containers.command)],
+    env: Object.fromEntries(Object.entries(inheritedEnv()).filter((entry): entry is [string, string] => entry[1] !== undefined)),
   };
 }
 

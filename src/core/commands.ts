@@ -81,7 +81,7 @@ const PASSED_ENV = [
 ];
 
 /** Environnement du serveur transmis aux commandes : les seules variables de `PASSED_ENV`. */
-function inheritedEnv(): NodeJS.ProcessEnv {
+export function inheritedEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const name of PASSED_ENV) {
     if (process.env[name] !== undefined) env[name] = process.env[name];

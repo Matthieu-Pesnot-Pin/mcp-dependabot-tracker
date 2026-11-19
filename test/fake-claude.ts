@@ -79,10 +79,11 @@ async function main() {
   await repair(organizer, servers.packages);
 }
 
-/** Appelle un outil d'un serveur MCP stdio de la configuration et rend le texte de sa réponse. */
-async function callMcpTool(server: { command: string; args: string[] }, name: string, args: Record<string, unknown>): Promise<string> {
+/** Appelle un outil d'un serveur MCP stdio de la configuration, lancé comme Claude Code (son environnement complété par `env`), et rend le texte de sa réponse. */
+async function callMcpTool(server: { command: string; args: string[]; env?: Record<string, string> }, name: string, args: Record<string, unknown>): Promise<string> {
   const client = new Client({ name: "fake-claude", version: "0.0.0" });
-  await client.connect(new StdioClientTransport({ command: server.command, args: server.args }));
+  const env = Object.fromEntries(Object.entries({ ...process.env, ...server.env }).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  await client.connect(new StdioClientTransport({ command: server.command, args: server.args, env }));
   try {
     const result: any = await client.callTool({ name, arguments: args });
     return result.content.map((block: { text: string }) => block.text).join("\n");
@@ -99,7 +100,7 @@ interface FakeOrganizerTarget {
   tag: string;
 }
 
-async function repair(organizer: FakeOrganizerTarget | null, npm: { command: string; args: string[] }) {
+async function repair(organizer: FakeOrganizerTarget | null, npm: { command: string; args: string[]; env?: Record<string, string> }) {
   emit({ type: "assistant", message: { id: "m-1", content: [{ type: "tool_use", name: "Read", input: { file_path: path.join(process.cwd(), "package.json") } }] } });
   emit({ type: "assistant", message: { id: "m-2", content: [{ type: "text", text: "nth-check sert à css-select ; je le monte en v3." }] } });
   if (token !== "idle") {
