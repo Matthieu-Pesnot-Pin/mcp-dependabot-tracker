@@ -165,7 +165,7 @@ test("a fix from the GUI runs to the pull request without any decision; without 
     assert.equal(done.status, "done", done.error ?? "");
     assert.deepEqual([done.counts.initial, done.counts.afterFix], [4, 2]);
     assert.deepEqual(done.steps, { clone: "done", audit: "done", fix: "done", repair: "failed", push: "done" });
-    assert.match(done.repair?.error ?? "", /need the organizer connection and the Claude token/);
+    assert.match(done.repair?.error ?? "", /The fixes by Claude need the Claude token: set it in the settings/);
     assert.equal(done.workDir, null);
 
     const branch = done.branch!;
@@ -270,6 +270,33 @@ test("Claude analyses and fixes in one session, reports in one organizer task, a
     task.status = "done";
     await refreshReportTask(ctx.store, settings, repoId);
     assert.equal(repoView(ctx.store, ctx.store.getRepo(repoId)).reportTask, null);
+  } finally {
+    settings = DEFAULT_SETTINGS;
+  }
+});
+
+test("without the organizer, Claude still fixes, and its detailed report goes into the pull request", { skip }, async () => {
+  settings = { ...claudeSettings("good-token"), organizer: DEFAULT_SETTINGS.organizer };
+  try {
+    const tasksBefore = organizer.tasks.length;
+    const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
+    const done = await settled(startFix(ctx, repoId, "user", USER_FIX));
+    assert.equal(done.status, "done", done.error ?? "");
+    assert.deepEqual([done.steps.repair, done.steps.push], ["done", "done"]);
+    assert.equal(done.repair?.task, null);
+    assert.match(done.repair?.report?.details ?? "", /nth-check est atteignable/);
+    assert.equal(organizer.tasks.length, tasksBefore, "no organizer task is created");
+
+    const call = claudeCalls().at(-1)!;
+    const option = (name: string) => call.args[call.args.indexOf(name) + 1];
+    assert.ok(!option("--allowedTools").includes("mcp__organizer__"), "Claude gets no organizer tool");
+    assert.deepEqual(JSON.parse(option("--json-schema")).required, ["details", "summary", "changes", "commitMessage", "tests"]);
+    assert.match(call.args[call.args.indexOf("-p") + 1], /in the details field of the structured report; it goes into the pull request/);
+
+    assert.deepEqual(pushedSubjects(repoId, done.branch!), ["fix(deps): apply the fixes by Claude", "fix(deps): resolve vulnerable dependencies", "initial"]);
+    const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
+    assert.match(pull.body, /Fixes by Claude Code:\n\nnth-check monté en v3\.\n\n<details>\n<summary>Rapport de Claude<\/summary>\n\n## Analyse/);
+    assert.doesNotMatch(pull.body, /organizer task/);
   } finally {
     settings = DEFAULT_SETTINGS;
   }
@@ -411,6 +438,10 @@ test("a Composer project is audited and fixed in an image built for its PHP vers
   const builds = podmanCalls(podmanLog()).filter((call) => call.subcommand === "build");
   const build = builds.at(-1)!;
   assert.ok(build.args.includes("localhost/mcp-dependabot-tracker/composer:php8.2"), "the image follows require.php: ^8.2");
+  const file = build.args[build.args.indexOf("--file") + 1];
+  assert.equal(path.basename(file), "Containerfile");
+  assert.equal(build.args.at(-1), path.dirname(file), "the context of the build holds the Containerfile only, not the clones");
+  assert.ok(!fs.existsSync(path.dirname(file)), "the context of the build is deleted afterwards");
   assert.match(build.containerfile ?? "", /^FROM docker\.io\/library\/php:8\.2-cli\nCOPY --from=docker\.io\/composer\/composer:2-bin \/composer \/usr\/bin\/composer\n/);
   const update = podmanCalls(podmanLog()).find((call) => call.subcommand === "run" && call.command?.[0] === "composer" && call.command[1] === "update" && call.workdir === "/work/api")!;
   assert.deepEqual(update.command?.slice(2, 4), ["guzzlehttp/psr7", "phpmailer/phpmailer"]);

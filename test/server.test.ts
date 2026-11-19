@@ -466,7 +466,7 @@ test("the GUI runs a fix to the pull request without any decision, and the PR ta
   const done = await waitFor("done", read, (op) => op.status === "done" || op.status === "failed");
   assert.equal(done.status, "done", done.error);
   assert.equal(done.steps.repair, "failed", "Claude is not configured on this server");
-  assert.match(done.repair.error, /need the organizer connection and the Claude token/);
+  assert.match(done.repair.error, /The fixes by Claude need the Claude token: set it in the settings/);
   const pull = github.pulls.at(-1)!;
   assert.equal(pull.title, "fix(deps): resolve vulnerable dependencies");
   assert.match(pull.body, /^> \[!WARNING\]\n> Claude Code could not fix the remaining vulnerabilities/);

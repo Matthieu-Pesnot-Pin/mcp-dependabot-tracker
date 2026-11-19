@@ -255,7 +255,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
         </button>
       </div>
 
-      <p className="section-label">Organizer — où Claude dépose son rapport</p>
+      <p className="section-label">Organizer — où Claude dépose son rapport (facultatif)</p>
       <div className="panel settings-card">
         <div className="settings-fields">
           <label className="settings-field">
@@ -276,7 +276,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
               </span>
             </>
           ) : (
-            <span className="muted">Indiquez l'adresse du site et un token d'agent, créé dans l'organizer (Paramètres › Agents).</span>
+            <span className="muted">Sans organizer, le rapport de Claude est dans la pull request. Pour le recevoir aussi dans une tâche, indiquez l'adresse du site et un token d'agent, créé dans l'organizer (Paramètres › Agents).</span>
           )}
           <span className="spacer" />
           {view.organizer.tokenHint !== null && (

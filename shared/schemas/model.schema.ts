@@ -192,10 +192,12 @@ export const TEST_OUTCOMES = ["passed", "failed", "not_run"] as const;
 
 /**
  * Rapport rendu par Claude à la fin de ses corrections : résumé, changement de
- * chaque fichier, message du commit et résultat des tests.
+ * chaque fichier, message du commit, résultat des tests et, sans organizer, son
+ * rapport détaillé en markdown, repris dans la pull request.
  */
 export const RepairReportSchema = z.object({
   summary: z.string(),
+  details: z.string().optional(),
   changes: z.array(z.object({ file: z.string(), change: z.string() })),
   commitMessage: z.string(),
   tests: z.object({ outcome: z.enum(TEST_OUTCOMES), detail: z.string() }),
