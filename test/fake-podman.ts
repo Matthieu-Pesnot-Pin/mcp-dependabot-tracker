@@ -12,8 +12,8 @@ import path from "node:path";
  *            du conteneur des variables et des arguments sont traduits en
  *            chemins de l'hôte, et `/tmp` devient un dossier temporaire vide ;
  *   `info`   se dit rootless ;
- *   `pull`, `rm` et `build` réussissent sans rien faire (`build` lit son
- *            Containerfile sur l'entrée standard et le note).
+ *   `pull`, `rm` et `build` réussissent sans rien faire (`build` note le
+ *            contenu du Containerfile que désigne `--file`).
  */
 
 const [logFile, subcommand, ...args] = process.argv.slice(2);
@@ -23,12 +23,6 @@ const VALUE_OPTIONS = new Set(["--name", "--tmpfs", "--volume", "--workdir", "--
 
 function record(entry: Record<string, unknown>): void {
   fs.appendFileSync(logFile, JSON.stringify(entry) + "\n");
-}
-
-async function readStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString("utf-8");
 }
 
 /** Argument passé à un shell Windows : entre guillemets s'il contient autre chose que des caractères sûrs. */
@@ -95,7 +89,7 @@ async function main(): Promise<number> {
       process.stdout.write("true\n");
       return 0;
     case "build":
-      record({ subcommand, args, containerfile: await readStdin() });
+      record({ subcommand, args, containerfile: fs.readFileSync(args[args.indexOf("--file") + 1], "utf-8") });
       return 0;
     default:
       record({ subcommand, args });

@@ -316,7 +316,7 @@ async function prepareImages(runner: Runner, projects: Project[]): Promise<void>
       await pullImage(runner.containers, image.name, runner.cloneDir, runner.signal);
     } else {
       runner.log(`$ podman build --tag ${image.name}`);
-      await buildImage(runner.containers, image.name, image.containerfile, runner.cloneDir, runner.signal);
+      await buildImage(runner.containers, image.name, image.containerfile, runner.signal);
     }
   }
 }
@@ -462,7 +462,7 @@ async function repairStep(runner: Runner, ctx: OperationContext): Promise<void> 
       },
     });
     const commit = await commitRepair(runner, base, report.commitMessage);
-    runner.log(`Report of Claude ${task.key}: ${task.url}`);
+    if (task) runner.log(`Report of Claude ${task.key}: ${task.url}`);
     await auditAll(runner, "afterRepair");
     await refreshChanges(runner);
     repaired((current) => ({ ...current, endedAt: now(), commit, report, task }));
@@ -514,6 +514,7 @@ function pullRequestBody(operation: Operation): string {
   if (operation.changes.length > MAX_PR_CHANGES) lines.push(`- … and ${operation.changes.length - MAX_PR_CHANGES} more`);
   if (repair?.report) {
     lines.push("", `Fixes by Claude Code${repair.task ? `, reported in organizer task ${repair.task.key}` : ""}:`, "", repair.report.summary, "");
+    if (repair.report.details) lines.push("<details>", "<summary>Rapport de Claude</summary>", "", repair.report.details, "", "</details>", "");
     for (const change of repair.report.changes) lines.push(`- \`${change.file}\`: ${change.change}`);
     lines.push(`- Tests: ${repair.report.tests.outcome.replace("_", " ")} — ${repair.report.tests.detail}`);
   }

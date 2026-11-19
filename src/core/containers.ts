@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { runCommand, tail, type CommandResult } from "./commands.js";
 import { TrackerError } from "./errors.js";
@@ -105,9 +106,9 @@ export function runArgs(workspace: Workspace, name: string, spec: ContainerComma
   ];
 }
 
-function podman(runtime: ContainerRuntime, args: string[], options: { cwd: string; signal?: AbortSignal; timeoutMs?: number; stdin?: string }): Promise<CommandResult> {
+function podman(runtime: ContainerRuntime, args: string[], options: { cwd: string; signal?: AbortSignal; timeoutMs?: number }): Promise<CommandResult> {
   const [command, ...prefix] = runtime.command;
-  return runCommand(command, [...prefix, ...args], { cwd: options.cwd, signal: options.signal, timeoutMs: options.timeoutMs, stdin: options.stdin });
+  return runCommand(command, [...prefix, ...args], { cwd: options.cwd, signal: options.signal, timeoutMs: options.timeoutMs });
 }
 
 /** Supprime un conteneur, qu'il tourne encore ou non. */
@@ -137,10 +138,24 @@ export async function pullImage(runtime: ContainerRuntime, image: string, cwd: s
   if (result.code !== 0) throw new TrackerError(`podman pull ${image} failed: ${tail(result.stderr) || tail(result.stdout)}`);
 }
 
-/** Construit l'image `tag` à partir du Containerfile `containerfile`, dont les images de base sont mises à jour. */
-export async function buildImage(runtime: ContainerRuntime, tag: string, containerfile: string, cwd: string, signal?: AbortSignal): Promise<void> {
-  const result = await podman(runtime, ["build", "--pull=newer", "--quiet", "--tag", tag, "--file", "-", cwd], { cwd, signal, timeoutMs: IMAGE_TIMEOUT_MS, stdin: containerfile });
-  if (result.code !== 0) throw new TrackerError(`podman build ${tag} failed: ${tail(result.stderr) || tail(result.stdout)}`);
+/**
+ * Construit l'image `tag` à partir du Containerfile `containerfile`, dont les
+ * images de base sont mises à jour. Le Containerfile est écrit dans un dossier
+ * temporaire qui ne contient que lui et sert de contexte à la construction,
+ * supprimé ensuite : le client `podman` de Windows et de macOS transmet le
+ * contexte et le fichier à la machine virtuelle de Podman, pas l'entrée
+ * standard.
+ */
+export async function buildImage(runtime: ContainerRuntime, tag: string, containerfile: string, signal?: AbortSignal): Promise<void> {
+  const context = fs.mkdtempSync(path.join(os.tmpdir(), "dependabot-tracker-build-"));
+  try {
+    const file = path.join(context, "Containerfile");
+    fs.writeFileSync(file, containerfile, "utf-8");
+    const result = await podman(runtime, ["build", "--pull=newer", "--quiet", "--tag", tag, "--file", file, context], { cwd: context, signal, timeoutMs: IMAGE_TIMEOUT_MS });
+    if (result.code !== 0) throw new TrackerError(`podman build ${tag} failed: ${tail(result.stderr) || tail(result.stdout)}`);
+  } finally {
+    fs.rmSync(context, { recursive: true, force: true });
+  }
 }
 
 /**

@@ -107,7 +107,7 @@ test("Composer audits and fixes a project in the image built for its PHP version
     fs.copyFileSync(path.join(VULNERABLE_COMPOSER_FIXTURE, "composer.fixture.lock"), path.join(root, "composer.lock"));
     const ctx: ManagerContext = { runtime: PODMAN, workspace: { root, cache: path.join(temp.dir, "cache") }, scope: "production", log: () => {} };
     const image = composer.image(ctx, "");
-    await buildImage(PODMAN, image.name, image.containerfile!, temp.dir);
+    await buildImage(PODMAN, image.name, image.containerfile!);
     const before = await composer.audit(ctx, "");
     assert.deepEqual(before.vulnerabilities.map((v) => v.name), ["guzzlehttp/psr7", "phpmailer/phpmailer"]);
     await composer.fix(ctx, "", before.vulnerabilities);

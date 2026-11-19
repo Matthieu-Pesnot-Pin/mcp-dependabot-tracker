@@ -12,8 +12,6 @@ export interface CommandOptions {
   env?: Record<string, string>;
   signal?: AbortSignal;
   timeoutMs?: number;
-  /** Texte écrit sur l'entrée standard de la commande, fermée ensuite. */
-  stdin?: string;
 }
 
 /** Commande interrompue par l'annulation de l'opération. */
@@ -106,9 +104,8 @@ export function runCommand(command: string, args: string[], options: CommandOpti
       env: { ...inheritedEnv(), ...options.env },
       detached: process.platform !== "win32",
       windowsHide: true,
-      stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    if (options.stdin !== undefined) child.stdin!.end(options.stdin);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let settled = false;
