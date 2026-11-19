@@ -42,8 +42,7 @@ test("npm runs in a rootless container that writes the clone under the account o
     assert.equal(JSON.parse(audit.stdout).auditReportVersion, 2, audit.stderr);
 
     const before = fs.readFileSync(path.join(workspace.root, "package-lock.json"), "utf-8");
-    const fix = await runManager(npm, ctx, "", ["audit", "fix", "--package-lock-only", "--ignore-scripts"]);
-    assert.equal(fix.code, 0, fix.stderr);
+    await npm.fix(ctx, "", []);
     const lockfile = path.join(workspace.root, "package-lock.json");
     assert.notEqual(fs.readFileSync(lockfile, "utf-8"), before, "npm audit fix updated the lockfile of the clone");
     assert.equal(fs.statSync(lockfile).uid, process.getuid!(), "the lockfile still belongs to the account of the server");

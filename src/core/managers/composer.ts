@@ -21,11 +21,17 @@ export function composerImage(version: string): ImageSpec {
   };
 }
 
-/** Variables des commandes Composer : dossiers et cache de l'opération, aucune question. */
+/**
+ * Variables des commandes Composer : dossiers et cache de l'opération, aucune
+ * question, et aucun blocage des versions vulnérables à la résolution, pour
+ * qu'une mise à jour ciblée aboutisse quand un autre paquet du lockfile reste
+ * vulnérable.
+ */
 const COMPOSER_ENV = {
   COMPOSER_HOME: `${CACHE_MOUNT}/composer`,
   COMPOSER_CACHE_DIR: `${CACHE_MOUNT}/composer-cache`,
   COMPOSER_NO_INTERACTION: "1",
+  COMPOSER_NO_BLOCKING: "1",
 };
 
 /** Options qui empêchent les scripts et les plugins Composer du projet de s'exécuter. */
