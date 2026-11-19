@@ -132,12 +132,24 @@ test("an agent audit reports the vulnerabilities of every npm project and delete
   const calls = podmanCalls(podmanLog());
   assert.ok(calls.some((call) => call.subcommand === "info"), "the operation checks Podman first");
   assert.ok(calls.some((call) => call.subcommand === "pull" && call.args.includes(NODE_IMAGE)), "the image of npm is updated once per operation");
+
   const audit = calls.find((call) => call.subcommand === "run" && call.command?.join(" ") === "npm audit --omit=dev --json" && call.workdir === "/work/tools")!;
   assert.ok(audit, "npm audit runs in a container, in the folder of the project");
   assert.equal(audit.image, NODE_IMAGE);
   assert.equal(audit.env?.npm_config_cache, "/cache/npm");
   for (const flag of ["--rm", "--pull=never", "--userns=keep-id", "--cap-drop=all", "--security-opt=no-new-privileges", "--read-only"]) assert.ok(audit.args.includes(flag), flag);
   assert.ok(!Object.keys(audit.env ?? {}).some((key) => /TOKEN|SECRET|VAULT/.test(key)), "the container receives no secret");
+});
+
+test("an image updated by an operation replaces its previous version, which is removed", { skip }, async () => {
+  const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
+  await settled(startAudit(ctx, repoId, "agent", "production"));
+  const second = await settled(startAudit(ctx, repoId, "agent", "production"));
+  assert.equal(second.status, "done", second.error ?? "");
+  const pulls = podmanCalls(podmanLog()).filter((call) => call.subcommand === "pull" && call.args.includes(NODE_IMAGE)).length;
+  const previous = `id-${pulls - 1}-${NODE_IMAGE}`;
+  assert.ok(second.log.some((entry) => entry.text === `$ podman rmi ${previous}`), "the previous version of the image is removed");
+  assert.ok(podmanCalls(podmanLog()).some((call) => call.subcommand === "rmi" && call.args[0] === previous));
 });
 
 /** Sujets des commits de la branche poussée, du plus récent au plus ancien. */

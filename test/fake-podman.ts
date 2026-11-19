@@ -12,6 +12,10 @@ import path from "node:path";
  *            du conteneur des variables et des arguments sont traduits en
  *            chemins de l'hôte, et `/tmp` devient un dossier temporaire vide ;
  *   `info`   se dit rootless ;
+ *   `image inspect` rend l'identifiant `id-<n>-<image>`, où `n` compte les
+ *            `pull` et `build` de l'image déjà notés au journal, comme si
+ *            chacun en produisait une nouvelle version ; sans aucun, l'image
+ *            est absente ;
  *   `pull`, `rm` et `build` réussissent sans rien faire (`build` note le
  *            contenu du Containerfile que désigne `--file`).
  */
@@ -88,6 +92,24 @@ async function main(): Promise<number> {
       record({ subcommand, args });
       process.stdout.write("true\n");
       return 0;
+    case "image": {
+      record({ subcommand: `image ${args[0]}`, args });
+      const image = args.at(-1)!;
+      const versions = fs.existsSync(logFile)
+        ? fs
+            .readFileSync(logFile, "utf-8")
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line))
+            .filter((entry) => (entry.subcommand === "pull" || entry.subcommand === "build") && entry.args.includes(image)).length
+        : 0;
+      if (versions === 0) {
+        process.stderr.write(`Error: ${image}: image not known\n`);
+        return 125;
+      }
+      process.stdout.write(`id-${versions}-${image}\n`);
+      return 0;
+    }
     case "build":
       record({ subcommand, args, containerfile: fs.readFileSync(args[args.indexOf("--file") + 1], "utf-8") });
       return 0;

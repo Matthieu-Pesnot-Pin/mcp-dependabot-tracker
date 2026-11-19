@@ -22,7 +22,7 @@ import { CommandAbortedError, runCommand, tail, type CommandResult } from "./com
 import type { GitHubConfig } from "./config.js";
 import { ConflictError, TrackerError } from "./errors.js";
 import { GitHubClient } from "./github.js";
-import { CACHE_DIR, assertContainersAvailable, buildImage, pullImage, type ContainerRuntime, type Workspace } from "./containers.js";
+import { CACHE_DIR, assertContainersAvailable, buildImage, imageId, pullImage, removeImage, type ContainerRuntime, type Workspace } from "./containers.js";
 import { PACKAGE_MANAGERS, detectProjects, diffLockfiles, installedDirs, lockfilePath, managerOf } from "./managers/index.js";
 import { projectLabel, type Lockfile, type ManagerContext } from "./managers/types.js";
 import { repairVulnerabilities } from "./repair.js";
@@ -304,13 +304,19 @@ async function cloneStep(runner: Runner): Promise<void> {
   runner.setStep("clone", "done");
 }
 
-/** Met à jour, ou construit, une fois chacune, les images des conteneurs des projets. */
+/**
+ * Met à jour, ou construit, une fois chacune, les images des conteneurs des
+ * projets, puis supprime la version précédente d'une image qui a changé. Une
+ * version précédente que Podman refuse de supprimer (encore utilisée par un
+ * conteneur) est laissée, et le refus noté au journal.
+ */
 async function prepareImages(runner: Runner, projects: Project[]): Promise<void> {
   const ready = new Set<string>();
   for (const project of projects) {
     const image = managerOf(project.manager).image(runner.managers, project.path);
     if (ready.has(image.name)) continue;
     ready.add(image.name);
+    const previous = await imageId(runner.containers, image.name, runner.cloneDir);
     if (image.containerfile === undefined) {
       runner.log(`$ podman pull ${image.name}`);
       await pullImage(runner.containers, image.name, runner.cloneDir, runner.signal);
@@ -318,6 +324,10 @@ async function prepareImages(runner: Runner, projects: Project[]): Promise<void>
       runner.log(`$ podman build --tag ${image.name}`);
       await buildImage(runner.containers, image.name, image.containerfile, runner.signal);
     }
+    if (previous === null || previous === (await imageId(runner.containers, image.name, runner.cloneDir))) continue;
+    runner.log(`$ podman rmi ${previous}`);
+    const refused = await removeImage(runner.containers, previous, runner.cloneDir);
+    if (refused) runner.log(`The previous version of ${image.name} is kept: ${refused}`);
   }
 }
 

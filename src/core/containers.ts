@@ -138,6 +138,23 @@ export async function pullImage(runtime: ContainerRuntime, image: string, cwd: s
   if (result.code !== 0) throw new TrackerError(`podman pull ${image} failed: ${tail(result.stderr) || tail(result.stdout)}`);
 }
 
+/** Identifiant de l'image locale `tag`, ou null quand Podman ne l'a pas. */
+export async function imageId(runtime: ContainerRuntime, tag: string, cwd: string): Promise<string | null> {
+  const result = await podman(runtime, ["image", "inspect", "--format", "{{.Id}}", tag], { cwd, timeoutMs: 60_000 });
+  const id = result.stdout.trim();
+  return result.code === 0 && id !== "" ? id : null;
+}
+
+/**
+ * Supprime l'image `id`, avec ses images parentes que plus rien ne référence ;
+ * rend null, ou la raison du refus de Podman (image encore utilisée par un
+ * conteneur, par exemple).
+ */
+export async function removeImage(runtime: ContainerRuntime, id: string, cwd: string): Promise<string | null> {
+  const result = await podman(runtime, ["rmi", id], { cwd, timeoutMs: 60_000 });
+  return result.code === 0 ? null : tail(result.stderr) || tail(result.stdout) || `exit code ${result.code}`;
+}
+
 /**
  * Construit l'image `tag` à partir du Containerfile `containerfile`, dont les
  * images de base sont mises à jour. Le Containerfile est écrit dans un dossier

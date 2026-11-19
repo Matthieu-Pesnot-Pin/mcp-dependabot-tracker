@@ -26,7 +26,7 @@ import { readServerConfig } from "../src/core/server-config.js";
 import { resolveCloneDir, resolveDataDir } from "../src/core/data-dir.js";
 import { describeOperation } from "../src/tools/format.js";
 import { assertSandboxAvailable } from "../src/core/sandbox.js";
-import { assertContainersAvailable, projectDir, runArgs, runInContainer } from "../src/core/containers.js";
+import { assertContainersAvailable, imageId, projectDir, removeImage, runArgs, runInContainer } from "../src/core/containers.js";
 import { toolsOf } from "../src/package-tools.js";
 import { organizerUrl } from "../src/core/organizer.js";
 import { adoptEnvGitHubToken, encryptStoredTokens, readSettings, saveSettings, type SettingsChecks } from "../src/core/settings.js";
@@ -1153,6 +1153,28 @@ test("Podman must be installed and rootless", async () => {
     const rootless = path.join(temp.dir, "rootless.js");
     fs.writeFileSync(rootless, "process.stdout.write('true\\n');");
     await assertContainersAvailable({ command: [process.execPath, rootless] }, temp.dir);
+  } finally {
+    temp.cleanup();
+  }
+});
+
+test("the id of a missing image is null, and a refused removal gives Podman's reason", async () => {
+  const temp = makeTempDir("podman-images-");
+  try {
+    const script = path.join(temp.dir, "podman.js");
+    fs.writeFileSync(
+      script,
+      [
+        "const [sub, ...args] = process.argv.slice(2);",
+        "if (sub === 'image') { if (args.at(-1) === 'known') { console.log('sha-1'); } else { console.error('image not known'); process.exit(125); } }",
+        "if (sub === 'rmi') { if (args[0] === 'busy') { console.error('Error: image used by 1 container'); process.exit(2); } }",
+      ].join("\n")
+    );
+    const runtime = { command: [process.execPath, script] };
+    assert.equal(await imageId(runtime, "known", temp.dir), "sha-1");
+    assert.equal(await imageId(runtime, "missing", temp.dir), null);
+    assert.equal(await removeImage(runtime, "old", temp.dir), null);
+    assert.match((await removeImage(runtime, "busy", temp.dir)) ?? "", /image used by 1 container/);
   } finally {
     temp.cleanup();
   }
