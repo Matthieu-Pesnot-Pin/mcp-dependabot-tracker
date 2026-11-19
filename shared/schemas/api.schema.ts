@@ -18,6 +18,11 @@ export const SetCategoryBodySchema = z.object({ categoryId: z.string().min(1).nu
 
 export type SetCategoryBody = z.infer<typeof SetCategoryBodySchema>;
 
+/** Tags du dépôt, qui remplacent les précédents. */
+export const SetTagsBodySchema = z.object({ tags: z.array(z.string().trim().min(1).max(30)).max(20) });
+
+export type SetTagsBody = z.infer<typeof SetTagsBodySchema>;
+
 /** Corps de `POST /api/categories` et de `PUT /api/categories/:id`. */
 export const CategoryBodySchema = z.object({ name: z.string().trim().min(1).max(60) });
 
@@ -38,10 +43,11 @@ export const ScopeBodySchema = z.object({ scope: z.enum(AUDIT_SCOPES) });
 
 export type ScopeBody = z.infer<typeof ScopeBodySchema>;
 
-/** Dépôts visés par « Auditer tout » : tous les dépôts suivis, ceux d'une catégorie, ou ceux de la file d'attente. */
+/** Dépôts visés par « Auditer tout » : tous les dépôts suivis, ceux d'une catégorie, ceux d'un tag, ou ceux de la file d'attente. */
 export const AuditTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("all") }),
   z.object({ kind: z.literal("category"), categoryId: z.string().min(1) }),
+  z.object({ kind: z.literal("tag"), tag: z.string().min(1) }),
   z.object({ kind: z.literal("queue") }),
 ]);
 

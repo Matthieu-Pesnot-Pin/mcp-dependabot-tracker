@@ -76,6 +76,7 @@ export const api = {
   markAlertHandled: (repoId: string, number: number) => send<RepoView>('PUT', `${repoPath(repoId)}/alerts/${number}/handled`),
   unmarkAlertHandled: (repoId: string, number: number) => send<RepoView>('DELETE', `${repoPath(repoId)}/alerts/${number}/handled`),
   setCategory: (repoId: string, categoryId: string | null) => send<RepoView>('PUT', `${repoPath(repoId)}/category`, { categoryId }),
+  setTags: (repoId: string, tags: string[]) => send<RepoView>('PUT', `${repoPath(repoId)}/tags`, { tags }),
   listCategories: () => request<CategoriesResponse>('categories'),
   createCategory: (name: string) => send<Category>('POST', 'categories', { name }),
   renameCategory: (id: string, name: string) => send<Category>('PUT', categoryPath(id), { name }),

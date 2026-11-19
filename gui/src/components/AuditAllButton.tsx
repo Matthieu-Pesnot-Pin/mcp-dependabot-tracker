@@ -16,12 +16,13 @@ const IDLE_POLL_MS = 5000
 const TARGET_LABELS: Record<AuditTarget['kind'], string> = {
   all: 'Auditer tout',
   category: 'Auditer la catégorie',
+  tag: 'Auditer le tag',
   queue: 'Auditer la file',
 }
 
 /**
  * Audite la branche analysée des dépôts suivis de `target` (tous, une
- * catégorie ou la file d'attente), sur le périmètre choisi au lancement, avec
+ * catégorie, un tag ou la file d'attente), sur le périmètre choisi au lancement, avec
  * la progression sur le bouton ; à la fin d'une série suivie ici, un message
  * dit combien de dépôts ont été audités, laissés de côté ou en échec.
  */

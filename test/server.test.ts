@@ -301,6 +301,22 @@ test("the GUI files repositories in categories, which the agent can list", async
   assert.equal((await call("DELETE", `categories/${created.json.id}`)).status, 200);
 });
 
+test("the GUI tags repositories, reusing the spelling of an existing tag", async () => {
+  const tagged = await call("PUT", "repos/octo/demo/tags", { tags: ["web", " prod ", "WEB"] });
+  assert.equal(tagged.status, 200, tagged.json.error);
+  assert.deepEqual(tagged.json.repo.tags, ["prod", "web"]);
+  assert.equal((await call("PUT", "repos/octo/demo/tags", { tags: [""] })).status, 400);
+  assert.equal((await call("PUT", "repos/octo/missing/tags", { tags: ["web"] })).status, 404);
+
+  assert.equal((await call("POST", "repos", { repository: "octo/extra-1" })).status, 200);
+  const reused = await call("PUT", "repos/octo/extra-1/tags", { tags: ["Web"] });
+  assert.deepEqual(reused.json.repo.tags, ["web"]);
+  assert.match((await client.callTool("list_repositories")).text, /octo\/demo[\s\S]*Tags: prod, web/);
+
+  assert.deepEqual((await call("PUT", "repos/octo/demo/tags", { tags: [] })).json.repo.tags, []);
+  assert.equal((await call("DELETE", "repos/octo/extra-1")).status, 200);
+});
+
 test("the GUI syncs every repository now, with the pull requests the tracker opened", async () => {
   github.repos.get("octo/demo")!.alerts.push({ number: 4, severity: "low", package: "debug", summary: "ReDoS in debug" });
   const pull = { repo: "octo/demo", title: "t", base: "main", body: "", state: "open" as const, createdAt: "2026-10-01T09:00:00.000Z" };

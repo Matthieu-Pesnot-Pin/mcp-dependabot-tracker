@@ -92,6 +92,7 @@ export type Category = z.infer<typeof CategorySchema>;
  * Dépôt suivi. `id` est le nom complet GitHub, `propriétaire/nom` ; `branch` est
  * la branche que les opérations clonent et vers laquelle la pull request est ouverte ;
  * `categoryId` est sa catégorie, null s'il n'est rangé dans aucune ;
+ * `tags` ses tags, dans l'ordre alphabétique, sans doublon à la casse près ;
  * `handledAlerts` les alertes qu'il a marquées corrigées à la main ;
  * `pullRequests` les pull requests du tracker encore ouvertes à la dernière lecture ;
  * `deprecatedAt` la date à laquelle il a été marqué déprécié, null sinon : un
@@ -108,6 +109,7 @@ export const RepoSchema = z.object({
   defaultBranch: z.string(),
   branch: z.string(),
   categoryId: z.string().nullable(),
+  tags: z.array(z.string()),
   addedAt: z.string(),
   alerts: z.array(AlertSchema),
   handledAlerts: z.array(HandledAlertSchema),

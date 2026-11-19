@@ -46,7 +46,7 @@ function alert(number: number, severity: Alert["severity"], pkg: string, scope: 
 
 function repo(id: string, alerts: Alert[] = [], syncedAt: string | null = null): Repo {
   const [owner, name] = id.split("/");
-  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, addedAt: "2026-01-01T00:00:00.000Z", alerts, handledAlerts: [], pullRequests: [], syncedAt, syncError: null, deprecatedAt: null, queuedAt: null, deployPendingAt: null, deployServerId: null, deployScript: "" };
+  return { id, owner, name, defaultBranch: "main", branch: "main", categoryId: null, tags: [], addedAt: "2026-01-01T00:00:00.000Z", alerts, handledAlerts: [], pullRequests: [], syncedAt, syncError: null, deprecatedAt: null, queuedAt: null, deployPendingAt: null, deployServerId: null, deployScript: "" };
 }
 
 function operation(overrides: Partial<Operation> = {}): Operation {

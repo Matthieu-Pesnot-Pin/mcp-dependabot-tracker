@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as Reac
 import { CategorySidebar } from '../components/CategorySidebar'
 import { Icon } from '../components/Icon'
 import { MergedActions } from '../components/MergedActions'
+import { RepoTags } from '../components/RepoTags'
 import { SeverityPill } from '../components/Pill'
 import { Toggle } from '../components/Toggle'
 import { usePolling } from '../hooks/usePolling'
@@ -13,6 +14,7 @@ import { showError } from '../store/useNotice'
 import { api } from '../utils/api'
 import { dayAndTime, plural, SCOPE_LABELS, shortDayAndTime, worstSeverity } from '../utils/format'
 import { hrefs, navigate, rememberHomeTab, type HomeTab } from '../utils/router'
+import { countTags, type TagCount } from '../utils/tags'
 
 const POLL_MS = 3000
 
@@ -251,12 +253,29 @@ function RepoTableHead() {
 
 /**
  * Ligne d'un dépôt de l'accueil : le nom, suivi au survol du lien vers sa page
- * GitHub sous `githubServerUrl` (en permanence sur un écran tactile), puis les
+ * GitHub sous `githubServerUrl` (en permanence sur un écran tactile) et de ses
+ * tags, `currentTag` mis en avant, puis les
  * colonnes « Sécurité », « Dernier audit » et « Suivi », de largeur fixe, puis
  * les boutons et le chevron. Avec `hoverActions`, les boutons n'apparaissent
  * qu'au survol de la ligne, ou en permanence sur un écran tactile.
  */
-function RepoRow({ view, githubServerUrl, actions, hoverActions }: { view: RepoView; githubServerUrl: string | null; actions: ReactNode; hoverActions: boolean }) {
+function RepoRow({
+  view,
+  githubServerUrl,
+  actions,
+  hoverActions,
+  knownTags,
+  currentTag,
+  onChanged,
+}: {
+  view: RepoView
+  githubServerUrl: string | null
+  actions: ReactNode
+  hoverActions: boolean
+  knownTags: TagCount[]
+  currentTag: string | null
+  onChanged: () => void
+}) {
   return (
     <div className="row row-linked repo-row">
       <div className="repo-name-cell">
@@ -275,6 +294,7 @@ function RepoRow({ view, githubServerUrl, actions, hoverActions }: { view: RepoV
             <Icon name="external-link" size={14} />
           </a>
         )}
+        <RepoTags repoId={view.repo.id} tags={view.repo.tags} known={knownTags} current={currentTag} onChanged={onChanged} />
       </div>
       <div className="repo-cell">
         <SecurityCell view={view} />
@@ -663,7 +683,7 @@ function DeprecatedList({ views, onChanged }: { views: RepoView[]; onChanged: ()
 
 /**
  * Accueil : la barre des catégories, et les dépôts de l'onglet choisi. Une
- * catégorie, ou tous les projets, liste ses dépôts non dépréciés du plus exposé
+ * catégorie, un tag, ou tous les projets, liste ses dépôts non dépréciés du plus exposé
  * au moins exposé ; la file d'attente liste les siens dans l'ordre de leur
  * entrée, chacun avec « Traité » ; « PR en attente » liste les dépôts dont une
  * pull request du tracker attend, de la plus ancienne à la plus récente, chacun
@@ -685,13 +705,18 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
   const showingPulls = tab.kind === 'pulls'
   const showingDeploy = tab.kind === 'deploy'
   const showingDeprecated = tab.kind === 'deprecated'
+  const currentTag = tab.kind === 'tag' ? tab.tag : null
+  const knownTags = countTags(tracked.map((view) => view.repo))
+  const tagName = currentTag === null ? null : (knownTags.find((tag) => tag.name.toLowerCase() === currentTag.toLowerCase())?.name ?? currentTag)
   const inCategory = showingQueue
     ? tracked.filter((view) => view.repo.queuedAt !== null).sort((a, b) => a.repo.queuedAt!.localeCompare(b.repo.queuedAt!))
     : showingPulls
       ? tracked.filter((view) => view.repo.pullRequests.length > 0).sort((a, b) => oldestPullRequest(a).localeCompare(oldestPullRequest(b)))
       : showingDeploy
         ? tracked.filter((view) => view.repo.deployPendingAt !== null).sort((a, b) => a.repo.deployPendingAt!.localeCompare(b.repo.deployPendingAt!))
-        : tracked.filter((view) => categoryId === null || view.repo.categoryId === categoryId)
+        : currentTag !== null
+          ? tracked.filter((view) => view.repo.tags.some((tag) => tag.toLowerCase() === currentTag.toLowerCase()))
+          : tracked.filter((view) => categoryId === null || view.repo.categoryId === categoryId)
   const views = inCategory.filter((view) => !onlyVulnerable || isVulnerable(view))
   const where = showingQueue
     ? "dans la file d'attente"
@@ -699,17 +724,20 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
       ? 'parmi les PR en attente'
       : showingDeploy
         ? 'parmi les dépôts à déployer'
-        : categoryId === null
-          ? 'parmi vos projets'
-          : 'dans cette catégorie'
+        : currentTag !== null
+          ? 'avec ce tag'
+          : categoryId === null
+            ? 'parmi vos projets'
+            : 'dans cette catégorie'
 
   useEffect(() => {
     if (showingDeprecated) rememberHomeTab({ kind: 'deprecated' })
     else if (showingQueue) rememberHomeTab({ kind: 'queue' })
     else if (showingPulls) rememberHomeTab({ kind: 'pulls' })
     else if (showingDeploy) rememberHomeTab({ kind: 'deploy' })
+    else if (currentTag !== null) rememberHomeTab({ kind: 'tag', tag: currentTag })
     else if (!unknownCategory) rememberHomeTab({ kind: 'category', categoryId })
-  }, [showingDeprecated, showingQueue, showingPulls, showingDeploy, categoryId, unknownCategory])
+  }, [showingDeprecated, showingQueue, showingPulls, showingDeploy, currentTag, categoryId, unknownCategory])
 
   if (showingDeprecated) {
     return (
@@ -732,7 +760,14 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
       {repos.data && <CategorySidebar categories={categories} views={tracked} deprecatedCount={deprecated.length} tab={tab} onChanged={repos.reload} />}
       <div className="page">
         <div className="home-head">
-          <h1 className="page-title">{showingQueue ? "File d'attente" : showingPulls ? 'PR en attente' : showingDeploy ? 'À déployer' : category ? category.name : 'Tous mes projets'}</h1>
+          {tagName !== null ? (
+            <h1 className="page-title page-title-tag">
+              <Icon name="tag" size={20} />
+              {tagName}
+            </h1>
+          ) : (
+            <h1 className="page-title">{showingQueue ? "File d'attente" : showingPulls ? 'PR en attente' : showingDeploy ? 'À déployer' : category ? category.name : 'Tous mes projets'}</h1>
+          )}
           <div className="filters">
             {category && inCategory.length > 0 && <QueueCategoryButton categoryId={category.id} views={inCategory} onDone={repos.reload} />}
             <label className="filter">
@@ -767,7 +802,12 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
             <p>Aucun dépôt à déployer : marquez-en un avec le bouton fusée de sa ligne, ou depuis l'écran du dépôt.</p>
           </div>
         )}
-        {repos.data && !showingQueue && !showingPulls && !showingDeploy && !unknownCategory && inCategory.length === 0 && (
+        {repos.data && currentTag !== null && inCategory.length === 0 && (
+          <div className="panel empty">
+            <p>Aucun dépôt ne porte ce tag : ajoutez-le avec le bouton « + » d'une ligne.</p>
+          </div>
+        )}
+        {repos.data && !showingQueue && !showingPulls && !showingDeploy && currentTag === null && !unknownCategory && inCategory.length === 0 && (
           <div className="panel empty">
             <p>{categoryId === null ? 'Aucun dépôt suivi.' : 'Aucun dépôt dans cette catégorie.'}</p>
             <button type="button" className="button button-primary" onClick={onAdd}>
@@ -785,6 +825,9 @@ export function HomeScreen({ tab, adding, onCloseAdd, onAdd }: { tab: HomeTab; a
                 view={view}
                 githubServerUrl={config.data?.githubServerUrl ?? null}
                 hoverActions={!showingQueue && !showingPulls && !showingDeploy}
+                knownTags={knownTags}
+                currentTag={currentTag}
+                onChanged={repos.reload}
                 actions={
                   showingQueue ? (
                     <DoneButton repoId={view.repo.id} onDone={repos.reload} />

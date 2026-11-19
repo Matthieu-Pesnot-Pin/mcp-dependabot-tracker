@@ -17,6 +17,7 @@ import {
   ScopeBodySchema,
   SetBranchBodySchema,
   SetCategoryBodySchema,
+  SetTagsBodySchema,
   type AddableReposResponse,
   type AgentOperationResponse,
   type AgentReposResponse,
@@ -63,6 +64,7 @@ import {
   restoreRepository,
   setBranch,
   setCategory,
+  setTags,
   syncAllRepositories,
   syncRepository,
   unmarkAlertHandled,
@@ -341,6 +343,8 @@ export function createApp(ctx: ServerContext): Hono {
   app.put("/api/repos/:owner/:name/category", (c) =>
     withBody(c, SetCategoryBodySchema, (body) => repoView(store, setCategory(store, repoId(c), body.categoryId)))
   );
+
+  app.put("/api/repos/:owner/:name/tags", (c) => withBody(c, SetTagsBodySchema, (body) => repoView(store, setTags(store, repoId(c), body.tags))));
 
   app.put("/api/repos/:owner/:name/alerts/:number/handled", (c) =>
     respond(c, () => repoView(store, markAlertHandled(store, repoId(c), alertNumber(c))))

@@ -7,6 +7,7 @@ import { alertTotals, plural, pullRequestCount } from '../utils/format'
 import { hrefs, navigate, type HomeTab } from '../utils/router'
 import { Icon, type IconName } from './Icon'
 import { SeverityPill } from './Pill'
+import { countTags } from '../utils/tags'
 
 /** Délai pendant lequel un second clic confirme la suppression d'une catégorie. */
 const CONFIRM_MS = 4000
@@ -239,8 +240,9 @@ function DeprecatedLink({ count, active }: { count: number; active: boolean }) {
 /**
  * Barre latérale de l'accueil : tous les dépôts, la file d'attente, les PR en attente, les dépôts à déployer, puis chaque
  * catégorie, avec le nombre de pull requests en attente et de vulnérabilités de
- * leurs dépôts ; la création se fait en place. L'onglet des dépôts dépréciés
- * vient en dernier. `views` exclut les dépôts dépréciés.
+ * leurs dépôts ; la création se fait en place. La section « Tags » liste les
+ * tags portés par les dépôts, avec les mêmes nombres. L'onglet des dépôts
+ * dépréciés vient en dernier. `views` exclut les dépôts dépréciés.
  */
 export function CategorySidebar({
   categories,
@@ -257,6 +259,8 @@ export function CategorySidebar({
 }) {
   const [creating, setCreating] = useState(false)
   const selected = tab.kind === 'category' ? tab.categoryId : undefined
+  const selectedTag = tab.kind === 'tag' ? tab.tag.toLowerCase() : null
+  const tags = countTags(views.map((view) => view.repo))
 
   async function create(name: string) {
     await api.createCategory(name)
@@ -287,6 +291,21 @@ export function CategorySidebar({
           <Icon name="plus" />
           Nouvelle catégorie
         </button>
+      )}
+      {tags.length > 0 && (
+        <>
+          <div className="side-section">Tags</div>
+          {tags.map((tag) => (
+            <SideLink
+              key={tag.name}
+              href={hrefs.tag(tag.name)}
+              icon="tag"
+              label={tag.name}
+              views={views.filter((view) => view.repo.tags.some((own) => own.toLowerCase() === tag.name.toLowerCase()))}
+              active={selectedTag === tag.name.toLowerCase()}
+            />
+          ))}
+        </>
       )}
       <div className="side-divider" />
       <DeprecatedLink count={deprecatedCount} active={tab.kind === 'deprecated'} />

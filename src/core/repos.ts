@@ -305,6 +305,7 @@ export function markPullRequestsMerged(store: Store, repoId: string, deploy: boo
 export function auditTargetRepos(store: Store, target: AuditTarget): Repo[] {
   if (target.kind === "queue") return queuedRepos(store);
   if (target.kind === "all") return activeRepos(store);
+  if (target.kind === "tag") return activeRepos(store).filter((repo) => repo.tags.some((tag) => tag.toLowerCase() === target.tag.toLowerCase()));
   store.getCategory(target.categoryId);
   return activeRepos(store).filter((repo) => repo.categoryId === target.categoryId);
 }
@@ -335,6 +336,7 @@ export async function addRepository(store: Store, config: GitHubConfig, input: s
     defaultBranch: remote.defaultBranch,
     branch: remote.defaultBranch,
     categoryId,
+    tags: [],
     addedAt: new Date().toISOString(),
     alerts: [],
     handledAlerts: [],
@@ -375,6 +377,27 @@ export async function setBranch(store: Store, config: GitHubConfig, repoId: stri
 /** Range le dépôt dans une catégorie, ou dans aucune avec null. */
 export function setCategory(store: Store, repoId: string, categoryId: string | null): Repo {
   return store.updateRepo(repoId, (repo) => ({ ...repo, categoryId }));
+}
+
+/**
+ * Remplace les tags du dépôt. Chaque nom est épuré de ses espaces de bord ; un
+ * nom déjà porté par un autre dépôt, à la casse près, reprend son écriture ; les
+ * doublons disparaissent et les tags sont rangés dans l'ordre alphabétique.
+ */
+export function setTags(store: Store, repoId: string, tags: string[]): Repo {
+  const known = new Map<string, string>();
+  for (const repo of store.listRepos()) {
+    if (repo.id.toLowerCase() === repoId.toLowerCase()) continue;
+    for (const tag of repo.tags) known.set(tag.toLowerCase(), tag);
+  }
+  const chosen = new Map<string, string>();
+  for (const raw of tags) {
+    const name = raw.trim();
+    const key = name.toLowerCase();
+    if (!chosen.has(key)) chosen.set(key, known.get(key) ?? name);
+  }
+  const sorted = [...chosen.values()].sort((a, b) => a.localeCompare(b, "fr", { sensitivity: "base" }));
+  return store.updateRepo(repoId, (repo) => ({ ...repo, tags: sorted }));
 }
 
 /** Marque une alerte ouverte comme corrigée à la main ; sans effet si elle l'est déjà. */

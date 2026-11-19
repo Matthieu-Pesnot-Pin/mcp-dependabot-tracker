@@ -41,9 +41,10 @@ function SignedInApp() {
   const closeAdd = useCallback(() => setAdding(false), [])
 
   let screen: ReactNode
-  const onHome = route.name === 'home' || route.name === 'queue' || route.name === 'pulls' || route.name === 'deploy' || route.name === 'deprecated'
+  const onHome = route.name === 'home' || route.name === 'tag' || route.name === 'queue' || route.name === 'pulls' || route.name === 'deploy' || route.name === 'deprecated'
   if (onHome) {
-    const tab: HomeTab = route.name === 'home' ? { kind: 'category', categoryId: route.categoryId } : { kind: route.name }
+    const tab: HomeTab =
+      route.name === 'home' ? { kind: 'category', categoryId: route.categoryId } : route.name === 'tag' ? { kind: 'tag', tag: route.tag } : { kind: route.name }
     screen = <HomeScreen tab={tab} adding={adding} onAdd={openAdd} onCloseAdd={closeAdd} />
   } else if (route.name === 'settings') {
     screen = <SettingsScreen />
@@ -73,7 +74,9 @@ function SignedInApp() {
             target={
               route.name === 'queue'
                 ? { kind: 'queue' }
-                : route.name === 'home' && route.categoryId !== null
+                : route.name === 'tag'
+                  ? { kind: 'tag', tag: route.tag }
+                  : route.name === 'home' && route.categoryId !== null
                   ? { kind: 'category', categoryId: route.categoryId }
                   : { kind: 'all' }
             }

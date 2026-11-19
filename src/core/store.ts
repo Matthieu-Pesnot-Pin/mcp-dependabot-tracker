@@ -32,7 +32,7 @@ function writeJsonAtomic(target: string, value: unknown): void {
 /**
  * Complète un fichier écrit par une version antérieure : un dépôt sans branche
  * choisie analyse sa branche par défaut, un dépôt sans catégorie n'est rangé
- * dans aucune, un fichier sans catégories n'en a aucune, un dépôt sans alerte
+ * dans aucune, un dépôt sans tags n'en a aucun, un fichier sans catégories n'en a aucune, un dépôt sans alerte
  * corrigée à la main n'en a aucune, un dépôt sans pull request en attente n'en
  * a aucune jusqu'à sa lecture suivante, un dépôt sans date de dépréciation
  * n'est pas déprécié, un dépôt sans date d'entrée dans la file n'y est pas, un
@@ -50,6 +50,7 @@ function normalizeReposFile(file: any): unknown {
       ...repo,
       branch: typeof repo?.branch === "string" ? repo.branch : repo?.defaultBranch,
       categoryId: repo?.categoryId ?? null,
+      tags: Array.isArray(repo?.tags) ? repo.tags : [],
       handledAlerts: repo?.handledAlerts ?? [],
       pullRequests: repo?.pullRequests ?? [],
       deprecatedAt: repo?.deprecatedAt ?? null,

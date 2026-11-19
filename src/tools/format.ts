@@ -34,6 +34,7 @@ export function describeRepo(view: RepoView): string {
   const lines = [
     `- ${repo.id} (analysed branch ${repo.branch}${repo.branch === repo.defaultBranch ? ", the default one" : `; default branch ${repo.defaultBranch}`})`,
     `  Category: ${category ? category.name : "none"}`,
+    `  Tags: ${repo.tags.length > 0 ? repo.tags.join(", ") : "none"}`,
     `  Open Dependabot alerts: ${alertsLabel(repo)}${repo.syncedAt ? ` · synced ${repo.syncedAt}` : " · not synced yet"}`,
   ];
   if (repo.syncError) lines.push(`  Last sync failed: ${repo.syncError}`);
