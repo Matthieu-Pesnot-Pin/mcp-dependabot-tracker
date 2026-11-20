@@ -1,6 +1,7 @@
 import type { Deployment, DeploymentSummary, DeployServerView, RepoDeployResponse } from '@shared/schemas/deploy.schema'
 import type { Repo } from '@shared/schemas/model.schema'
-import { useEffect, useRef, useState } from 'react'
+import { AnsiUp } from 'ansi_up'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useDismiss } from '../../hooks/useDismiss'
 import { usePolling } from '../../hooks/usePolling'
 import { showError } from '../../store/useNotice'
@@ -268,6 +269,11 @@ function DeploymentDetail({ deployment, onBack }: { deployment: Deployment; onBa
     if (box && running) box.scrollTop = box.scrollHeight
   }, [deployment.output, running])
 
+  const outputHtml = useMemo(() => {
+    const ansi = new AnsiUp()
+    ansi.use_classes = true
+    return ansi.ansi_to_html(deployment.output)
+  }, [deployment.output])
   const lines = lineCount(deployment.script)
   const status = STATUS[deployment.status]
   const title = running
@@ -301,7 +307,7 @@ function DeploymentDetail({ deployment, onBack }: { deployment: Deployment; onBa
       <p className="section-label section-label-strong section-label-spaced">Sortie</p>
       <pre ref={output} className="terminal mono">
         {deployment.outputTruncated && <span className="muted">[début de la sortie coupé]{'\n'}</span>}
-        {deployment.output}
+        <span dangerouslySetInnerHTML={{ __html: outputHtml }} />
         {running && <span className="terminal-cursor" />}
         {!running && !deployment.output && <span className="muted">Aucune sortie.</span>}
       </pre>

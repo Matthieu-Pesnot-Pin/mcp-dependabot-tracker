@@ -2891,6 +2891,40 @@ code {
   word-break: break-word;
 }
 
+/* Couleurs ANSI de la sortie, lisibles sur le fond du terminal. */
+.terminal .ansi-black-fg { color: #5c6370; }
+.terminal .ansi-red-fg { color: #e06c75; }
+.terminal .ansi-green-fg { color: #98c379; }
+.terminal .ansi-yellow-fg { color: #e5c07b; }
+.terminal .ansi-blue-fg { color: #61afef; }
+.terminal .ansi-magenta-fg { color: #c678dd; }
+.terminal .ansi-cyan-fg { color: #56b6c2; }
+.terminal .ansi-white-fg { color: #d7dae0; }
+.terminal .ansi-bright-black-fg { color: #7f848e; }
+.terminal .ansi-bright-red-fg { color: #ff7b85; }
+.terminal .ansi-bright-green-fg { color: #b5e890; }
+.terminal .ansi-bright-yellow-fg { color: #ffd88a; }
+.terminal .ansi-bright-blue-fg { color: #82c4ff; }
+.terminal .ansi-bright-magenta-fg { color: #e0a0ff; }
+.terminal .ansi-bright-cyan-fg { color: #7fdbe6; }
+.terminal .ansi-bright-white-fg { color: #ffffff; }
+.terminal .ansi-black-bg { background: #282c34; }
+.terminal .ansi-red-bg { background: #8b2f37; }
+.terminal .ansi-green-bg { background: #3d6b2a; }
+.terminal .ansi-yellow-bg { background: #7a6020; }
+.terminal .ansi-blue-bg { background: #24527a; }
+.terminal .ansi-magenta-bg { background: #6b3a80; }
+.terminal .ansi-cyan-bg { background: #22646d; }
+.terminal .ansi-white-bg { background: #abb2bf; color: #090b10; }
+.terminal .ansi-bright-black-bg { background: #3e4451; }
+.terminal .ansi-bright-red-bg { background: #b0404a; }
+.terminal .ansi-bright-green-bg { background: #538f3a; }
+.terminal .ansi-bright-yellow-bg { background: #a0802a; }
+.terminal .ansi-bright-blue-bg { background: #2f6ca0; }
+.terminal .ansi-bright-magenta-bg { background: #8a4ca6; }
+.terminal .ansi-bright-cyan-bg { background: #2c8590; }
+.terminal .ansi-bright-white-bg { background: #e6e6e6; color: #090b10; }
+
 .terminal-cursor {
   display: inline-block;
   width: 8px;
