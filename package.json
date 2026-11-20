@@ -1,6 +1,6 @@
 {
   "name": "@imenam/mcp-dependabot-tracker",
-  "version": "1.0.34",
+  "version": "1.0.35",
   "description": "Server and web GUI that track the Dependabot alerts of GitHub repositories and fix their vulnerable dependencies (npm, pnpm, Composer) in a temporary clone: audit, automatic fixes in rootless Podman containers, fixes by Claude, then a branch and a pull request. An MCP mode lets agents drive the server.",
   "main": "dist/src/index.js",
   "scripts": {
