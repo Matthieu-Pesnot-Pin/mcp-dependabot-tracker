@@ -1,5 +1,5 @@
 import { DEFAULT_AUDIT_SCOPE, type AuditScope } from '@shared/schemas/model.schema'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Icon, type IconName } from './Icon'
 
 const SCOPE_OPTIONS: { scope: AuditScope; label: string; detail: string }[] = [
@@ -9,8 +9,8 @@ const SCOPE_OPTIONS: { scope: AuditScope; label: string; detail: string }[] = [
 
 /**
  * Bouton qui lance une action sur un périmètre d'audit : le clic principal la
- * lance sur le périmètre par défaut, la flèche ouvre le choix du périmètre ;
- * Échap ou un clic ailleurs ferme le menu.
+ * lance sur le périmètre par défaut, la flèche ouvre le choix du périmètre,
+ * suivi de `extra` sous un séparateur ; Échap ou un clic ailleurs ferme le menu.
  */
 export function ScopeButton({
   variant,
@@ -18,12 +18,14 @@ export function ScopeButton({
   label,
   disabled = false,
   onLaunch,
+  extra,
 }: {
   variant: 'primary' | 'secondary'
   icon: IconName
   label: string
   disabled?: boolean
   onLaunch: (scope: AuditScope) => void
+  extra?: ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLSpanElement>(null)
@@ -78,6 +80,7 @@ export function ScopeButton({
               {option.scope === DEFAULT_AUDIT_SCOPE && <Icon name="check" size={14} className="picker-check" />}
             </button>
           ))}
+          {extra && <div className="scope-extra">{extra}</div>}
         </div>
       )}
     </span>

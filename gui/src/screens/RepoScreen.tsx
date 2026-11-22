@@ -1,5 +1,6 @@
 import { handledAlerts, pendingAlerts } from '@shared/alerts'
 import type { RepoView } from '@shared/schemas/api.schema'
+import type { DeployBlocker, RepoDeployResponse } from '@shared/schemas/deploy.schema'
 import type { AuditScope } from '@shared/schemas/model.schema'
 import { useEffect, useState } from 'react'
 import { BranchSelector } from '../components/BranchSelector'
@@ -9,6 +10,7 @@ import { Icon } from '../components/Icon'
 import { OperationHistory } from '../components/OperationHistory'
 import { ScopeButton } from '../components/ScopeButton'
 import { SeverityPill } from '../components/Pill'
+import { Toggle } from '../components/Toggle'
 import { usePolling } from '../hooks/usePolling'
 import { showError } from '../store/useNotice'
 import { api } from '../utils/api'
@@ -234,14 +236,68 @@ function DeployButton({ view, onChanged }: { view: RepoView; onChanged: () => vo
   )
 }
 
+/** Ce qui empêche d'activer le workflow automatique, en clair. */
+const DEPLOY_BLOCKER_LABELS: Record<DeployBlocker, string> = {
+  deprecated: 'dépôt déprécié',
+  no_server: 'aucun serveur de déploiement choisi',
+  key_revoked: 'clé du serveur révoquée',
+  untested: 'connexion au serveur à tester',
+  no_script: 'aucun script de déploiement',
+}
+
+/**
+ * Option du menu de « Corriger » qui active le workflow automatique du dépôt :
+ * merge de la pull request une fois ses checks verts, puis déploiement. Tant
+ * que le dépôt ne peut pas être déployé, l'activation est grisée et la raison
+ * remplace le détail ; la désactivation reste toujours possible.
+ */
+function AutoDeployOption({ view, deploy, onChanged }: { view: RepoView; deploy: RepoDeployResponse | null; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const enabled = view.repo.autoDeploy
+  const blocker = deploy?.blocker ?? null
+  const server = deploy?.server?.server.name ?? null
+
+  async function toggle(next: boolean) {
+    setBusy(true)
+    try {
+      await api.setAutoDeploy(view.repo.id, next)
+      onChanged()
+    } catch (err) {
+      showError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="scope-option auto-deploy-option">
+      <Icon name="zap" size={14} className="auto-deploy-icon" />
+      <span className="scope-option-text">
+        <span className="scope-option-label">Merger et déployer ensuite</span>
+        <span className="scope-option-detail">
+          {!enabled && blocker ? `Indisponible : ${DEPLOY_BLOCKER_LABELS[blocker]}` : `checks verts, puis ${server ?? 'le serveur du dépôt'}`}
+        </span>
+      </span>
+      <Toggle
+        checked={enabled}
+        label="Merger et déployer après la correction"
+        disabled={busy || deploy === null || (!enabled && blocker !== null)}
+        onChange={(next) => void toggle(next)}
+      />
+    </div>
+  )
+}
+
 /**
  * Écran d'un dépôt : ses alertes Dependabot ouvertes, son historique et son
  * déploiement en trois onglets, et la correction ; un dépôt déprécié ne se
- * corrige pas.
+ * corrige pas. Avec le workflow automatique, « Corriger et déployer » et une
+ * pastille sous le titre annoncent le merge et le déploiement qui suivent.
  */
 export function RepoScreen({ repoId, tab, deploymentId }: { repoId: string; tab: RepoTab; deploymentId: string | null }) {
   const polled = usePolling(`repo:${repoId}`, () => api.getRepo(repoId), POLL_MS)
   const history = usePolling(`history:${repoId}`, () => api.listOperations(repoId), POLL_MS)
+  const deploy = usePolling(`deploy:${repoId}`, () => api.getRepoDeploy(repoId), POLL_MS)
   const config = usePolling('config', api.getConfig, null)
   const [starting, setStarting] = useState(false)
   const view = polled.data
@@ -305,6 +361,12 @@ export function RepoScreen({ repoId, tab, deploymentId }: { repoId: string; tab:
               'synchronisation…'
             )}
           </div>
+          {repo.autoDeploy && !repo.deprecatedAt && (
+            <p className="auto-deploy-pill">
+              <Icon name="zap" size={12} />
+              Workflow automatique : PR, merge, déploiement sur {deploy.data?.server?.server.name ?? 'le serveur du dépôt'}
+            </p>
+          )}
         </div>
         <div className="page-actions">
           {!repo.deprecatedAt && <DeployButton view={view} onChanged={polled.reload} />}
@@ -326,7 +388,23 @@ export function RepoScreen({ repoId, tab, deploymentId }: { repoId: string; tab:
               Corriger
             </button>
           ) : (
-            <ScopeButton variant="primary" icon="wrench" label="Corriger" disabled={starting} onLaunch={(scope) => void fix(scope)} />
+            <ScopeButton
+              variant="primary"
+              icon={repo.autoDeploy ? 'zap' : 'wrench'}
+              label={repo.autoDeploy ? 'Corriger et déployer' : 'Corriger'}
+              disabled={starting}
+              onLaunch={(scope) => void fix(scope)}
+              extra={
+                <AutoDeployOption
+                  view={view}
+                  deploy={deploy.data}
+                  onChanged={() => {
+                    polled.reload()
+                    deploy.reload()
+                  }}
+                />
+              }
+            />
           )}
         </div>
       </div>

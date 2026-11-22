@@ -6,6 +6,10 @@ import os from "os";
 import path from "path";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import { fileURLToPath, pathToFileURL } from "url";
+import type { Deployment } from "../shared/schemas/deploy.schema.js";
+import type { Repo } from "../shared/schemas/model.schema.js";
+import { ConflictError } from "../src/core/errors.js";
+import type { DeliveryTarget } from "../src/core/operations.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -222,13 +226,33 @@ export async function signIn(baseUrl: string, user: { email: string; password: s
   return response.headers.getSetCookie().map((cookie) => cookie.split(";")[0]).join("; ");
 }
 
+/** Pull request de la fausse API GitHub ; `headSha` est le commit de sa branche, `mergeCommit` celui de son merge. */
+export interface FakePull {
+  repo: string;
+  title: string;
+  head: string;
+  base: string;
+  body: string;
+  number: number;
+  state: "open" | "closed";
+  merged: boolean;
+  headSha: string;
+  mergeCommit: string | null;
+  createdAt: string;
+}
+
 /**
  * Fausse API GitHub : dépôts, alertes Dependabot paginées, utilisateur du token,
- * création de pull requests, qu'elle enregistre, et liste des pull requests ouvertes.
+ * création de pull requests, qu'elle enregistre, liste et lecture des pull
+ * requests, checks de leurs commits, et merge.
  */
 export class FakeGitHub {
   readonly repos = new Map<string, FakeRepo>();
-  readonly pulls: { repo: string; title: string; head: string; base: string; body: string; number: number; state: "open" | "closed"; createdAt: string }[] = [];
+  readonly pulls: FakePull[] = [];
+  /** Check runs de chaque commit, par SHA ; aucun pour un commit absent. */
+  readonly checkRuns = new Map<string, { name: string; status: string; conclusion: string | null }[]>();
+  /** Statuts de chaque commit, par SHA ; aucun pour un commit absent. */
+  readonly statuses = new Map<string, { context: string; state: string }[]>();
   readonly token = "test-token";
   private server: http.Server | null = null;
   url = "";
@@ -297,8 +321,32 @@ export class FakeGitHub {
       const next: Record<string, string> = start + FAKE_PAGE_SIZE < repo.alerts.length ? { Link:`<${this.url}${url.pathname}?state=open&per_page=100&after=${start + FAKE_PAGE_SIZE}>; rel="next"` } : {};
       return this.send(res, 200, page, next);
     }
+    const id = `${repo.owner}/${repo.name}`;
+    if (req.method === "GET" && parts[3] === "commits" && parts[5] === "check-runs") {
+      const runs = this.checkRuns.get(parts[4]) ?? [];
+      return this.send(res, 200, { total_count: runs.length, check_runs: runs });
+    }
+    if (req.method === "GET" && parts[3] === "commits" && parts[5] === "status") {
+      const statuses = this.statuses.get(parts[4]) ?? [];
+      const state = statuses.some((s) => s.state === "failure" || s.state === "error") ? "failure" : statuses.length === 0 || statuses.some((s) => s.state === "pending") ? "pending" : "success";
+      return this.send(res, 200, { state, total_count: statuses.length, statuses });
+    }
+    const pull = parts[3] === "pulls" && parts[4] ? this.pulls.find((candidate) => candidate.repo === id && candidate.number === Number(parts[4])) : undefined;
+    if (req.method === "GET" && parts[3] === "pulls" && parts.length === 5) {
+      if (!pull) return this.send(res, 404, { message: "Not Found" });
+      return this.send(res, 200, { number: pull.number, state: pull.state, merged: pull.merged, head: { sha: pull.headSha, ref: pull.head }, merge_commit_sha: pull.mergeCommit });
+    }
+    if (req.method === "PUT" && parts[3] === "pulls" && parts[5] === "merge") {
+      if (!pull) return this.send(res, 404, { message: "Not Found" });
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+      if (pull.state !== "open") return this.send(res, 405, { message: "Pull Request is not mergeable" });
+      if (body.sha !== pull.headSha) return this.send(res, 409, { message: "Head branch was modified." });
+      Object.assign(pull, { state: "closed", merged: true, mergeCommit: `merge-${pull.number}-${body.merge_method}` });
+      return this.send(res, 200, { sha: pull.mergeCommit, merged: true, message: "Pull Request successfully merged" });
+    }
     if (req.method === "GET" && parts[3] === "pulls") {
-      const id = `${repo.owner}/${repo.name}`;
       const open = this.pulls.filter((pull) => pull.repo === id && pull.state === "open");
       return this.send(
         res,
@@ -317,10 +365,61 @@ export class FakeGitHub {
       const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
       const number = this.pulls.length + 1;
       const createdAt = new Date().toISOString();
-      this.pulls.push({ repo: `${repo.owner}/${repo.name}`, number, state: "open", createdAt, ...body });
+      this.pulls.push({ repo: id, number, state: "open", merged: false, headSha: fakeCommit(id, body.head), mergeCommit: null, createdAt, ...body });
       return this.send(res, 201, { number, html_url: `https://github.com/${repo.owner}/${repo.name}/pull/${number}`, created_at: createdAt });
     }
     return this.send(res, 404, { message: "Not Found" });
+  }
+}
+
+/**
+ * Faux déploiements du workflow automatique : `blocker` refuse le déploiement,
+ * `outcome` décide de l'issue de chaque déploiement lancé, terminé aussitôt ;
+ * `started` liste les dépôts déployés, dans l'ordre.
+ */
+export class FakeDeliveries implements DeliveryTarget {
+  blocker: string | null = null;
+  outcome: { status: Deployment["status"]; error: string | null } = { status: "done", error: null };
+  readonly started: string[] = [];
+  private readonly deployments = new Map<string, Deployment>();
+
+  assertDeployable(repo: Repo): void {
+    if (this.blocker) throw new ConflictError(`${repo.id}: ${this.blocker}`);
+  }
+
+  async start(repoId: string): Promise<Deployment> {
+    if (this.blocker) throw new ConflictError(`${repoId}: ${this.blocker}`);
+    this.started.push(repoId);
+    const at = new Date().toISOString();
+    const deployment: Deployment = {
+      id: `dep-fake-${this.started.length}`,
+      repoId,
+      serverId: "srv",
+      server: "preprod · deploy@host:22",
+      branch: "main",
+      commit: null,
+      script: "true",
+      status: "running",
+      createdAt: at,
+      updatedAt: at,
+      endedAt: null,
+      currentLine: null,
+      exitCode: null,
+      output: "",
+      outputTruncated: false,
+      cancelRequested: false,
+      error: null,
+    };
+    this.deployments.set(deployment.id, { ...deployment, ...this.outcome, endedAt: at });
+    return deployment;
+  }
+
+  async finished(id: string): Promise<Deployment> {
+    return this.deployments.get(id)!;
+  }
+
+  async cancel(id: string): Promise<Deployment> {
+    return this.deployments.get(id)!;
   }
 }
 

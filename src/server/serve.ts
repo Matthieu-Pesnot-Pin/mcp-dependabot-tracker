@@ -139,6 +139,7 @@ export async function serve(): Promise<void> {
     settings: () => readSettings(dataDir, vaultKey),
     claude,
     containers: PODMAN,
+    deliveries: deployer,
   };
   const auditAll = new AuditAll((repoId, scope) => runAudit(operations, repoId, scope), (message) => logger.error(message));
 

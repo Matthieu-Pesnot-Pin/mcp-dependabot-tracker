@@ -46,7 +46,7 @@ import type { AuditAll } from "../core/audit-all.js";
 import type { Deployer } from "../core/deployments.js";
 import type { GitHubConfig } from "../core/config.js";
 import { ConflictError, NotFoundError, TrackerError } from "../core/errors.js";
-import { assertMergeAuditPossible, cancelOperation, startAudit, startFix, startMergeAudit, type OperationContext } from "../core/operations.js";
+import { assertMergeAuditPossible, cancelOperation, retryDelivery, startAudit, startFix, startMergeAudit, type OperationContext } from "../core/operations.js";
 import {
   addRepository,
   auditTargetRepos,
@@ -321,6 +321,10 @@ export function createApp(ctx: ServerContext): Hono {
 
   app.delete("/api/repos/:owner/:name/deploy-pending", (c) => respond(c, () => repoView(store, unmarkDeployPending(store, repoId(c)))));
 
+  app.put("/api/repos/:owner/:name/auto-deploy", (c) => respond(c, () => repoView(store, deployer.setAutoDeploy(repoId(c), true))));
+
+  app.delete("/api/repos/:owner/:name/auto-deploy", (c) => respond(c, () => repoView(store, deployer.setAutoDeploy(repoId(c), false))));
+
   app.put("/api/repos/:owner/:name/merged", (c) =>
     withBody(c, MergedBodySchema, ({ deploy }) => {
       const id = repoId(c);
@@ -388,6 +392,8 @@ export function createApp(ctx: ServerContext): Hono {
   app.get("/api/operations/:id", (c) => respond(c, (): OperationResponse => ({ operation: store.getOperation(c.req.param("id")) })));
 
   app.post("/api/operations/:id/cancel", (c) => respond(c, (): OperationResponse => ({ operation: cancelOperation(operations, c.req.param("id")) })));
+
+  app.post("/api/operations/:id/delivery/retry", (c) => respond(c, (): OperationResponse => ({ operation: retryDelivery(operations, c.req.param("id")) })));
 
   app.get("/api/deploy-servers", (c) =>
     respond(c, (): DeployServersResponse => ({ servers: deployer.listServers() }))

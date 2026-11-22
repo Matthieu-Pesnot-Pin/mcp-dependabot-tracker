@@ -210,6 +210,73 @@ export class GitHubClient {
     const { json } = await this.request("POST", `/repos/${owner}/${name}/pulls`, pr);
     return { number: json.number, url: json.html_url, createdAt: json.created_at };
   }
+
+  /** État d'une pull request : ouverte ou fermée, mergée ou non, et le commit de sa branche. */
+  async getPullRequest(owner: string, name: string, number: number): Promise<PullRequestState> {
+    const { json } = await this.request("GET", `/repos/${owner}/${name}/pulls/${number}`);
+    if (typeof json?.head?.sha !== "string") throw new TrackerError(`GitHub API returned no head commit for pull request #${number} of ${owner}/${name}.`);
+    return { state: json.state === "closed" ? "closed" : "open", merged: json.merged === true, headSha: json.head.sha, mergeCommit: json.merge_commit_sha ?? null };
+  }
+
+  /**
+   * Checks du commit `sha` : check runs (100 premiers) et statuts de commit.
+   * Un check est en attente tant qu'il n'est pas terminé ; il échoue sur une
+   * conclusion autre que success, neutral ou skipped, ou un statut error ou failure.
+   */
+  async getChecks(owner: string, name: string, sha: string): Promise<CommitChecks> {
+    const [runs, status] = await Promise.all([
+      this.request("GET", `/repos/${owner}/${name}/commits/${sha}/check-runs?per_page=100`),
+      this.request("GET", `/repos/${owner}/${name}/commits/${sha}/status`),
+    ]);
+    const checks: CommitCheck[] = [];
+    for (const run of Array.isArray(runs.json?.check_runs) ? runs.json.check_runs : []) {
+      const state = run.status !== "completed" ? "pending" : PASSING_CONCLUSIONS.has(run.conclusion) ? "success" : "failure";
+      checks.push({ name: String(run.name ?? "check"), state });
+    }
+    for (const entry of Array.isArray(status.json?.statuses) ? status.json.statuses : []) {
+      const state = entry.state === "success" ? "success" : entry.state === "pending" ? "pending" : "failure";
+      checks.push({ name: String(entry.context ?? "status"), state });
+    }
+    return { checks };
+  }
+
+  /**
+   * Merge la pull request par un commit de merge, à condition que sa branche
+   * soit encore au commit `sha` ; rend le commit du merge.
+   */
+  async mergePullRequest(owner: string, name: string, number: number, sha: string): Promise<string> {
+    let json: any;
+    try {
+      ({ json } = await this.request("PUT", `/repos/${owner}/${name}/pulls/${number}/merge`, { merge_method: "merge", sha }));
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 409) throw new TrackerError(`The branch of pull request #${number} moved after its checks: it was not merged.`);
+      if (err instanceof GitHubApiError && (err.status === 405 || err.status === 403)) throw new TrackerError(`GitHub refused to merge pull request #${number}: ${err.message}`);
+      throw err;
+    }
+    if (json?.merged !== true || typeof json?.sha !== "string") throw new TrackerError(`GitHub did not merge pull request #${number}: ${json?.message ?? "no reason given"}.`);
+    return json.sha;
+  }
+}
+
+/** Conclusions d'un check run terminé qui ne bloquent pas le merge. */
+const PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
+
+/** État d'une pull request ; `mergeCommit` est le commit de son merge, null avant. */
+export interface PullRequestState {
+  state: "open" | "closed";
+  merged: boolean;
+  headSha: string;
+  mergeCommit: string | null;
+}
+
+/** Check d'un commit : check run ou statut, réduit à son nom et son état. */
+export interface CommitCheck {
+  name: string;
+  state: "pending" | "success" | "failure";
+}
+
+export interface CommitChecks {
+  checks: CommitCheck[];
 }
 
 /** Échec HTTP de l'API GitHub, avec son code. */

@@ -3,7 +3,8 @@ import fs from "fs";
 import path from "path";
 import { StringDecoder } from "string_decoder";
 import type { Client, ClientChannel } from "ssh2";
-import { DeploymentSchema, type Deployment, type DeploymentSummary, type DeployServerListItem, type RepoDeployResponse } from "../../shared/schemas/deploy.schema.js";
+import { DeploymentSchema, type DeployBlocker, type Deployment, type DeploymentSummary, type DeployServerListItem, type RepoDeployResponse } from "../../shared/schemas/deploy.schema.js";
+import type { Repo } from "../../shared/schemas/model.schema.js";
 import type { GitHubConfig } from "./config.js";
 import type { DeployServerStore } from "./deploy-servers.js";
 import { ConflictError, NotFoundError, TrackerError } from "./errors.js";
@@ -242,6 +243,9 @@ interface RunningDeployment {
 export class Deployer {
   private readonly running = new Map<string, RunningDeployment>();
 
+  /** Exécution de chaque déploiement lancé et pas encore terminé, par identifiant. */
+  private readonly runs = new Map<string, Promise<void>>();
+
   constructor(
     private readonly store: Store,
     readonly servers: DeployServerStore,
@@ -253,13 +257,14 @@ export class Deployer {
     private readonly deployToken: () => string | null
   ) {}
 
-  /** Serveur, script, déploiement en cours et derniers déploiements d'un dépôt. */
+  /** Serveur, script, obstacle au déploiement, déploiement en cours et derniers déploiements d'un dépôt. */
   view(repoId: string): RepoDeployResponse {
     const repo = this.store.getRepo(repoId);
     const deployments = this.deployments.list(repo.id);
     return {
       server: repo.deployServerId === null ? null : this.servers.view(this.servers.get(repo.deployServerId)),
       script: repo.deployScript,
+      blocker: this.blocker(repo),
       activeDeployment: deployments.find((deployment) => deployment.status === "running") ?? null,
       deployments: deployments.map(deploymentSummary),
     };
@@ -303,15 +308,50 @@ export class Deployer {
     if (running) throw new ConflictError(`A deployment of ${running.repoId} is running on this server: wait for it to finish or interrupt it.`);
   }
 
+  /** Ce qui empêche de déployer le dépôt, null quand rien ne s'y oppose. */
+  blocker(repo: Repo): DeployBlocker | null {
+    if (repo.deprecatedAt !== null) return "deprecated";
+    if (repo.deployServerId === null) return "no_server";
+    const server = this.servers.get(repo.deployServerId);
+    if (server.publicKey === null) return "key_revoked";
+    if (server.testedAt === null) return "untested";
+    if (!repo.deployScript.trim()) return "no_script";
+    return null;
+  }
+
+  /** Refuse le déploiement du dépôt quand un obstacle s'y oppose, avec sa raison. */
+  assertDeployable(repo: Repo): void {
+    const blocker = this.blocker(repo);
+    if (blocker === "deprecated") assertNotDeprecated(repo);
+    if (blocker === "no_server") throw new ConflictError(`${repo.id} has no deployment server: connect one first.`);
+    if (blocker === "no_script") throw new ConflictError(`${repo.id} has no deployment script: write it first.`);
+    const server = repo.deployServerId === null ? null : this.servers.get(repo.deployServerId);
+    if (blocker === "key_revoked") throw new ConflictError(`The key of ${server!.name} was revoked: install a new key first.`);
+    if (blocker === "untested") throw new ConflictError(`The connection to ${server!.name} has not been tested: test it before deploying.`);
+  }
+
+  /**
+   * Active ou désactive le workflow automatique du dépôt : une correction
+   * enchaîne alors le merge de sa pull request et le déploiement. L'activation
+   * est refusée tant que le dépôt ne peut pas être déployé.
+   */
+  setAutoDeploy(repoId: string, enabled: boolean): Repo {
+    const repo = this.store.getRepo(repoId);
+    if (enabled) this.assertDeployable(repo);
+    return this.store.updateRepo(repo.id, (current) => ({ ...current, autoDeploy: enabled }));
+  }
+
+  /** Attend la fin d'un déploiement lancé par ce serveur, et le rend terminé. */
+  async finished(id: string): Promise<Deployment> {
+    await this.runs.get(id);
+    return this.deployments.get(id);
+  }
+
   /** Lance le script du dépôt sur son serveur ; le déploiement se poursuit en arrière-plan. */
   async start(repoId: string): Promise<Deployment> {
     const repo = this.store.getRepo(repoId);
-    assertNotDeprecated(repo);
-    if (repo.deployServerId === null) throw new ConflictError(`${repo.id} has no deployment server: connect one first.`);
-    if (!repo.deployScript.trim()) throw new ConflictError(`${repo.id} has no deployment script: write it first.`);
-    const server = this.servers.get(repo.deployServerId);
-    if (server.publicKey === null) throw new ConflictError(`The key of ${server.name} was revoked: install a new key first.`);
-    if (server.testedAt === null) throw new ConflictError(`The connection to ${server.name} has not been tested: test it before deploying.`);
+    this.assertDeployable(repo);
+    const server = this.servers.get(repo.deployServerId!);
     if (this.deployments.active(repo.id)) throw new ConflictError(`A deployment is already running on ${repo.id}: wait for it to finish or interrupt it.`);
 
     const commit = await new GitHubClient(this.github()).getBranchCommit(repo.owner, repo.name, repo.branch);
@@ -335,7 +375,10 @@ export class Deployer {
       cancelRequested: false,
       error: null,
     });
-    void this.run(deployment).catch((err: any) => this.logError(`Deployment ${deployment.id} crashed: ${err?.stack ?? err}`));
+    const run = this.run(deployment)
+      .catch((err: any) => this.logError(`Deployment ${deployment.id} crashed: ${err?.stack ?? err}`))
+      .finally(() => this.runs.delete(deployment.id));
+    this.runs.set(deployment.id, run);
     return deployment;
   }
 

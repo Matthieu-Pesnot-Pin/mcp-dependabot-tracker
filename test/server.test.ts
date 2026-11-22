@@ -319,7 +319,7 @@ test("the GUI tags repositories, reusing the spelling of an existing tag", async
 
 test("the GUI syncs every repository now, with the pull requests the tracker opened", async () => {
   github.repos.get("octo/demo")!.alerts.push({ number: 4, severity: "low", package: "debug", summary: "ReDoS in debug" });
-  const pull = { repo: "octo/demo", title: "t", base: "main", body: "", state: "open" as const, createdAt: "2026-10-01T09:00:00.000Z" };
+  const pull = { repo: "octo/demo", title: "t", base: "main", body: "", state: "open" as const, merged: false, headSha: "0".repeat(40), mergeCommit: null, createdAt: "2026-10-01T09:00:00.000Z" };
   github.pulls.push({ ...pull, number: 900, head: "fix/npm-audit-2026-10-01-090000" }, { ...pull, number: 901, head: "feature/login" });
   const synced = await call("POST", "sync");
   assert.equal(synced.status, 200, synced.json.error);

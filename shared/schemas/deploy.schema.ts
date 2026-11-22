@@ -119,12 +119,22 @@ export interface DeployServersResponse {
 }
 
 /**
+ * Ce qui empêche de déployer un dépôt : déprécié, sans serveur, clé du serveur
+ * révoquée, connexion jamais testée, ou script vide.
+ */
+export const DEPLOY_BLOCKERS = ["deprecated", "no_server", "key_revoked", "untested", "no_script"] as const;
+
+export type DeployBlocker = (typeof DEPLOY_BLOCKERS)[number];
+
+/**
  * Déploiement d'un dépôt : son serveur (null s'il n'en a pas), son script, le
  * déploiement en cours et les derniers déploiements, du plus récent au plus ancien.
+ * `blocker` dit ce qui empêche de déployer, null quand rien ne s'y oppose.
  */
 export interface RepoDeployResponse {
   server: DeployServerView | null;
   script: string;
+  blocker: DeployBlocker | null;
   activeDeployment: Deployment | null;
   deployments: DeploymentSummary[];
 }

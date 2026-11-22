@@ -100,7 +100,9 @@ export type Category = z.infer<typeof CategorySchema>;
  * `queuedAt` la date de son entrée dans la file d'attente, null s'il n'y est pas ;
  * `deployPendingAt` la date à laquelle il a été marqué « à déployer », null s'il ne l'est pas ;
  * `deployServerId` le serveur sur lequel il se déploie, null s'il n'en a pas ;
- * `deployScript` le script shell qui le déploie sur ce serveur.
+ * `deployScript` le script shell qui le déploie sur ce serveur ;
+ * `autoDeploy` vrai quand une correction enchaîne le merge de sa pull request,
+ * une fois ses checks verts, puis le déploiement.
  */
 export const RepoSchema = z.object({
   id: z.string(),
@@ -121,6 +123,7 @@ export const RepoSchema = z.object({
   deployPendingAt: z.string().nullable(),
   deployServerId: z.string().nullable(),
   deployScript: z.string(),
+  autoDeploy: z.boolean(),
 });
 
 export type Repo = z.infer<typeof RepoSchema>;
@@ -252,11 +255,29 @@ export const RepairSchema = z.object({
 export type Repair = z.infer<typeof RepairSchema>;
 
 /**
+ * Suite d'une correction lancée en workflow automatique : merge de sa pull
+ * request une fois ses checks verts, puis déploiement sur le serveur du dépôt.
+ * `checks` est le nombre de checks verts au merge ; `mergeCommit` le commit
+ * du merge ; `deploymentId` le déploiement lancé ; `error` la raison de l'arrêt.
+ */
+export const DeliverySchema = z.object({
+  merge: z.enum(STEP_STATES),
+  deploy: z.enum(STEP_STATES),
+  checks: z.number().int().nullable(),
+  mergeCommit: z.string().nullable(),
+  deploymentId: z.string().nullable(),
+  error: z.string().nullable(),
+});
+
+export type Delivery = z.infer<typeof DeliverySchema>;
+
+/**
  * Opération d'audit ou de correction sur un clone temporaire, limitée aux
  * dépendances de `scope`. `workDir` est le
  * clone, présent tant que l'opération n'est pas terminée. `found` liste les vulnérabilités du premier
  * audit, `remaining` celles qui restent après la dernière étape. `repair` est
- * la session de corrections par Claude, null quand elle n'a pas été lancée.
+ * la session de corrections par Claude, null quand elle n'a pas été lancée ;
+ * `delivery` le merge et le déploiement qui suivent, null hors workflow automatique.
  */
 export const OperationSchema = z.object({
   id: z.string(),
@@ -290,6 +311,7 @@ export const OperationSchema = z.object({
   branch: z.string().nullable(),
   pullRequest: z.object({ number: z.number().int(), url: z.string() }).nullable(),
   repair: RepairSchema.nullable(),
+  delivery: DeliverySchema.nullable(),
   error: z.string().nullable(),
   log: z.array(LogEntrySchema),
 });

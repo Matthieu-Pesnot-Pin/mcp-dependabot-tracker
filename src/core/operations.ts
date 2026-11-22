@@ -1,10 +1,12 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import type { Deployment } from "../../shared/schemas/deploy.schema.js";
 import {
   DEFAULT_COMMIT_MESSAGE,
   type AuditScope,
   type Change,
+  type Delivery,
   type Operation,
   type OperationKind,
   type Origin,
@@ -43,7 +45,32 @@ export interface OperationContext {
   claude: ClaudeRuntime;
   /** Podman, qui exécute les commandes des gestionnaires de paquets. */
   containers: ContainerRuntime;
+  /** Déploiements des dépôts, lancés par le workflow automatique après le merge. */
+  deliveries: DeliveryTarget;
+  /** Rythme de l'attente des checks avant le merge ; `DEFAULT_DELIVERY_TIMING` sans réglage. */
+  deliveryTiming?: DeliveryTiming;
 }
+
+/** Déploiements dont le workflow automatique a besoin : vérifier, lancer, attendre et interrompre. */
+export interface DeliveryTarget {
+  assertDeployable(repo: Repo): void;
+  start(repoId: string): Promise<Deployment>;
+  finished(id: string): Promise<Deployment>;
+  cancel(id: string): Promise<Deployment>;
+}
+
+/**
+ * Attente des checks d'une pull request : relue toutes les `pollMs` ; sans
+ * aucun check après `graceMs`, la pull request est mergée ; au-delà de
+ * `timeoutMs` de checks en attente, le merge est abandonné.
+ */
+export interface DeliveryTiming {
+  pollMs: number;
+  graceMs: number;
+  timeoutMs: number;
+}
+
+export const DEFAULT_DELIVERY_TIMING: DeliveryTiming = { pollMs: 15_000, graceMs: 60_000, timeoutMs: 60 * 60_000 };
 
 /**
  * Choix d'une correction : le périmètre, et les corrections par Claude quand
@@ -166,9 +193,27 @@ function newOperation(repo: Repo, kind: OperationKind, origin: Origin, scope: Au
     branch: null,
     pullRequest: null,
     repair: null,
+    delivery: null,
     error: null,
     log: [],
   };
+}
+
+/** Suite d'une correction en workflow automatique, avant son merge. */
+function newDelivery(): Delivery {
+  return { merge: "pending", deploy: "pending", checks: null, mergeCommit: null, deploymentId: null, error: null };
+}
+
+/** État final d'une étape : une étape en attente est passée, une étape en cours passée (annulation) ou en échec. */
+function settledStep(state: StepState, cancelled: boolean): StepState {
+  if (state === "pending") return "skipped";
+  if (state === "running") return cancelled ? "skipped" : "failed";
+  return state;
+}
+
+/** Suite automatique d'une opération qui s'arrête, ses étapes inachevées réglées par `settledStep`. */
+function settledDelivery(delivery: Delivery | null, cancelled: boolean): Delivery | null {
+  return delivery && { ...delivery, merge: settledStep(delivery.merge, cancelled), deploy: settledStep(delivery.deploy, cancelled) };
 }
 
 /** Exécution des étapes d'une opération, avec son signal d'annulation. */
@@ -566,15 +611,155 @@ async function pushStep(runner: Runner): Promise<void> {
   runner.setStep("push", "done");
 }
 
+// --- Workflow automatique ------------------------------------------------------
+
+function setDelivery(runner: Runner, fields: Partial<Delivery>): void {
+  runner.update((operation) => ({ ...operation, delivery: operation.delivery && { ...operation.delivery, ...fields } }));
+}
+
+/** Attente interrompue par l'annulation de l'opération. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new CommandAbortedError());
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new CommandAbortedError());
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Attend que les checks du commit `sha` soient tous terminés ; rend leur
+ * nombre. Un check en échec arrête l'attente. Sans aucun check au bout de
+ * `graceMs`, le commit n'a rien à attendre et rend 0.
+ */
+async function waitForChecks(runner: Runner, github: GitHubClient, owner: string, name: string, sha: string, timing: DeliveryTiming): Promise<number> {
+  const started = Date.now();
+  for (;;) {
+    const { checks } = await github.getChecks(owner, name, sha);
+    const failed = checks.filter((check) => check.state === "failure");
+    if (failed.length > 0) throw new TrackerError(`Failed checks: ${failed.map((check) => check.name).join(", ")}.`);
+    const pending = checks.filter((check) => check.state === "pending");
+    if (checks.length > 0 && pending.length === 0) return checks.length;
+    const elapsed = Date.now() - started;
+    if (checks.length === 0 && elapsed >= timing.graceMs) {
+      runner.log("No check reported on the pull request: nothing to wait for.");
+      return 0;
+    }
+    if (elapsed >= timing.timeoutMs) {
+      throw new TrackerError(`Checks still running after ${Math.round(timing.timeoutMs / 60_000)} min: ${pending.map((check) => check.name).join(", ")}.`);
+    }
+    await pause(timing.pollMs, runner.signal);
+  }
+}
+
+/**
+ * Merge de la pull request de la correction, une fois ses checks verts, puis
+ * retrait de « PR en attente » ; une pull request déjà mergée est prise telle
+ * quelle. Rend faux quand le merge n'a pas pu se faire, la raison enregistrée.
+ */
+async function mergeStep(runner: Runner, ctx: OperationContext): Promise<boolean> {
+  setDelivery(runner, { merge: "running", error: null });
+  const operation = runner.operation;
+  const pullRequest = operation.pullRequest!;
+  const [owner, name] = operation.repoId.split("/");
+  const github = new GitHubClient(runner.config);
+  try {
+    const pull = await github.getPullRequest(owner, name, pullRequest.number);
+    if (pull.merged) {
+      runner.log(`Pull request #${pullRequest.number} is already merged.`);
+      setDelivery(runner, { mergeCommit: pull.mergeCommit });
+    } else {
+      if (pull.state === "closed") throw new TrackerError(`Pull request #${pullRequest.number} was closed without being merged.`);
+      runner.log(`Waiting for the checks of pull request #${pullRequest.number} (${pull.headSha.slice(0, 7)})`);
+      const checks = await waitForChecks(runner, github, owner, name, pull.headSha, ctx.deliveryTiming ?? DEFAULT_DELIVERY_TIMING);
+      const mergeCommit = await github.mergePullRequest(owner, name, pullRequest.number, pull.headSha);
+      runner.log(`Pull request #${pullRequest.number} merged: ${mergeCommit}`);
+      setDelivery(runner, { checks, mergeCommit });
+    }
+    ctx.store.updateRepo(operation.repoId, (repo) => ({ ...repo, pullRequests: repo.pullRequests.filter((candidate) => candidate.number !== pullRequest.number) }));
+    setDelivery(runner, { merge: "done" });
+    return true;
+  } catch (err: any) {
+    if (err instanceof CommandAbortedError || runner.signal.aborted) throw err;
+    const message = err?.message ?? String(err);
+    runner.log(`Merge stopped: ${message}`);
+    setDelivery(runner, { merge: "failed", error: message });
+    return false;
+  }
+}
+
+/** Déploiement en échec : la raison est enregistrée et le dépôt passe « à déployer ». */
+function deployFailed(runner: Runner, ctx: OperationContext, message: string): false {
+  runner.log(`Deployment stopped: ${message}`);
+  setDelivery(runner, { deploy: "failed", error: message });
+  ctx.store.updateRepo(runner.operation.repoId, (repo) => (repo.deployPendingAt === null ? { ...repo, deployPendingAt: now() } : repo));
+  return false;
+}
+
+/**
+ * Déploiement du dépôt sur son serveur, attendu jusqu'à sa fin ; l'annulation
+ * de l'opération interrompt le déploiement. Rend faux quand il n'a pas réussi.
+ */
+async function deployStep(runner: Runner, ctx: OperationContext): Promise<boolean> {
+  setDelivery(runner, { deploy: "running", deploymentId: null, error: null });
+  let deployment: Deployment;
+  try {
+    deployment = await ctx.deliveries.start(runner.operation.repoId);
+  } catch (err: any) {
+    return deployFailed(runner, ctx, err?.message ?? String(err));
+  }
+  const id = deployment.id;
+  setDelivery(runner, { deploymentId: id });
+  runner.log(`Deployment ${id} on ${deployment.server}`);
+  const onAbort = () => void ctx.deliveries.cancel(id).catch((err: any) => runner.log(`Deployment ${id} not interrupted: ${err?.message ?? err}`));
+  runner.signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    deployment = await ctx.deliveries.finished(id);
+  } finally {
+    runner.signal.removeEventListener("abort", onAbort);
+  }
+  if (runner.signal.aborted) throw new CommandAbortedError();
+  if (deployment.status === "done") {
+    setDelivery(runner, { deploy: "done" });
+    return true;
+  }
+  return deployFailed(runner, ctx, deployment.status === "cancelled" ? "The deployment was interrupted." : (deployment.error ?? "The deployment failed."));
+}
+
+/** Merge, s'il n'est pas déjà fait, puis déploiement ; rend faux à la première étape qui échoue. */
+async function deliver(runner: Runner, ctx: OperationContext): Promise<boolean> {
+  if (runner.operation.delivery!.merge !== "done" && !(await mergeStep(runner, ctx))) return false;
+  return deployStep(runner, ctx);
+}
+
+/**
+ * Après une exécution qui a mergé la pull request de l'opération, lance
+ * l'audit de la branche par défaut, comme pour une pull request marquée mergée.
+ */
+function auditAfterMerge(ctx: OperationContext, run: Promise<Operation>, mergedBefore: boolean): Promise<Operation> {
+  return run.then((operation) => {
+    if (!mergedBefore && operation.delivery?.merge === "done" && operation.pullRequest) startMergeAudit(ctx, operation.repoId, [operation.pullRequest.number]);
+    return operation;
+  });
+}
+
 // --- Enchaînement ------------------------------------------------------------
 
-function finish(runner: Runner): void {
+/** Termine l'opération, réussie ou en échec ; ses étapes en attente sont passées. */
+function finish(runner: Runner, succeeded = true): void {
   runner.update((operation) => ({
     ...operation,
-    status: "done",
+    status: succeeded ? "done" : "failed",
     steps: Object.fromEntries(
       Object.entries(operation.steps).map(([step, state]) => [step, state === "pending" ? "skipped" : state])
     ) as Operation["steps"],
+    delivery: settledDelivery(operation.delivery, false),
   }));
 }
 
@@ -606,6 +791,7 @@ async function execute(ctx: OperationContext, id: string, body: (runner: Runner)
           state === "running" ? (cancelled ? "skipped" : "failed") : state === "pending" ? "skipped" : state,
         ])
       ) as Operation["steps"],
+      delivery: settledDelivery(operation.delivery, cancelled),
     }));
   } finally {
     runningOperations.delete(id);
@@ -633,31 +819,61 @@ function inBackground(ctx: OperationContext, id: string, run: Promise<Operation>
  * arrière-plan jusqu'au bout sans intervention : clone, audit, corrections automatiques,
  * corrections par Claude s'il reste des vulnérabilités et que `plan` les
  * demande, puis commit, push et pull request s'il y a quelque chose à pousser.
- * Refusé si une opération est en cours sur le dépôt, ou s'il est déprécié.
+ * Quand le dépôt a activé le workflow automatique, la pull request est ensuite
+ * mergée une fois ses checks verts, puis le dépôt déployé. Refusé si une
+ * opération est en cours sur le dépôt, s'il est déprécié, ou si son workflow
+ * automatique ne peut pas déployer.
  */
 export function startFix(ctx: OperationContext, repoId: string, origin: Origin, plan: FixPlan): Operation {
   ctx.githubConfig();
   const repo = ctx.store.getRepo(repoId);
   assertNotDeprecated(repo);
-  const operation = ctx.store.createOperation(newOperation(repo, "fix", origin, plan.scope));
-  inBackground(
-    ctx,
-    operation.id,
-    execute(ctx, operation.id, async (runner) => {
-      await cloneStep(runner);
-      const vulnerabilities = await auditStep(runner);
-      if (vulnerabilities.length === 0) return finish(runner);
-      const remaining = await fixStep(runner, vulnerabilities);
-      if (remaining.length > 0 && plan.claude) {
-        await repairStep(runner, ctx);
-      } else {
-        runner.setStep("repair", "skipped");
-      }
-      if (hasChangesToPush(runner.operation)) await pushStep(runner);
-      finish(runner);
-    })
-  );
+  if (repo.autoDeploy) ctx.deliveries.assertDeployable(repo);
+  const operation = ctx.store.createOperation({ ...newOperation(repo, "fix", origin, plan.scope), delivery: repo.autoDeploy ? newDelivery() : null });
+  const run = execute(ctx, operation.id, async (runner) => {
+    await cloneStep(runner);
+    const vulnerabilities = await auditStep(runner);
+    if (vulnerabilities.length === 0) return finish(runner);
+    const remaining = await fixStep(runner, vulnerabilities);
+    if (remaining.length > 0 && plan.claude) {
+      await repairStep(runner, ctx);
+    } else {
+      runner.setStep("repair", "skipped");
+    }
+    if (hasChangesToPush(runner.operation)) await pushStep(runner);
+    if (runner.operation.delivery && runner.operation.pullRequest) return finish(runner, await deliver(runner, ctx));
+    finish(runner);
+  });
+  inBackground(ctx, operation.id, auditAfterMerge(ctx, run, false));
   return operation;
+}
+
+/**
+ * Reprend la suite automatique d'une correction terminée qui s'est arrêtée :
+ * le merge s'il n'est pas fait, puis le déploiement, en arrière-plan. Refusé
+ * pendant une opération sur le dépôt, quand il n'y a rien à reprendre, ou
+ * quand le dépôt ne peut pas être déployé.
+ */
+export function retryDelivery(ctx: OperationContext, id: string): Operation {
+  ctx.githubConfig();
+  const operation = ctx.store.getOperation(id);
+  const delivery = operation.delivery;
+  if (!delivery || !operation.pullRequest) throw new ConflictError(`Operation ${id} has no automatic merge and deployment to resume.`);
+  if (delivery.merge === "done" && delivery.deploy === "done") throw new ConflictError(`The pull request of operation ${id} is already merged and deployed.`);
+  const active = ctx.store.activeOperation(operation.repoId);
+  if (active) throw new ConflictError(`An operation is in progress on ${operation.repoId} (${active.id}): wait for it to finish or cancel it.`);
+  ctx.deliveries.assertDeployable(ctx.store.getRepo(operation.repoId));
+  const mergedBefore = delivery.merge === "done";
+  const resumed = ctx.store.updateOperation(id, (current) => ({
+    ...current,
+    status: "running",
+    cancelRequested: false,
+    error: null,
+    delivery: { ...delivery, merge: mergedBefore ? "done" : "pending", deploy: "pending", deploymentId: null, error: null },
+  }));
+  const run = execute(ctx, id, async (runner) => finish(runner, await deliver(runner, ctx)));
+  inBackground(ctx, id, auditAfterMerge(ctx, run, mergedBefore));
+  return resumed;
 }
 
 /**

@@ -2,6 +2,7 @@ import type { Operation, Repair, StepName, StepState, Vulnerability } from '@sha
 import { ACTIVE_STATUSES } from '@shared/schemas/model.schema'
 import { useState, type ReactNode } from 'react'
 import { ClaudeSession } from '../components/ClaudeSession'
+import { DeliverySteps } from '../components/DeliverySteps'
 import { Icon, type IconName } from '../components/Icon'
 import { MergedActions } from '../components/MergedActions'
 import { usePolling } from '../hooks/usePolling'
@@ -222,8 +223,8 @@ function UnfixableList({ vulnerabilities }: { vulnerabilities: Vulnerability[] }
 
 /**
  * Suite d'une correction poussée : la branche et ses changements, puis, tant
- * que la pull request attend dans « PR en attente », la marquer fusionnée,
- * avec ou sans passage « à déployer ».
+ * que la pull request attend dans « PR en attente » et hors workflow
+ * automatique, la marquer fusionnée, avec ou sans passage « à déployer ».
  */
 function PushedInfo({ operation }: { operation: Operation }) {
   const polled = usePolling(`repo:${operation.repoId}`, () => api.getRepo(operation.repoId), null)
@@ -240,7 +241,7 @@ function PushedInfo({ operation }: { operation: Operation }) {
         </button>
       </p>
       {showChanges && <ChangesList operation={operation} />}
-      {pending && (
+      {pending && !operation.delivery && (
         <div className="merged-offer">
           <Icon name="git-pull-request" className="merged-offer-icon" />
           <span className="merged-offer-text">
@@ -360,6 +361,12 @@ export function OperationScreen({ repoId, operationId }: { repoId: string; opera
             {operation.kind === 'audit' ? 'Audit' : 'Correction'} de {name}
           </h1>
           <p className="subtitle">
+            {operation.delivery && (
+              <span className="auto-deploy-mark">
+                <Icon name="zap" size={12} />
+                Corriger et déployer ·{' '}
+              </span>
+            )}
             Lancée par {operation.origin === 'agent' ? "l'agent" : 'vous'} · clone temporaire de {operation.baseBranch} · {SCOPE_LABELS[operation.scope]}
             {suffix && ` · ${suffix}`}
           </p>
@@ -394,6 +401,15 @@ export function OperationScreen({ repoId, operationId }: { repoId: string; opera
             {steps.map((step) => (
               <StepRow key={step} operation={operation} step={step} />
             ))}
+            {operation.delivery && (
+              <DeliverySteps
+                operation={operation}
+                onResumed={() => {
+                  setIntervalMs(ACTIVE_POLL_MS)
+                  polled.reload()
+                }}
+              />
+            )}
           </div>
           {operation.error && !Object.values(operation.steps).includes('failed') && <p className="banner banner-error pre">{operation.error}</p>}
         </>

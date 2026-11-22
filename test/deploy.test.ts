@@ -125,13 +125,17 @@ test("the connection test fails until the key is installed, then records the hos
 
 test("a repository deploys only once it has a server and a script", async () => {
   const empty = await call("GET", "repos/octo/app/deploy");
-  assert.deepEqual([empty.json.server, empty.json.script, empty.json.deployments], [null, "", []]);
+  assert.deepEqual([empty.json.server, empty.json.script, empty.json.deployments, empty.json.blocker], [null, "", [], "no_server"]);
   assert.equal((await call("POST", "repos/octo/app/deployments")).status, 409);
+  const autoRefused = await call("PUT", "repos/octo/app/auto-deploy");
+  assert.equal(autoRefused.status, 409, "the automatic workflow cannot be enabled on a repository that cannot deploy");
+  assert.match(autoRefused.json.error, /no deployment server/);
 
   const unknown = await call("PUT", "repos/octo/app/deploy/server", { serverId: "nope" });
   assert.equal(unknown.status, 404);
   const attached = await call("PUT", "repos/octo/app/deploy/server", { serverId });
   assert.equal(attached.json.server.server.id, serverId);
+  assert.equal(attached.json.blocker, "no_script");
   const noScript = await call("POST", "repos/octo/app/deployments");
   assert.equal(noScript.status, 409);
   assert.match(noScript.json.error, /no deployment script/);
@@ -141,6 +145,11 @@ test("a successful deployment runs the script with its variables, follows its li
   const script = ["#!/usr/bin/env bash", "set -euo pipefail", 'echo "branch=$BRANCH repo=$REPO commit=$COMMIT"', "echo 'to stderr' >&2", "echo done"].join("\r\n");
   const saved = await call("PUT", "repos/octo/app/deploy/script", { script });
   assert.equal(saved.json.script, script.replace(/\r\n/g, "\n"));
+  assert.equal(saved.json.blocker, null);
+  const enabled = await call("PUT", "repos/octo/app/auto-deploy");
+  assert.equal(enabled.status, 200, enabled.json.error);
+  assert.equal(enabled.json.repo.autoDeploy, true);
+  assert.equal((await call("DELETE", "repos/octo/app/auto-deploy")).json.repo.autoDeploy, false);
   assert.equal((await call("PUT", "repos/octo/app/deploy-pending")).status, 200);
 
   const deployment = await deploy();

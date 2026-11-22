@@ -41,6 +41,7 @@ export function describeRepo(view: RepoView): string {
   if (repo.pullRequests.length > 0) {
     lines.push(`  Pull requests opened by the tracker, not merged yet: ${repo.pullRequests.map((pull) => `#${pull.number} ${pull.url}`).join(", ")}`);
   }
+  if (repo.autoDeploy) lines.push("  Automatic workflow: a fix merges its pull request once its checks pass, then deploys the repository.");
   if (view.unfixable.length > 0) lines.push(`  Last audit found no published fix for: ${view.unfixable.join(", ")}`);
   if (view.cleanAudit) {
     const { at, scope } = view.cleanAudit;
@@ -134,6 +135,11 @@ export function describeOperation(operation: Operation): string {
     lines.push(`- Pull request #${operation.pullRequest.number}: ${operation.pullRequest.url} (branch ${operation.branch})`);
   } else if (operation.kind === "fix" && operation.status === "done") {
     lines.push("- No pull request: there was nothing to fix, or the fixes left the files unchanged.");
+  }
+  const delivery = operation.delivery;
+  if (delivery) {
+    lines.push(`- Automatic workflow: merge ${delivery.merge}${delivery.mergeCommit ? ` (merge commit ${delivery.mergeCommit})` : ""}, deployment ${delivery.deploy}${delivery.deploymentId ? ` (${delivery.deploymentId})` : ""}`);
+    if (delivery.error) lines.push(`- Automatic workflow stopped: ${delivery.error}`);
   }
   if (operation.error) lines.push(`- Error: ${operation.error}`);
   return lines.join("\n");

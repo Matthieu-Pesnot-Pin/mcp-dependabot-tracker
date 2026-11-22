@@ -41,6 +41,7 @@ export const TOOLS = [
     name: "fix_vulnerabilities",
     description:
       "Start the fix of the vulnerable dependencies of a tracked repository, the same as the user's Fix button: in a temporary clone of the analysed branch, the audit of every project, then the automatic fixes of its package manager on the lockfiles only (npm audit fix --package-lock-only --ignore-scripts, pnpm audit --fix=update --lockfile-only --ignore-scripts, composer update of the vulnerable packages --no-install --no-scripts --no-plugins), then, when vulnerabilities remain, the fixes by Claude (Claude Code analyses and fixes them in the code, runs the tests and reports in an organizer task), then a commit on a new branch fix/deps-audit-<date>-<time>, its push and a pull request to the analysed branch. " +
+      "When the user enabled the automatic workflow of the repository (shown by list_repositories), the pull request is then merged once its checks pass, and the repository deployed on its server. " +
       "Returns at once with the id of the operation: follow it with get_operation. A fix with Claude can take several minutes.",
     inputSchema: {
       type: "object" as const,

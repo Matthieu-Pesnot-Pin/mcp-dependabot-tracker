@@ -10,7 +10,7 @@ import type { GitHubConfig } from "../src/core/config.js";
 import { refreshReportTask } from "../src/core/repair.js";
 import type { Operation } from "../shared/schemas/model.schema.js";
 import { DEFAULT_SETTINGS, type Settings } from "../shared/schemas/settings.schema.js";
-import { FAKE_CLAUDE, FakeGitHub, FakeOrganizer, LocalRemotes, VULNERABLE_COMPOSER_FIXTURE, VULNERABLE_DEV_FIXTURE, VULNERABLE_FIXTURE, VULNERABLE_PNPM_FIXTURE, fakeContainers, makeTempDir, npmRegistryReachable, podmanCalls, waitFor } from "./helpers.js";
+import { FAKE_CLAUDE, FakeDeliveries, FakeGitHub, FakeOrganizer, LocalRemotes, VULNERABLE_COMPOSER_FIXTURE, VULNERABLE_DEV_FIXTURE, VULNERABLE_FIXTURE, VULNERABLE_PNPM_FIXTURE, fakeContainers, makeTempDir, npmRegistryReachable, podmanCalls, waitFor } from "./helpers.js";
 import { NODE_IMAGE } from "../src/core/managers/npm.js";
 
 /**
@@ -27,6 +27,7 @@ let github: FakeGitHub;
 let remotes: LocalRemotes;
 let ctx: OperationContext;
 let organizer: FakeOrganizer;
+const deliveries = new FakeDeliveries();
 /** Réglages lus par les opérations : Claude n'est configuré que dans les tests qui le règlent. */
 let settings: Settings = DEFAULT_SETTINGS;
 const errors: string[] = [];
@@ -103,6 +104,8 @@ before(async () => {
     settings: () => settings,
     claude: { command: FAKE_CLAUDE, home: path.join(temp.dir, "claude") },
     containers: fakeContainers(podmanLog()),
+    deliveries,
+    deliveryTiming: { pollMs: 50, graceMs: 200, timeoutMs: 5_000 },
   };
 });
 
@@ -387,6 +390,30 @@ test("an agent fix without Claude pushes the fixes of npm audit fix and opens th
   } finally {
     settings = DEFAULT_SETTINGS;
   }
+});
+
+test("with the automatic workflow, a fix merges its pull request once its checks pass, deploys, then audits the merged branch", { skip }, async () => {
+  const repoId = await newRepo({ ".": VULNERABLE_FIXTURE });
+  ctx.store.updateRepo(repoId, (repo) => ({ ...repo, autoDeploy: true }));
+  ctx.deliveryTiming = { pollMs: 50, graceMs: 60_000, timeoutMs: 120_000 };
+  const started = startFix(ctx, repoId, "user", NPM_ONLY);
+  assert.deepEqual(started.delivery, { merge: "pending", deploy: "pending", checks: null, mergeCommit: null, deploymentId: null, error: null });
+  const running = await waitFor("the merge step", () => ctx.store.getOperation(started.id), (operation) => operation.delivery?.merge === "running");
+  const pull = github.pulls.find((candidate) => candidate.repo === repoId)!;
+  assert.equal(running.pullRequest?.number, pull.number);
+  github.checkRuns.set(pull.headSha, [{ name: "test", status: "in_progress", conclusion: null }]);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(ctx.store.getOperation(started.id).delivery?.merge, "running", "a running check holds the merge");
+  github.checkRuns.set(pull.headSha, [{ name: "test", status: "completed", conclusion: "success" }]);
+
+  const done = await settled(started);
+  ctx.deliveryTiming = { pollMs: 50, graceMs: 200, timeoutMs: 5_000 };
+  assert.equal(done.status, "done", done.error ?? done.delivery?.error ?? "");
+  assert.deepEqual(done.delivery, { merge: "done", deploy: "done", checks: 1, mergeCommit: `merge-${pull.number}-merge`, deploymentId: `dep-fake-${deliveries.started.length}`, error: null });
+  assert.equal(deliveries.started.at(-1), repoId);
+  assert.deepEqual(ctx.store.getRepo(repoId).pullRequests, [], "the merged pull request leaves « PR en attente »");
+  const audit = await waitFor("the audit after the merge", () => ctx.store.listOperations(repoId).find((operation) => operation.kind === "audit"), (operation) => operation !== undefined && operation.status !== "running");
+  assert.equal(audit!.baseBranch, "main");
 });
 
 test("a production fix leaves the devDependencies out, an audit of all dependencies sees them", { skip }, async () => {

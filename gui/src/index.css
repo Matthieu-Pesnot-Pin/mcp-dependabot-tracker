@@ -495,6 +495,45 @@ code {
   color: var(--faint);
 }
 
+.scope-menu:has(.scope-extra) {
+  width: 340px;
+}
+
+.scope-extra {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-strong);
+}
+
+.scope-option.auto-deploy-option {
+  gap: 10px;
+  cursor: default;
+}
+
+.scope-option.auto-deploy-option:hover {
+  background: none;
+}
+
+.auto-deploy-icon {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 2px;
+  color: var(--accent-soft);
+}
+
+.auto-deploy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--accent-soft);
+  background: var(--brand-bg);
+  border: 1px solid #2a3160;
+  border-radius: 12px;
+}
+
 .dev-tag {
   flex-shrink: 0;
   padding: 3px 12px;
@@ -1171,6 +1210,55 @@ code {
   font-size: 13px;
 }
 
+.delivery-divider {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 22px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--faint);
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+
+.delivery-divider svg {
+  color: var(--accent-soft);
+}
+
+.delivery-divider + .step {
+  border-top: 1px solid var(--border);
+}
+
+.delivery-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.delivery-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.delivery-spacer {
+  flex: 1;
+}
+
+.delivery-output.terminal {
+  min-height: 0;
+  max-height: 180px;
+}
+
+.auto-deploy-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent-soft);
+  white-space: pre;
+}
+
 .merged-offer {
   display: flex;
   align-items: center;
@@ -1385,6 +1473,10 @@ code {
 .toggle.is-on .toggle-knob {
   left: 18px;
   background: #fff;
+}
+
+.toggle:disabled {
+  opacity: 0.5;
 }
 
 /* --- Message bref ------------------------------------------------------------ */

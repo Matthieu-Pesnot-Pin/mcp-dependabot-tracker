@@ -36,8 +36,9 @@ function writeJsonAtomic(target: string, value: unknown): void {
  * corrigée à la main n'en a aucune, un dépôt sans pull request en attente n'en
  * a aucune jusqu'à sa lecture suivante, un dépôt sans date de dépréciation
  * n'est pas déprécié, un dépôt sans date d'entrée dans la file n'y est pas, un
-dépôt sans date de marque « à déployer » ne l'est pas, un dépôt sans serveur
- * de déploiement n'en a aucun ni de script. Une alerte sans date
+ * dépôt sans date de marque « à déployer » ne l'est pas, un dépôt sans serveur
+ * de déploiement n'en a aucun ni de script, un dépôt sans réglage du workflow
+ * automatique ne l'a pas activé. Une alerte sans date
  * d'émission prend celle de la lecture qui l'a rapportée, une alerte sans
  * portée n'en a aucune ; la lecture suivante les remplace par les vraies.
  */
@@ -58,6 +59,7 @@ function normalizeReposFile(file: any): unknown {
       deployPendingAt: repo?.deployPendingAt ?? null,
       deployServerId: repo?.deployServerId ?? null,
       deployScript: typeof repo?.deployScript === "string" ? repo.deployScript : "",
+      autoDeploy: repo?.autoDeploy === true,
       alerts: Array.isArray(repo?.alerts)
         ? repo.alerts.map((alert: any) => ({ ...alert, createdAt: alert?.createdAt ?? repo.syncedAt ?? repo.addedAt, scope: alert?.scope ?? null }))
         : repo?.alerts,
@@ -74,7 +76,8 @@ const FORMER_WAITING_STATUSES = ["waiting_force", "waiting_repair", "waiting_pus
  * n'a suivi, et inconnues sinon ; sans étape de corrections par Claude,
  * l'étape est passée ; sans périmètre, l'audit a couvert toutes les
  * dépendances. Une opération qui attendait une décision de l'utilisateur est
- * annulée ; des corrections par Claude sans déroulé en ont un vide.
+ * annulée ; des corrections par Claude sans déroulé en ont un vide ; sans
+ * suite de workflow automatique, il n'y en a aucune.
  */
 function normalizeOperation(operation: any): unknown {
   if (operation === null || typeof operation !== "object") return operation;
@@ -85,6 +88,7 @@ function normalizeOperation(operation: any): unknown {
     steps: operation.steps && typeof operation.steps === "object" ? { repair: "skipped", ...operation.steps } : operation.steps,
     counts: operation.counts && typeof operation.counts === "object" ? { afterRepair: null, ...operation.counts } : operation.counts,
     repair: operation.repair ? { events: [], ...operation.repair } : null,
+    delivery: operation.delivery ?? null,
     scope: operation.scope ?? "all",
     projects: Array.isArray(operation.projects)
       ? operation.projects.map((project: unknown) => (typeof project === "string" ? { path: project, manager: "npm" } : project))
@@ -332,6 +336,12 @@ export class Store {
         status: "failed",
         error: "Interrupted: the server stopped while this operation ran.",
         steps: Object.fromEntries(Object.entries(current.steps).map(([name, state]) => [name, state === "running" ? "failed" : state])) as Operation["steps"],
+        delivery: current.delivery && {
+          ...current.delivery,
+          merge: current.delivery.merge === "running" ? "failed" : current.delivery.merge === "pending" ? "skipped" : current.delivery.merge,
+          deploy: current.delivery.deploy === "running" ? "failed" : current.delivery.deploy === "pending" ? "skipped" : current.delivery.deploy,
+          error: current.delivery.merge === "running" || current.delivery.deploy === "running" ? "Interrupted: the server stopped while this step ran." : current.delivery.error,
+        },
         workDir: null,
       }));
     });
